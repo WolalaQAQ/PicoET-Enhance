@@ -1,0 +1,14 @@
+ShadowHook 2.0.1 (bytedance/android-inline-hook), MIT - see LICENSE.
+
+Source: https://github.com/bytedance/android-inline-hook/archive/refs/tags/v2.0.1.tar.gz
+  sha256 77B954483CEE4EEAD5F2AB4571B19D00C5BFA6DB1B656E62A3DC7C136A14AEDB
+  cpp/ = shadowhook/src/main/cpp/ from that tarball (upstream CMakeLists.txt dropped;
+         built as a static library by ../../CMakeLists.txt).
+Maven AAR com.bytedance.android:shadowhook:2.0.1 (sha256 2CAD01FF4D59542958775E19F281981A7E84B39670B5FAE75905B8511E10C7CD)
+  was checked and only ships libshadowhook.so (no static prefab), hence the source build.
+
+Local patch (only one):
+  cpp/shadowhook.c: sh_linker_init()/sh_task_init() skipped when
+  PICOET_SHADOWHOOK_NO_LINKER_MONITOR is defined. They dlopen libshadowhook_nothing.so,
+  which does not exist in a static build. This project only uses shadowhook_hook_func_addr
+  on an already-mapped library, which does not need the linker monitor.

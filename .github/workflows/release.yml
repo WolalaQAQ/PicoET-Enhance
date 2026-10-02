@@ -1,0 +1,101 @@
+name: Build and release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Magisk module
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+
+      - name: Install pinned NDK and CMake
+        run: sdkmanager "ndk;26.1.10909125" "cmake;3.22.1"
+
+      - name: Verify version
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $props = Get-Content -Raw magisk-picoet-enhance/module.prop
+          $version = ([regex]::Match($props, '(?m)^version=(.+)$')).Groups[1].Value.Trim()
+          if (-not $version) { throw 'module.prop has no version' }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
+            throw "Tag $($env:GITHUB_REF_NAME) must be v$version (module.prop version)"
+          }
+          "MODULE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Build hook artifacts
+        run: ./hook/build-hook.ps1
+
+      - name: Package Magisk module
+        run: ./build-picoet-enhance.ps1
+
+      - name: Prepare release assets
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = "artifacts/magisk-picoet-enhance-v$env:MODULE_VERSION.zip"
+          if (-not (Test-Path -LiteralPath $zip)) { throw "Missing package: $zip" }
+          $directory = New-Item -ItemType Directory -Force -Path artifacts/release
+          $destination = Join-Path $directory.FullName ([IO.Path]::GetFileName($zip))
+          Copy-Item -LiteralPath $zip -Destination $destination -Force
+          $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($destination))" | Set-Content "$destination.sha256" -Encoding ascii
+          Copy-Item LICENSE, THIRD_PARTY_NOTICES.md $directory.FullName -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: module
+          path: artifacts/release/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: module
+          path: release
+
+      - name: Publish verified assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum --check --strict -- *.zip.sha256
+          gh release create "$RELEASE_TAG" \
+            --verify-tag --generate-notes \
+            --title "PicoET-Enhance $RELEASE_TAG" \
+            *.zip *.zip.sha256 LICENSE THIRD_PARTY_NOTICES.md

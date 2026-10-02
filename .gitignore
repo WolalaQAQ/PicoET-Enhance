@@ -1,0 +1,12 @@
+# Build outputs
+hook/build/
+artifacts/
+
+# Local tooling
+.vs/
+.vscode/
+.idea/
+*.user
+*.tmp
+Thumbs.db
+.DS_Store
