@@ -10,4 +10,6 @@ case "$(cat /data/local/tmp/picoet-mode 2>/dev/null)" in
 esac
 echo "- switching to $NEXT (eye/face tracking restarts)"
 /system/bin/sh "$MODDIR/picoet.sh" "$NEXT" --force
+rc=$?
 /system/bin/sh "$MODDIR/picoet.sh" status
+exit "$rc"

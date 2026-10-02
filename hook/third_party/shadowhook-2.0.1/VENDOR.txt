@@ -7,8 +7,14 @@ Source: https://github.com/bytedance/android-inline-hook/archive/refs/tags/v2.0.
 Maven AAR com.bytedance.android:shadowhook:2.0.1 (sha256 2CAD01FF4D59542958775E19F281981A7E84B39670B5FAE75905B8511E10C7CD)
   was checked and only ships libshadowhook.so (no static prefab), hence the source build.
 
-Local patch (only one):
+Local integration patches:
   cpp/shadowhook.c: sh_linker_init()/sh_task_init() skipped when
   PICOET_SHADOWHOOK_NO_LINKER_MONITOR is defined. They dlopen libshadowhook_nothing.so,
-  which does not exist in a static build. This project only uses shadowhook_hook_func_addr
-  on an already-mapped library, which does not need the linker monitor.
+   which does not exist in a static build. This project hooks already-mapped libraries
+   by address/name and discovers the plugin itself; it does not use pending hooks.
+   cpp/sh_island.c: ELF-gap fallback skipped when PICOET_SHADOWHOOK_NO_ELF_GAP
+   is defined. PicoET places Hook B in the plugin's executable tail without changing
+   its ELF segment sizes. ShadowHook cannot track that reservation, so this build
+   only allocates its islands in owned anonymous mappings; allocation failure must
+   fail the hook instead of overwriting the leaf. This applies to all hooks, not
+   just their initial installation order. Both defines are set in hook/CMakeLists.txt.

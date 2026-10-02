@@ -4,10 +4,11 @@
 
 `hook/third_party/shadowhook-2.0.1/` is vendored source from
 [bytedance/android-inline-hook](https://github.com/bytedance/android-inline-hook) release
-v2.0.1, licensed under the MIT License. The vendored copy carries one local patch,
+v2.0.1, licensed under the MIT License. The vendored copy carries integration patches
 documented in `hook/third_party/shadowhook-2.0.1/VENDOR.txt`: the linker monitor is
-disabled for the static build via the `PICOET_SHADOWHOOK_NO_LINKER_MONITOR` compile
-definition.
+disabled for the static build via `PICOET_SHADOWHOOK_NO_LINKER_MONITOR`, and ELF-gap
+allocation is disabled via `PICOET_SHADOWHOOK_NO_ELF_GAP` so ShadowHook cannot
+overwrite PicoET's manually reserved plugin tail.
 
 ```
 MIT License

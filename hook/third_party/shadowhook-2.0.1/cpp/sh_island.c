@@ -63,10 +63,17 @@ void sh_island_alloc(sh_island_t *self, size_t size, uintptr_t range_low, uintpt
   self->addr = sh_trampo_alloc_between(&sh_island_trampo_mgr, range_low, range_high);
   if (0 != self->addr) goto ok;
 
+  // PicoET owns executable tail space outside ShadowHook's allocator. Never
+  // fall back to ELF gaps in this integration, including for later hooks.
+#ifndef PICOET_SHADOWHOOK_NO_ELF_GAP
   // try to allocate in ELF gaps
   self->type = SH_ISLAND_TYPE_ELF_GAP;
   self->addr = sh_elf_alloc(size, range_low, range_high, pc, addr_info, trace);
   if (0 != self->addr) goto ok;
+#else
+  (void)addr_info;
+  (void)trace;
+#endif
 
   return;
 

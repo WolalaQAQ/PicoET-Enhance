@@ -21,8 +21,8 @@ set_perm "$MODPATH/bin/picoet-inject" 0 0 0755
 set_perm "$MODPATH/lib/libpicoet_hook.so" 0 0 0644
 set_perm "$MODPATH/hashes.sh" 0 0 0644
 
-resetprop --delete picoet.enhance.mode 2>/dev/null
-resetprop --delete picoet.enhance.gate 2>/dev/null
+# An upgrade is staged until reboot. Keep the running instance's actual state;
+# post-fs-data.sh clears it at boot and service.sh republishes the replacement.
 
 # Start disabled: nothing is injected until the user picks a mode. The gate defaults to on
 # for any active mode; `picoet.sh gate off` disables it explicitly.

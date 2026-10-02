@@ -2,7 +2,7 @@
 //
 // Contract (design HOOK-DUAL-DESIGN-2026-10-02 section 4.2):
 //   * runs as root on the device; never loads or copies any PICO byte
-//   * attaches every thread of the target, saves its registers
+//   * attaches every thread of the target, saves executor GPR and FPSIMD state
 //   * resolves dlopen()/mmap() in the target by module-base + local offset,
 //     and refuses if the module full paths differ or the address is not in an
 //     executable mapping
@@ -13,20 +13,24 @@
 //
 // Failure safety (黄金律: "not injected" is fine, "service broken" is not):
 //   * attach is all-or-nothing: any non-ESRCH failure is fatal
-//   * remote calls have a wall-clock timeout; on timeout the executor is
-//     SIGSTOP'ed and cleanup still runs
+//   * only a verified sentinel return permits restoration/resumption. An interrupted
+//     remote call terminates the target: rewinding PC cannot unwind linker locks
 //   * the sentinel is restored through any still-attached thread, so losing
 //     the executor does not leave code patched
 //   * SIGINT/SIGTERM/SIGHUP/SIGQUIT are blocked across the critical window
+//   * PTRACE_O_EXITKILL prevents an abruptly lost injector from resuming an
+//     executor in a half-finished remote call
 //
 // Usage: picoet-inject <pid> <absolute-path-to-libpicoet_hook.so> [--any]
 //   --any   skip the "target looks like pxreyetrackingservice" sanity check
 //
-// Exit: 0 = dlopen returned a non-null handle (or the payload is already loaded
-//           and executable);
+// Exit: 0 = dlopen returned a non-null handle (or an executable payload mapping
+//           already exists); hook readiness is reported separately by the payload;
 //       2 = injection failed;
 //       3 = no usable executor outside the linker (target still starting up): retry later;
 //       4 = stale partial mapping of the payload present: restart the target and retry.
+//       5 = unsafe remote/restoration state: target terminated; recover once on a fresh PID.
+//       6 = --run-locked control command is busy (no injection attempted).
 
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -38,6 +42,9 @@
 #include <dirent.h>
 #include <signal.h>
 #include <dlfcn.h>
+#include <time.h>
+#include <asm/ptrace.h>
+#include <sys/file.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -258,13 +265,37 @@ static int resolve_local(const char *sym, char *modname, size_t mn,
 static int get_regs(pid_t tid, struct arm64_regs *r)
 {
     struct iovec iov = { r, sizeof(*r) };
-    return ptrace(PTRACE_GETREGSET, tid, (void *)(unsigned long)NT_PRSTATUS, &iov) < 0 ? -1 : 0;
+    if (ptrace(PTRACE_GETREGSET, tid, (void *)(unsigned long)NT_PRSTATUS, &iov) < 0)
+        return -1;
+    if (iov.iov_len != sizeof(*r)) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
 }
 
 static int set_regs(pid_t tid, const struct arm64_regs *r)
 {
     struct iovec iov = { (void *)r, sizeof(*r) };
     return ptrace(PTRACE_SETREGSET, tid, (void *)(unsigned long)NT_PRSTATUS, &iov) < 0 ? -1 : 0;
+}
+
+static int get_fpsimd(pid_t tid, struct user_fpsimd_state *r)
+{
+    struct iovec iov = { r, sizeof(*r) };
+    if (ptrace(PTRACE_GETREGSET, tid, (void *)(unsigned long)NT_FPREGSET, &iov) < 0)
+        return -1;
+    if (iov.iov_len != sizeof(*r)) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+
+static int set_fpsimd(pid_t tid, const struct user_fpsimd_state *r)
+{
+    struct iovec iov = { (void *)r, sizeof(*r) };
+    return ptrace(PTRACE_SETREGSET, tid, (void *)(unsigned long)NT_FPREGSET, &iov) < 0 ? -1 : 0;
 }
 
 static int peek_mem(pid_t tid, unsigned long long addr, unsigned long long *out)
@@ -287,10 +318,12 @@ static int poke_mem(pid_t tid, unsigned long long addr, unsigned long long val)
 // returns 0 = stopped (*status_out valid), 1 = timeout, -1 = error.
 static int wait_stop(pid_t tid, int *status_out, int timeout_ms)
 {
-    int waited = 0;
+    struct timespec start, now;
+    if (clock_gettime(CLOCK_MONOTONIC, &start) != 0)
+        return -1;
     for (;;) {
         int status = 0;
-        pid_t r = waitpid(tid, &status, WNOHANG);
+        pid_t r = waitpid(tid, &status, WNOHANG | __WALL);
         if (r == tid) {
             *status_out = status;
             return 0;
@@ -300,20 +333,28 @@ static int wait_stop(pid_t tid, int *status_out, int timeout_ms)
                 continue;
             return -1;
         }
-        if (waited >= timeout_ms)
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+            return -1;
+        long long elapsed = (now.tv_sec - start.tv_sec) * 1000LL +
+                            (now.tv_nsec - start.tv_nsec) / 1000000;
+        if (elapsed >= timeout_ms)
             return 1;
         usleep(1000);
-        waited++;
     }
 }
 
 struct inj {
     pid_t pid;
     pid_t tids[MAX_TIDS];
+    int detach_signals[MAX_TIDS];
     int ntids;
     pid_t exec_tid;
     struct arm64_regs save;
+    struct user_fpsimd_state save_fpsimd;
     int have_save;
+    int have_fpsimd;
+    int regs_dirty;
+    int remote_active;
     int exec_stopped;
     unsigned long long sentinel;
     unsigned long long sentinel_orig;
@@ -352,23 +393,37 @@ static int poke_any(struct inj *j, unsigned long long addr, unsigned long long v
     return -1;
 }
 
-// Force a running tracee into a ptrace stop (used by timeout recovery).
-static int stop_executor(struct inj *j)
+// Do not resume a half-finished dlopen/constructor. SIGKILL is sent through an
+// attached TID in this thread group, rather than killing a possibly recycled PID.
+static void terminate_traced(struct inj *j)
 {
-    if (j->exec_stopped || j->exec_tid <= 0)
-        return 0;
-    if (tgkill(j->pid, j->exec_tid, SIGSTOP) != 0)
-        return -1;
-    int status = 0;
-    if (wait_stop(j->exec_tid, &status, 1000) != 0 || !WIFSTOPPED(status))
-        return -1;
-    j->exec_stopped = 1;
-    return 0;
+    fprintf(stderr, "[!] unsafe target state; terminating thread group %d (exit 5)\n", j->pid);
+    for (int i = 0; i < j->ntids; i++) {
+        if (j->tids[i] <= 0)
+            continue;
+        if (tgkill(j->pid, j->tids[i], SIGKILL) == 0)
+            break;
+        if (errno != ESRCH)
+            fprintf(stderr, "[!] SIGKILL tid %d: %s\n", j->tids[i], strerror(errno));
+    }
+    for (int i = 0; i < j->ntids; i++) {
+        if (j->tids[i] <= 0)
+            continue;
+        // Keep EXITKILL armed until tracer exit. In particular, a denied tgkill
+        // must not lead to implicit signal-zero detach of an unsafe executor.
+        int status;
+        waitpid(j->tids[i], &status, WNOHANG | __WALL);
+    }
+    j->ntids = 0;
 }
 
 static int remote_call(struct inj *j, unsigned long long fn, const unsigned long long *args,
                        int nargs, long *ret)
 {
+    if (!j->have_save || !j->have_fpsimd || !j->exec_stopped || j->remote_active) {
+        fprintf(stderr, "[-] remote call refused: complete saved context required\n");
+        return -1;
+    }
     struct arm64_regs r = j->save;
     for (int i = 0; i < 8; i++)
         r.regs[i] = (i < nargs) ? args[i] : 0ULL;
@@ -376,6 +431,7 @@ static int remote_call(struct inj *j, unsigned long long fn, const unsigned long
     r.pc = fn;
     r.sp = j->save.sp & ~0xFULL;              /* keep AAPCS64 alignment */
     r.pstate = j->save.pstate & ~0x200200ULL; /* clear SS(D) and D debug bits */
+    j->regs_dirty = 1;
     if (set_regs(j->exec_tid, &r) != 0) {
         fprintf(stderr, "[-] SETREGSET failed: %s\n", strerror(errno));
         return -1;
@@ -385,6 +441,7 @@ static int remote_call(struct inj *j, unsigned long long fn, const unsigned long
         return -1;
     }
     j->exec_stopped = 0;
+    j->remote_active = 1;
     int status = 0;
     int w = wait_stop(j->exec_tid, &status, REMOTE_TIMEOUT_MS);
     if (w == 1) {
@@ -395,11 +452,11 @@ static int remote_call(struct inj *j, unsigned long long fn, const unsigned long
         fprintf(stderr, "[-] waitpid failed: %s\n", strerror(errno));
         return -1;
     }
-    j->exec_stopped = 1;
     if (!WIFSTOPPED(status)) {
         fprintf(stderr, "[-] executor died during remote call\n");
         return -2;
     }
+    j->exec_stopped = 1;
     if (WSTOPSIG(status) != SIGTRAP) {
         fprintf(stderr, "[-] executor stopped on signal %d (expected SIGTRAP)\n", WSTOPSIG(status));
         return -3;
@@ -409,35 +466,61 @@ static int remote_call(struct inj *j, unsigned long long fn, const unsigned long
         fprintf(stderr, "[-] GETREGSET failed after trap: %s\n", strerror(errno));
         return -1;
     }
+    siginfo_t si;
+    if (a.pc != j->sentinel || ptrace(PTRACE_GETSIGINFO, j->exec_tid, NULL, &si) != 0 ||
+        si.si_signo != SIGTRAP || si.si_code != TRAP_BRKPT) {
+        fprintf(stderr, "[-] trap is not the remote-call sentinel\n");
+        return -1;
+    }
     *ret = (long)a.regs[0];
+    j->remote_active = 0;
     return 0;
 }
 
-static void cleanup(struct inj *j)
+static int cleanup(struct inj *j)
 {
+    if (j->remote_active) {
+        terminate_traced(j);
+        return 5;
+    }
     // Restore code first (works through any surviving thread).
     if (j->sentinel_written) {
-        if (poke_any(j, j->sentinel, j->sentinel_orig) != 0)
-            fprintf(stderr, "[!] FAILED to restore sentinel bytes; restart pxreyetrackingservice\n");
+        if (poke_any(j, j->sentinel, j->sentinel_orig) != 0) {
+            fprintf(stderr, "[!] FAILED to restore sentinel bytes\n");
+            terminate_traced(j);
+            return 5;
+        }
         j->sentinel_written = 0;
     }
-    // Make sure the executor is stopped before we touch its registers.
-    if (!j->exec_stopped && j->exec_tid > 0)
-        stop_executor(j);
-    if (j->have_save && j->exec_stopped && j->exec_tid > 0) {
-        if (set_regs(j->exec_tid, &j->save) != 0)
-            fprintf(stderr, "[!] FAILED to restore executor registers; restart pxreyetrackingservice\n");
-        j->have_save = 0;
+    if (j->regs_dirty) {
+        if (!j->exec_stopped || !j->have_save || !j->have_fpsimd ||
+            set_fpsimd(j->exec_tid, &j->save_fpsimd) != 0 ||
+            set_regs(j->exec_tid, &j->save) != 0) {
+            fprintf(stderr, "[!] FAILED to restore full executor context\n");
+            terminate_traced(j);
+            return 5;
+        }
+        j->regs_dirty = 0;
     }
     for (int i = 0; i < j->ntids; i++) {
         if (j->tids[i] > 0) {
-            if (ptrace(PTRACE_DETACH, j->tids[i], NULL, NULL) != 0 && errno == ESRCH) {
-                // thread gone; nothing to detach
+            if (ptrace(PTRACE_DETACH, j->tids[i], NULL,
+                       (void *)(unsigned long)j->detach_signals[i]) != 0 && errno != ESRCH) {
+                fprintf(stderr, "[!] cannot detach tid %d: %s\n", j->tids[i], strerror(errno));
+                terminate_traced(j);
+                return 5;
             }
         }
         j->tids[i] = 0;
     }
     j->ntids = 0;
+    return 0;
+}
+
+static int finish(struct inj *j, int result)
+{
+    int rc = cleanup(j);
+    return rc ? rc : result;
 }
 
 static int attach_all(struct inj *j)
@@ -476,6 +559,14 @@ static int attach_all(struct inj *j)
             closedir(d);
             return -1;
         }
+        // SIGSTOP is the attach stop. Preserve any other intercepted delivery
+        // for the safe detach path; interrupted remote calls instead terminate.
+        j->detach_signals[j->ntids - 1] = WSTOPSIG(status) == SIGSTOP ? 0 : WSTOPSIG(status);
+        if (ptrace(PTRACE_SETOPTIONS, tid, NULL, (void *)(unsigned long)PTRACE_O_EXITKILL) != 0) {
+            fprintf(stderr, "[-] cannot arm EXITKILL on tid %d: %s\n", tid, strerror(errno));
+            closedir(d);
+            return -1;
+        }
     }
     closedir(d);
     if (j->ntids == 0) {
@@ -488,10 +579,38 @@ static int attach_all(struct inj *j)
 static void usage(const char *argv0)
 {
     fprintf(stderr, "usage: %s <pid> <abs-path-to-libpicoet_hook.so> [--any]\n", argv0);
+    fprintf(stderr, "       %s --run-locked <lock-file> <shell-script> [args...]\n", argv0);
 }
 
 int main(int argc, char **argv)
 {
+    // Serialize watchdog and manual commands without relying on an Android
+    // shell flock applet. The lock FD survives exec and closes with the script.
+    if (argc >= 4 && strcmp(argv[1], "--run-locked") == 0) {
+        int fd = open(argv[2], O_RDWR | O_CREAT | O_NOFOLLOW, 0600);
+        if (fd < 0) {
+            fprintf(stderr, "[-] cannot open control lock: %s\n", strerror(errno));
+            return 2;
+        }
+        int wait_for_lock = argc > 4 && strcmp(argv[4], "ensure") != 0;
+        for (int n = 0; flock(fd, LOCK_EX | LOCK_NB) != 0; n++) {
+            if (errno == EWOULDBLOCK && wait_for_lock && n < 300) {
+                usleep(100000);
+                continue;
+            }
+            int rc = errno == EWOULDBLOCK ? 6 : 2;
+            // Watchdog contention is expected. A user command waits up to 30s.
+            if (wait_for_lock || rc != 6)
+                fprintf(stderr, "[-] control lock unavailable: %s\n", strerror(errno));
+            close(fd);
+            return rc;
+        }
+        if (setenv("PICOET_CONTROL_LOCKED", "1", 1) != 0)
+            return 2;
+        argv[2] = "/system/bin/sh";
+        execv(argv[2], &argv[2]);
+        return 2;
+    }
     if (argc < 3) {
         usage(argv[0]);
         return 1;
@@ -582,7 +701,8 @@ int main(int argc, char **argv)
         return 2;
     }
     parse_maps(maps);
-    // "Already loaded" only counts an executable mapping (a completed dlopen).
+    // "Already mapped" only counts an executable mapping. Actual installed hooks
+    // are reported by the payload's PID/starttime-bound runtime record.
     // Interrupted attempts leave read-only fragment mappings behind; a new dlopen
     // against that half-initialised state can abort the A10 linker, so report it
     // as a distinct retryable state instead.
@@ -663,9 +783,8 @@ int main(int argc, char **argv)
 
     // 6. attach everything (all-or-nothing)
     if (attach_all(&j) != 0) {
-        cleanup(&j);
         free(maps);
-        return 2;
+        return finish(&j, 2);
     }
     printf("[*] attached %d threads\n", j.ntids);
 
@@ -689,18 +808,22 @@ int main(int argc, char **argv)
     }
     if (j.exec_tid == 0) {
         fprintf(stderr, "[-] no executor outside the linker (target busy starting up?); retry later\n");
-        cleanup(&j);
         free(maps);
-        return 3;
+        return finish(&j, 3);
     }
     if (get_regs(j.exec_tid, &j.save) != 0) {
         fprintf(stderr, "[-] GETREGSET on executor %d failed: %s\n", j.exec_tid, strerror(errno));
-        cleanup(&j);
         free(maps);
-        return 2;
+        return finish(&j, 2);
     }
     j.have_save = 1;
     j.exec_stopped = 1;
+    if (get_fpsimd(j.exec_tid, &j.save_fpsimd) != 0) {
+        fprintf(stderr, "[-] GETREGSET FPSIMD failed: %s; no remote call attempted\n", strerror(errno));
+        free(maps);
+        return finish(&j, 2);
+    }
+    j.have_fpsimd = 1;
     printf("[*] executor tid=%d sp=0x%llx pc=0x%llx\n", j.exec_tid, j.save.sp, j.save.pc);
 
     // 8. refresh maps while stopped, then plant the sentinel
@@ -709,29 +832,25 @@ int main(int argc, char **argv)
     maps = read_file(pathbuf);
     if (!maps) {
         fprintf(stderr, "[-] cannot re-read maps after attach\n");
-        cleanup(&j);
-        return 2;
+        return finish(&j, 2);
     }
     parse_maps(maps);
     if (find_sentinel(&j.sentinel, sdesc, sizeof(sdesc)) != 0) {
         fprintf(stderr, "[-] sentinel disappeared after attach\n");
-        cleanup(&j);
         free(maps);
-        return 2;
+        return finish(&j, 2);
     }
     unsigned long long orig = 0;
     if (peek_mem(j.exec_tid, j.sentinel, &orig) != 0) {
         fprintf(stderr, "[-] PEEKDATA sentinel failed: %s\n", strerror(errno));
-        cleanup(&j);
         free(maps);
-        return 2;
+        return finish(&j, 2);
     }
     j.sentinel_orig = orig;
     if (poke_mem(j.exec_tid, j.sentinel, (orig & ~0xffffffffULL) | 0xD4200000ULL) != 0) {
         fprintf(stderr, "[-] POKEDATA sentinel (brk #0) failed: %s\n", strerror(errno));
-        cleanup(&j);
         free(maps);
-        return 2;
+        return finish(&j, 2);
     }
     j.sentinel_written = 1;
     printf("[*] sentinel planted (brk #0)\n");
@@ -743,21 +862,18 @@ int main(int argc, char **argv)
     long buf = 0;
     printf("[*] remote mmap...\n");
     if (remote_call(&j, mmap_addr, margs, 6, &buf) != 0) {
-        cleanup(&j);
-        return 2;
+        return finish(&j, 2);
     }
     if (buf == 0 || (unsigned long long)buf == (unsigned long long)-1) {
         fprintf(stderr, "[-] remote mmap returned 0x%lx\n", buf);
-        cleanup(&j);
-        return 2;
+        return finish(&j, 2);
     }
     printf("[*] remote mmap -> 0x%lx\n", buf);
 
     // 10. copy the path string into the target buffer (RMW, stays in page)
     if (write_mem_checked(&j, (unsigned long long)buf, sopath, slen) != 0) {
         fprintf(stderr, "[-] writing payload path failed\n");
-        cleanup(&j);
-        return 2;
+        return finish(&j, 2);
     }
     printf("[*] payload path written (%zu bytes)\n", slen);
 
@@ -766,13 +882,14 @@ int main(int argc, char **argv)
     long handle = 0;
     printf("[*] remote dlopen...\n");
     if (remote_call(&j, dlopen_addr, dargs, 2, &handle) != 0) {
-        cleanup(&j);
-        return 2;
+        return finish(&j, 2);
     }
     printf("[*] dlopen returned handle=0x%lx\n", handle);
 
     // 12. teardown
-    cleanup(&j);
+    int cleanup_rc = cleanup(&j);
+    if (cleanup_rc != 0)
+        return cleanup_rc;
     if (handle == 0) {
         fprintf(stderr, "[-] injection failed: dlopen returned NULL\n");
         return 2;

@@ -14,6 +14,7 @@ GATE_FILE=/data/local/tmp/picoet-gate
 # The redirects below must not fail on a fresh install / first boot: create the
 # state directory before anything writes into it.
 mkdir -p "$STATE_DIR" 2>/dev/null
+rm -f "$STATE_DIR/recovery.used" "$STATE_DIR/injection.blocked" "$STATE_DIR/unsafe.instance"
 
 # clear the transient companion-app state first: a boot where the module is disabled must
 # not look "enhanced"
@@ -40,19 +41,14 @@ while [ $i -lt 15 ]; do
     i=$((i + 1))
 done
 
-# watchdog: the service can be restarted at any time (init, settings, other modules), which
-# unloads the hook; re-inject whenever a mode is active and the library is not mapped.
+# Always reconcile through the same readiness/mapping checks as a manual ensure.
+# This also observes async plugin completion, clears a dead PID's properties and
+# allows read-only fragments to reach the injector's bounded recovery path.
+# picoet-inject's command lock serializes this with user mode/gate switches.
 (
     while [ -d "$MODDIR" ]; do
-        sleep 10
-        mode=$(cat "$MODE_FILE" 2>/dev/null)
-        [ "$mode" = off ] && continue
-        case "$mode" in left|right|dual) ;; *) continue ;; esac
-        pid=$(pidof pxreyetrackingservice)
-        [ -z "$pid" ] && continue
-        if ! grep -q libpicoet_hook "/proc/$pid/maps" 2>/dev/null; then
-            /system/bin/sh "$MODDIR/picoet.sh" ensure >> "$STATE_DIR/service.log" 2>&1
-        fi
+        sleep 1
+        /system/bin/sh "$MODDIR/picoet.sh" ensure >> "$STATE_DIR/service.log" 2>&1
     done
 ) &
 

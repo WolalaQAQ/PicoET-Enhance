@@ -36,8 +36,24 @@ When clients are connected the switch is refused unless `--force` is given.
 State files are `/data/local/tmp/picoet-mode` and `/data/local/tmp/picoet-gate`; these names
 are compiled into the payload, so they do not follow the module id. Logs are
 `/data/local/tmp/picoet-hook.log` (payload) and `/data/adb/picoet-enhance/*.log` (scripts).
-The companion-app properties `picoet.enhance.mode` and `picoet.enhance.gate` are transient:
-a reboot, an uninstall or a disabled module always clears them.
+The companion-app properties `picoet.enhance.mode` and `picoet.enhance.gate` describe
+the hooks actually installed in the current service, not just the saved request or
+a mapped library. The payload writes atomic reports in the root-owned directory
+`/data/local/tmp/picoet-runtime/`, bound to PID and process start time. Reports are
+cleared at boot and uninstall. `status` shows `phase` and `applied_mode/applied_gate`;
+`injected=yes` only means an executable payload mapping exists. A pending/failed
+plugin can have an active gate with `applied_mode=off`; it never advertises dual.
+The watchdog reconciles reports every second, including async plugin completion
+and service death. Mode/gate commands and the watchdog are serialized.
+
+The injector saves both GPR and FPSIMD state. A timeout, unexpected signal or
+failed context restoration terminates the affected service instead of resuming
+a half-finished loader call. Automatic recovery gets one fresh-process retry per
+boot or explicit mode/gate command; another failure stops automatic injection.
+`status` prints the stop reason. After addressing it, repeat a mode/gate command
+to retry. The injector's internal exit codes are 2 (safe failure), 3 (startup busy),
+4 (stale mapping), 5 (unsafe target terminated), and 6 (control command busy).
+Installing an update preserves the running instance's advertised state until reboot.
 
 ## Rollback
 

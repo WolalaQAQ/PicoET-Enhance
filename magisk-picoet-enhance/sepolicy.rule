@@ -12,8 +12,8 @@ allow magisk pxreyetrackingservice:mem write;
 allow magisk pxreyetrackingservice:fd use;
 
 # payload inside the target: mode/gate files + log in /data/local/tmp
-allow pxreyetrackingservice shell_data_file:dir { search read open getattr };
-allow pxreyetrackingservice shell_data_file:file { open read write create append getattr };
+allow pxreyetrackingservice shell_data_file:dir { search read open getattr write add_name remove_name };
+allow pxreyetrackingservice shell_data_file:file { open read write create append getattr rename unlink };
 
 # payload: map/execute our own injected library (module dir -> system_file)
 allow pxreyetrackingservice system_file:file { open read execute execute_no_trans map };

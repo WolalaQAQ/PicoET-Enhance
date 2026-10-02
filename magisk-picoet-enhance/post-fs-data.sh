@@ -5,3 +5,5 @@
 
 resetprop --delete picoet.enhance.mode 2>/dev/null
 resetprop --delete picoet.enhance.gate 2>/dev/null
+# Runtime reports never survive a boot (PID/starttime values may repeat across boots).
+rm -f /data/local/tmp/picoet-runtime/*.state /data/local/tmp/picoet-runtime/*.tmp

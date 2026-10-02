@@ -22,6 +22,10 @@ LIB=$MODDIR/lib/libpicoet_hook.so
 MODE_FILE=/data/local/tmp/picoet-mode
 GATE_FILE=/data/local/tmp/picoet-gate
 STATE_DIR=/data/adb/picoet-enhance
+RUNTIME_DIR=/data/local/tmp/picoet-runtime
+RECOVERY_USED=$STATE_DIR/recovery.used
+BLOCKED=$STATE_DIR/injection.blocked
+UNSAFE_INSTANCE=$STATE_DIR/unsafe.instance
 LOG=$STATE_DIR/picoet.log
 PLOG=/data/local/tmp/picoet-hook.log            # payload-hardcoded path; keep despite the module rename
 SERVICE=pxreyetrackingservice
@@ -43,31 +47,115 @@ sha() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 saved_mode() { case "$(cat "$MODE_FILE" 2>/dev/null)" in off|left|right|dual) cat "$MODE_FILE" ;; *) echo off ;; esac; }
 saved_gate() { case "$(cat "$GATE_FILE" 2>/dev/null)" in on|off) cat "$GATE_FILE" ;; *) echo on ;; esac; }
 clients() { dumpsys "$SERVICE" 2>/dev/null | grep -E 'There is [1-9][0-9]* clients'; }
-injected() {
-    pid=$(pidof "$SERVICE")
-    [ -n "$pid" ] || return 1
-    # Require an executable mapping (a completed dlopen). Read-only fragments left
-    # by an interrupted attempt must not count as injected.
-    grep -Eq '^[0-9a-f]+-[0-9a-f]+ r-xp .*libpicoet_hook' "/proc/$pid/maps" 2>/dev/null
+service_pid() {
+    p=$(pidof "$SERVICE")
+    case "$p" in ''|*[!0-9]*) return 1 ;; esac
+    echo "$p"
+}
+service_identity() {
+    p=$(service_pid) || return 1
+    stat=$(cat "/proc/$p/stat" 2>/dev/null) || return 1
+    # Strip pid and the parenthesized comm, which can itself contain spaces/').
+    rest=${stat##*) }
+    [ "$rest" != "$stat" ] || return 1
+    set -- $rest
+    [ "$#" -ge 20 ] || return 1
+    shift 19
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    echo "$p:$1"
+}
+mapped_exec() {
+    [ -n "$1" ] || return 1
+    grep -Eq '^[0-9a-f]+-[0-9a-f]+ [-r][-w]x[ps] .* /[^ ]*/libpicoet_hook[.]so( [(]deleted[)])?$' "/proc/$1/maps" 2>/dev/null
 }
 
-# Publish the state the service actually sees, so a companion app can auto-detect the mode
-# without root. The names are transient (no persist. prefix): a reboot, an uninstall or a
-# disabled module always leaves them unset, so a stale "enhanced" is impossible.
-publish() {
-    mode=$(saved_mode)
-    gate=$(saved_gate)
-    if [ "$mode" != off ] && injected; then
-        resetprop -n picoet.enhance.mode "$mode" 2>/dev/null
-        if [ "$gate" = on ]; then
-            resetprop -n picoet.enhance.gate on 2>/dev/null
-        else
-            resetprop -n picoet.enhance.gate off 2>/dev/null
-        fi
-    else
-        resetprop -n picoet.enhance.mode off 2>/dev/null
-        resetprop -n picoet.enhance.gate off 2>/dev/null
+# The payload atomically reports actual installed flags, not the requested mode.
+# Missing/old/invalid reports fail closed. An executable mapping alone is never ready.
+runtime_snapshot() {
+    RUN_TOKEN=$(service_identity)
+    RUN_PID=${RUN_TOKEN%%:*}
+    APPLIED_MODE=off
+    APPLIED_GATE=off
+    PHASE=unmapped
+    MAPPED=no
+    [ -n "$RUN_TOKEN" ] || return 0
+    mapped_exec "$RUN_PID" || return 0
+    MAPPED=yes
+    if [ "$(cat "$UNSAFE_INSTANCE" 2>/dev/null)" = "$RUN_TOKEN" ]; then
+        PHASE=unsafe
+        return 0
     fi
+    PHASE=unreported
+    if ! IFS=' ' read -r schema report_pid report_start report_phase report_mode report_gate extra < "$RUNTIME_DIR/$RUN_PID.state" 2>/dev/null; then
+        return 0
+    fi
+    [ "$schema" = 1 ] && [ "$report_pid:$report_start" = "$RUN_TOKEN" ] && [ -z "$extra" ] || return 0
+    case "$report_phase" in initializing|pending|ready|failed) ;; *) return 0 ;; esac
+    case "$report_mode" in off|left|right|dual) ;; *) return 0 ;; esac
+    case "$report_gate" in on|off) ;; *) return 0 ;; esac
+    [ "$(service_identity)" = "$RUN_TOKEN" ] || return 0
+    PHASE=$report_phase
+    APPLIED_MODE=$report_mode
+    APPLIED_GATE=$report_gate
+}
+clear_publish() {
+    resetprop -n picoet.enhance.gate off 2>/dev/null
+    resetprop -n picoet.enhance.mode off 2>/dev/null
+}
+publish() {
+    runtime_snapshot
+    if [ "$(getprop picoet.enhance.mode)" != "$APPLIED_MODE" ] ||
+       [ "$(getprop picoet.enhance.gate)" != "$APPLIED_GATE" ]; then
+        # Close the gate while changing the pair; never briefly announce dual
+        # for a different process/mode. The public two-property protocol is unchanged.
+        resetprop -n picoet.enhance.gate off 2>/dev/null
+        resetprop -n picoet.enhance.mode "$APPLIED_MODE" 2>/dev/null
+        resetprop -n picoet.enhance.gate "$APPLIED_GATE" 2>/dev/null
+    fi
+    [ "$(service_identity)" = "$RUN_TOKEN" ] || clear_publish
+}
+
+prepare_runtime() {
+    [ ! -L "$RUNTIME_DIR" ] || die "runtime directory must not be a symlink"
+    mkdir -p "$RUNTIME_DIR" && chown 0:0 "$RUNTIME_DIR" && chmod 0700 "$RUNTIME_DIR" || die "cannot prepare runtime directory"
+}
+block_injection() {
+    echo "$*" > "$BLOCKED" || die "cannot persist injection stop condition"
+    log "automatic injection stopped: $*; select a mode explicitly to retry"
+}
+
+# Shared by all watchdog invocations: at most one automatic recovery until the
+# next boot or explicit user mode/gate command. Interrupted injections cannot
+# form a restart loop by resetting a per-command retry counter.
+recover_service() {
+    failed_token=$1
+    clear_publish
+    if [ -f "$RECOVERY_USED" ]; then
+        block_injection "recovery budget exhausted after $failed_token (rc=$rc)"
+        return 1
+    fi
+    echo "$failed_token rc=$rc" > "$RECOVERY_USED" || die "cannot persist recovery budget"
+    log "recovering failed injection $failed_token (rc=$rc); one fresh-process retry"
+    current=$(service_identity)
+    if [ "$current" = "$failed_token" ]; then
+        setprop ctl.restart "$SERVICE" || die "cannot restart service"
+    elif [ -z "$current" ]; then
+        setprop ctl.start "$SERVICE" || die "cannot start service"
+    fi
+    # Exit 5 normally caused init to start a replacement already. Do not restart
+    # that new instance a second time; never retry in the failed instance.
+    m=0
+    while [ $m -lt 20 ]; do
+        current=$(service_identity)
+        if [ -n "$current" ] && [ "$current" != "$failed_token" ]; then
+            sleep 2
+            return 0
+        fi
+        sleep 0.5
+        m=$((m + 1))
+    done
+    block_injection "service did not recover from $failed_token"
+    return 1
 }
 
 verify_artifacts() {
@@ -83,55 +171,52 @@ verify_artifacts() {
 
 # Inject into the currently running service (no restart). Used at boot and by the watchdog.
 inject_now() {
+    # Refresh even in off/no-service/blocked states, and before any slow work.
+    publish
     [ "$(saved_mode)" = off ] && return 0
-    verify_artifacts
-    pid=$(pidof "$SERVICE")
-    [ -n "$pid" ] || die "service not running"
-    if injected; then
-        log "ensure: already injected (pid $pid)"
-        return 0
+    [ -f "$BLOCKED" ] && return 1
+    if [ "$MAPPED" = yes ]; then
+        case "$PHASE" in ready|pending) return 0 ;; *) return 1 ;; esac
     fi
-    # Right after a restart the service is still starting up: the injector refuses
-    # (exit 3) instead of hijacking a thread that is inside the linker. A stale
-    # partial mapping from an interrupted attempt (exit 4) blocks a new dlopen, so
-    # restart the service once and continue on a clean process.
+    [ -n "$RUN_TOKEN" ] || return 0
+    verify_artifacts
+    prepare_runtime
     n=0
     rc=1
-    recovered=0
     while [ $n -lt 20 ]; do
+        attempt_token=$(service_identity)
+        [ -n "$attempt_token" ] || return 1
+        pid=${attempt_token%%:*}
+        clear_publish
         "$BIN" "$pid" "$LIB" >> "$STATE_DIR/inject.log" 2>&1
         rc=$?
-        if [ $rc -eq 0 ] && injected; then
-            log "injected mode=$(saved_mode) gate=$(saved_gate) pid=$pid"
-            return 0
+        if [ $rc -eq 5 ]; then
+            echo "$attempt_token" > "$UNSAFE_INSTANCE" || die "cannot record unsafe service instance"
+        fi
+        publish
+        if [ $rc -eq 0 ] && [ "$RUN_TOKEN" = "$attempt_token" ] && [ "$MAPPED" = yes ]; then
+            log "payload pid=$pid phase=$PHASE applied_mode=$APPLIED_MODE applied_gate=$APPLIED_GATE"
+            [ "$PHASE" != failed ] && [ "$PHASE" != unreported ] && [ "$PHASE" != initializing ]
+            return $?
         fi
         n=$((n + 1))
-        if [ $rc -eq 4 ] && [ $recovered -eq 0 ]; then
-            recovered=1
-            log "stale partial mapping (pid $pid); restarting service and retrying"
-            prev=$pid
-            setprop ctl.restart "$SERVICE" || die "cannot restart service"
-            m=0
-            while [ $m -lt 20 ]; do
-                pid=$(pidof "$SERVICE")
-                [ -n "$pid" ] && [ "$pid" != "$prev" ] && break
-                sleep 0.5
-                m=$((m + 1))
-            done
-            [ -n "$pid" ] && [ "$pid" != "$prev" ] || die "service did not restart (old pid ${prev:-none})"
-            sleep 2
+        if [ $rc -eq 4 ] || [ $rc -eq 5 ]; then
+            recover_service "$attempt_token" || return 1
         elif [ $rc -eq 3 ]; then
             sleep 1
         else
-            break
+            block_injection "pid=$pid rc=$rc; no automatic restart for a safe/unknown failure"
+            return 1
         fi
     done
-    die "injection failed (pid $pid rc=$rc)"
+    block_injection "startup retry limit reached (pid=$pid rc=$rc)"
+    return 1
 }
 
 # Restart the service (unloads any previous hook) and apply the saved mode.
 restart_and_inject() {
-    old=$(pidof "$SERVICE")
+    clear_publish
+    old=$(service_pid)
     if [ -n "$old" ]; then
         setprop ctl.restart "$SERVICE" || die "cannot restart service"
     else
@@ -140,7 +225,7 @@ restart_and_inject() {
     i=0
     new=
     while [ $i -lt 20 ]; do
-        new=$(pidof "$SERVICE")
+        new=$(service_pid)
         [ -n "$new" ] && [ "$new" != "$old" ] && break
         sleep 0.5
         i=$((i + 1))
@@ -156,10 +241,19 @@ restart_and_inject() {
 [ "$(id -u)" = 0 ] || die "must run as root"
 
 MODE=$1
+if [ "$MODE" != status ]; then
+    if [ "${PICOET_CONTROL_LOCKED:-}" != 1 ]; then
+        [ -x "$BIN" ] || die "injector/command lock helper missing: $BIN"
+        exec "$BIN" --run-locked "$STATE_DIR/control.lock" "$0" "$@"
+    fi
+    # Covers every failure/early exit, including failed restart/artifact checks.
+    trap 'publish' 0
+fi
 case "$MODE" in
     status)
-        pid=$(pidof "$SERVICE")
-        echo "saved_mode=$(saved_mode) saved_gate=$(saved_gate) injected=$(injected && echo yes || echo no) service_pid=${pid:-none} externalfunc=$(getprop ro.pxr.externalfunc)"
+        runtime_snapshot
+        echo "saved_mode=$(saved_mode) saved_gate=$(saved_gate) injected=$MAPPED service_pid=${RUN_PID:-none} phase=$PHASE applied_mode=$APPLIED_MODE applied_gate=$APPLIED_GATE externalfunc=$(getprop ro.pxr.externalfunc)"
+        [ -f "$BLOCKED" ] && echo "automatic_injection_blocked=$(cat "$BLOCKED")"
         if [ -f "$PLOG" ]; then
             echo "log_tail:"
             tail -n 5 "$PLOG"
@@ -168,8 +262,7 @@ case "$MODE" in
         exit 0 ;;
     ensure)
         inject_now
-        publish
-        exit 0 ;;
+        exit $? ;;
     off|left|right|dual)
         FORCE=0
         for a in "$@"; do
@@ -180,9 +273,10 @@ case "$MODE" in
         fi
         echo "$MODE" > "$MODE_FILE" || die "cannot write $MODE_FILE"
         [ -f "$GATE_FILE" ] || echo on > "$GATE_FILE"
-        restart_and_inject
+        rm -f "$BLOCKED" "$RECOVERY_USED" || die "cannot reset recovery budget"
+        restart_and_inject || die "mode application failed; see status/inject.log"
         publish
-        log "mode=$MODE gate=$(saved_gate) service pid ${old:-none} -> ${new:-none} injected=$(injected && echo yes || echo no)"
+        log "mode=$MODE gate=$(saved_gate) service pid ${old:-none} -> ${new:-none} phase=$PHASE applied_mode=$APPLIED_MODE applied_gate=$APPLIED_GATE"
         exit 0 ;;
     gate)
         case "$2" in on|off) ;; *) echo "usage: $0 status | off|left|right|dual [--force] | gate on|off [--force] | ensure"; exit 2 ;; esac
@@ -194,9 +288,10 @@ case "$MODE" in
             die "tracking clients connected, restart would drop them; rerun with --force: $(clients | tr '\n' ' ')"
         fi
         echo "$2" > "$GATE_FILE" || die "cannot write $GATE_FILE"
-        restart_and_inject
+        rm -f "$BLOCKED" "$RECOVERY_USED" || die "cannot reset recovery budget"
+        restart_and_inject || die "gate application failed; see status/inject.log"
         publish
-        log "gate=$2 mode=$(saved_mode) service pid ${old:-none} -> ${new:-none} injected=$(injected && echo yes || echo no)"
+        log "gate=$2 mode=$(saved_mode) service pid ${old:-none} -> ${new:-none} phase=$PHASE applied_mode=$APPLIED_MODE applied_gate=$APPLIED_GATE"
         exit 0 ;;
     *)
         echo "usage: $0 status | off|left|right|dual [--force] | gate on|off [--force] | ensure"

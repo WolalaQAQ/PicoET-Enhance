@@ -3,8 +3,8 @@ project(picoet_hook C ASM)
 
 # ---- ShadowHook 2.0.1 (vendored source, static-in-object form) --------------
 # Vendored upstream source (see third_party/shadowhook-2.0.1/VENDOR.txt). The
-# vendored source carries a single local patch guarded by
-# PICOET_SHADOWHOOK_NO_LINKER_MONITOR.
+# Local integration patches are documented in VENDOR.txt: no linker monitor
+# and no ELF-gap allocation (the plugin tail belongs to our Hook B leaf).
 #
 # Built as an OBJECT library (not an archive) on purpose: ShadowHook's errno
 # module is initialised in its own `__attribute__((constructor))` and our
@@ -22,7 +22,8 @@ list(FILTER SH_SRC EXCLUDE REGEX ".*/sh_jni\\.c$")   # no Java API; defines JNI_
 
 add_library(shadowhook_obj OBJECT ${SH_SRC})
 set_target_properties(shadowhook_obj PROPERTIES C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
-target_compile_definitions(shadowhook_obj PRIVATE PICOET_SHADOWHOOK_NO_LINKER_MONITOR)
+target_compile_definitions(shadowhook_obj PRIVATE
+    PICOET_SHADOWHOOK_NO_LINKER_MONITOR PICOET_SHADOWHOOK_NO_ELF_GAP)
 target_compile_options(shadowhook_obj PRIVATE -Os -fPIC -fvisibility=hidden -ffunction-sections -fdata-sections -w)
 target_include_directories(shadowhook_obj PRIVATE
     ${SH_DIR} ${SH_DIR}/arch/arm64 ${SH_DIR}/common

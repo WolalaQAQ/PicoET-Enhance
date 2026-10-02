@@ -4,7 +4,7 @@ English | [简体中文](README_zh.md)
 
 An eye-tracking enhancement Magisk module for the PICO 4 Pro: it makes the headset's eye-tracking service output true per-eye gaze and pupil data, for use with [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) and [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule).
 
-> Current version v2.0.2, verified on a PICO 4 Pro running PICO OS 5.13.7. Only that firmware is supported; other versions are safely refused.
+> Current version v2.0.3 targets PICO 4 Pro running PICO OS 5.13.7. Version 2.0.2 was verified on that setup; this release's fixes have passed build and static checks and await headset revalidation. See the [changelog](CHANGELOG.md).
 
 ## What it does
 
@@ -46,8 +46,8 @@ Other models and firmware versions have not been confirmed to work. The installe
 2. Flash it in the Magisk app under Install from storage, or from a command line:
 
    ```sh
-   adb push magisk-picoet-enhance-v2.0.2.zip /data/local/tmp/
-   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.0.2.zip'
+   adb push magisk-picoet-enhance-v2.0.3.zip /data/local/tmp/
+   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.0.3.zip'
    ```
 
 3. Reboot the headset.
@@ -115,6 +115,11 @@ pwsh -File build-picoet-enhance.ps1            # package the Magisk zip
 The output is `artifacts/magisk-picoet-enhance-v<version>.zip`. The packaging script scans every staged file, rejects any known PICO library hash, and only allows our own two ELF artifacts, so the release zip never contains PICO bytes.
 
 Pushing a `v<version>` tag makes GitHub Actions build on a Windows runner and publish the zip with a checksum.
+
+## TODO
+
+- [ ] Tongue-direction support: PICO currently exposes only the scalar `TongueOut`, while VRCFaceTracking already defines direction channels such as `TongueLeft/Right/Up/Down`. The plan is to capture raw frames from the lower-face camera, auto-label them with visual segmentation foundation models, train a small model, and let users collect their own data for a local online fine-tune.
+- [ ] Unfiltered face output: make the on-device FaceTrackor temporal smoothing optional so the module can forward per-frame raw face data. Filtering then moves to the PC side, where it can be tuned as needed.
 
 ## Feedback
 

@@ -4,7 +4,7 @@
 
 面向 PICO 4 Pro 的眼动增强 Magisk 模块：让头显的眼动服务输出真实的逐眼视线与瞳孔数据，配合 [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) 和 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) 使用。
 
-> 当前版本 v2.0.2，已在 PICO 4 Pro（PICO OS 5.13.7）上完成实机验证。仅支持这一固件版本，其他版本会被安全拒绝。
+> 当前版本 v2.0.3，面向 PICO 4 Pro 的 PICO OS 5.13.7。v2.0.2 已在该环境完成实机验证；本版修复已通过构建与静态检查，尚待真机复测。详见[更新日志](CHANGELOG_zh.md)。
 
 ## 它做什么
 
@@ -46,8 +46,8 @@ VRCFaceTracking → VRChat OSC
 2. 在 Magisk App 中通过“从本地安装”刷入，或使用命令行：
 
    ```sh
-   adb push magisk-picoet-enhance-v2.0.2.zip /data/local/tmp/
-   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.0.2.zip'
+   adb push magisk-picoet-enhance-v2.0.3.zip /data/local/tmp/
+   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.0.3.zip'
    ```
 
 3. 重启头显。
@@ -115,6 +115,11 @@ pwsh -File build-picoet-enhance.ps1            # 打包成 Magisk zip
 产物为 `artifacts/magisk-picoet-enhance-v<版本>.zip`。打包脚本会扫描暂存目录中的所有文件，拒绝任何已知 PICO 库的哈希，并只允许我们自己的两个 ELF 产物，确保发布包内不含任何 PICO 字节。
 
 推送 `v<版本>` 标签后，GitHub Actions 会在 Windows 运行器上构建并发布带校验和的 zip。
+
+## 待做
+
+- [ ] **舌头方向增强**：PICO 目前只对外提供伸舌量 `TongueOut` 一个标量，而 VRCFaceTracking 已定义了 `TongueLeft/Right/Up/Down` 等方向通道。计划先取下脸相机的原始帧，用视觉分割基模自动打标，再训练一个小模型，并允许用户采集自己的数据在本地做在线微调。
+- [ ] **面捕不滤波输出**：把端侧 FaceTrackor 的时间平滑做成可选关闭，让模块直接转发逐帧原始面部数据。时间滤波改由 PC 端按需处理，端侧只负责发原始值。
 
 ## 反馈
 

@@ -6,8 +6,8 @@
 // only our code plus the vendored ShadowHook source; it refers to the PICO
 // libraries by name/offset at runtime and ships no PICO bytes.
 //
-// Safety: constructors are fail-safe. Any guard failure logs and returns
-// without installing hooks; the host process is never crashed.
+// Service compatibility/init failure blocks all plugin writes. Installation
+// results are reported per process; a partially installed gate is not dual gaze.
 //
 // Build: hook/CMakeLists.txt (ShadowHook 2.0.1, OBJECT libs for ctor order).
 // Note: this file is compiled with -fno-omit-frame-pointer because the P4
@@ -15,6 +15,7 @@
 
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -43,6 +44,7 @@
 // ---- eye-mode patch site (P3) ----
 #define EYE_MODE_FILE "/data/local/tmp/picoet-mode" /* off|left|right|dual */
 #define GATE_FILE "/data/local/tmp/picoet-gate" /* on|off; missing = on */
+#define RUNTIME_DIR "/data/local/tmp/picoet-runtime" /* root-owned, prepared by picoet.sh */
 #define PLUGIN_OFF_EYE_MODE 0x5cd68ULL /* ldr w8,[x8,#0x108] */
 #define PLUGIN_EYE_MODE_WIN_OFF 0x5cd50ULL
 #define PLUGIN_EYE_MODE_WIN_LEN 0x30U
@@ -121,6 +123,10 @@ static void *g_phoenix_base = NULL;
 static void *g_hooka_stub = NULL;
 static int g_plugin_guard_ok = 0;
 static int g_eye_mode = 0;
+static int g_gate_requested = 1;
+static unsigned long long g_start_ticks;
+
+static int find_region(unsigned long addr, unsigned long *start, unsigned long *end, int *prot);
 
 static void append_log(const char *msg)
 {
@@ -144,6 +150,86 @@ static void log_fmt(const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     append_log(buf);
+}
+
+static unsigned long long process_start_ticks(void)
+{
+    char buf[2048];
+    int fd = open("/proc/self/stat", O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return 0;
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0)
+        return 0;
+    buf[n] = '\0';
+    char *p = strrchr(buf, ')'); /* comm can contain spaces and ')' */
+    if (!p || p[1] != ' ')
+        return 0;
+    p += 2;
+    for (int field = 3; field < 22; field++) {
+        p = strchr(p, ' ');
+        if (!p)
+            return 0;
+        while (*p == ' ')
+            p++;
+    }
+    char *end;
+    errno = 0;
+    unsigned long long ticks = strtoull(p, &end, 10);
+    return errno || end == p || *end != ' ' ? 0 : ticks;
+}
+
+// One writer: constructor, then (only if needed) the plugin poll thread.
+// Atomic rename prevents readers seeing half a record. PID + /proc starttime
+// prevent a previous service instance, including a reused PID, from advertising.
+static int publish_runtime(const char *phase)
+{
+    char path[128], tmp[128], record[160];
+    const char *mode = "off";
+    if (picoet_dual_installed)
+        mode = "dual";
+    else if (picoet_eye_mode_patched)
+        mode = g_eye_mode == 1 ? "left" : "right";
+    snprintf(path, sizeof(path), RUNTIME_DIR "/%ld.state", (long)getpid());
+    snprintf(tmp, sizeof(tmp), RUNTIME_DIR "/%ld.tmp", (long)getpid());
+    int len = snprintf(record, sizeof(record), "1 %ld %llu %s %s %s\n",
+                       (long)getpid(), g_start_ticks, phase, mode,
+                       picoet_gate_installed ? "on" : "off");
+    if (!g_start_ticks || len <= 0 || (size_t)len >= sizeof(record))
+        return -1;
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0)
+        return -1;
+    size_t done = 0;
+    while (done < (size_t)len) {
+        ssize_t n = write(fd, record + done, (size_t)len - done);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            break;
+        done += (size_t)n;
+    }
+    int rc = close(fd);
+    if (done == (size_t)len && rc == 0 && rename(tmp, path) == 0)
+        return 0;
+    unlink(tmp);
+    return -1;
+}
+
+static void report_runtime(const char *phase)
+{
+    if (publish_runtime(phase) != 0)
+        log_fmt("runtime state: cannot publish %s errno=%d", phase, errno);
+}
+
+static int plugin_range_readable(const unsigned char *base, size_t off, size_t len)
+{
+    unsigned long addr = (unsigned long)base + off, start, end;
+    int prot;
+    return find_region(addr, &start, &end, &prot) == 0 &&
+           (prot & (PROT_READ | PROT_EXEC)) == (PROT_READ | PROT_EXEC) &&
+           len <= end - addr;
 }
 
 static int fnv1a64_file(const char *path, uint64_t *out)
@@ -209,30 +295,30 @@ static int my_isBusinessDev(void)
     return 1;
 }
 
-static void install_gate_hook(void)
+static int install_gate_hook(void)
 {
     append_log("P1 init: libpicoet_hook.so constructed");
 
     uint64_t h = 0;
     if (fnv1a64_file(SERVICE_LIB_PATH, &h) != 0) {
         append_log("P1 guard: cannot read service lib; skip");
-        return;
+        return -1;
     }
     if (h != SERVICE_FNV1A64) {
         log_fmt("P1 guard: service lib hash 0x%016llX != known; skip", (unsigned long long)h);
-        return;
+        return -1;
     }
     append_log("P1 guard: service lib hash matches known firmware");
 
     int err = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
     if (err != SHADOWHOOK_ERRNO_OK && err != SHADOWHOOK_ERRNO_DUP) {
         log_fmt("P1: shadowhook_init failed errno=%d", err);
-        return;
+        return -1;
     }
 
-    if (!read_gate_enabled()) {
+    if (!g_gate_requested) {
         append_log("P1 gate: disabled by gate file; skipping gate hook");
-        return;
+        return 0;
     }
 
     void *orig = NULL;
@@ -240,10 +326,11 @@ static void install_gate_hook(void)
                                           (void *)my_isBusinessDev, &orig);
     if (!stub || !orig) {
         log_fmt("P1: gate hook failed errno=%d", shadowhook_get_errno());
-        return;
+        return -1;
     }
     picoet_gate_installed = 1;
     append_log("P1 gate hook installed (isBusinessDev -> 1)");
+    return 0;
 }
 
 // ---- plugin discovery (P2) --------------------------------------------------
@@ -296,6 +383,12 @@ static int plugin_guards_ok(const unsigned char *b)
     static const unsigned char exp6cc[4] = {0xea, 0x27, 0x40, 0xb9};
     static const unsigned char expbd0[4] = {0x4f, 0xb4, 0xff, 0x97};
 
+    if (!plugin_range_readable(b, PLUGIN_OFF_INFER, 16) ||
+        !plugin_range_readable(b, 0x5c2d0, 0x400) ||
+        !plugin_range_readable(b, PLUGIN_OFF_HOOKA_CALLER - 4, 4)) {
+        append_log("P2 guard: plugin anchors outside readable executable mappings; skip");
+        return -1;
+    }
     if (memcmp(b + PLUGIN_OFF_INFER, exp49, 16) != 0) {
         append_log("P2 guard: plugin infer_entry prologue mismatch; skip");
         return -1;
@@ -349,9 +442,6 @@ static int install_hooka_dryrun(void *base)
 // base+0x494c58. The leaf adds (single-eye - fused) to each per-eye vector of
 // the same timestamp, then runs the displaced ldr and branches back to
 // base+0x5c6d0. Registers used (x11-x14, w12, s16-s19) are dead at the join.
-
-/* defined with the P3 helpers below */
-static int find_region(unsigned long addr, unsigned long *start, unsigned long *end, int *prot);
 
 static int vec_point(const struct eye_vec3 *v, float out[2])
 {
@@ -573,7 +663,10 @@ static int dual_internals_ok(const unsigned char *b)
     static const unsigned char exp_dtor[4] = {0xf4, 0x4f, 0xbe, 0xa9}; /* stp x20,x19,[sp,#-0x20]! */
     static const unsigned char exp_del[4] = {0x65, 0xcf, 0xf3, 0x17}; /* b <thunk to operator delete> */
 
-    if (memcmp(b + PLUGIN_OFF_MAT_CTOR, exp_ctor, 4) != 0 ||
+    if (!plugin_range_readable(b, PLUGIN_OFF_MAT_CTOR, 4) ||
+        !plugin_range_readable(b, PLUGIN_OFF_MAT_DTOR, 4) ||
+        !plugin_range_readable(b, PLUGIN_OFF_OP_DELETE, 4) ||
+        memcmp(b + PLUGIN_OFF_MAT_CTOR, exp_ctor, 4) != 0 ||
         memcmp(b + PLUGIN_OFF_MAT_DTOR, exp_dtor, 4) != 0 ||
         memcmp(b + PLUGIN_OFF_OP_DELETE, exp_del, 4) != 0) {
         append_log("P4 guard: Mat/operator-delete prologue mismatch; skip");
@@ -757,13 +850,19 @@ out:
     return rc;
 }
 
-static void apply_eye_mode(void *base, int mode)
+static int apply_eye_mode(void *base, int mode)
 {
     const char *label = mode == 1 ? "left" : mode == 2 ? "right" : mode == 3 ? "dual" : "off";
 
     if (mode != 1 && mode != 2) {
         log_fmt("P3 mode: '%s'; no eye-mode patch", label);
-        return;
+        return 0;
+    }
+
+    if (!g_plugin_guard_ok ||
+        !plugin_range_readable(base, PLUGIN_EYE_MODE_WIN_OFF, PLUGIN_EYE_MODE_WIN_LEN)) {
+        append_log("P3: required plugin/window guard unavailable; skip");
+        return -1;
     }
 
     unsigned long site = (unsigned long)base + PLUGIN_OFF_EYE_MODE;
@@ -772,7 +871,7 @@ static void apply_eye_mode(void *base, int mode)
     if (find_region(site, &rstart, &rend, &prot) != 0 ||
         (prot & (PROT_READ | PROT_EXEC)) != (PROT_READ | PROT_EXEC)) {
         append_log("P3: eye-mode site not in a readable executable mapping; skip");
-        return;
+        return -1;
     }
 
     long pagesz = sysconf(_SC_PAGESIZE);
@@ -784,7 +883,7 @@ static void apply_eye_mode(void *base, int mode)
     if ((prot & (PROT_READ | PROT_WRITE)) != (PROT_READ | PROT_WRITE)) {
         if (mprotect((void *)page, (size_t)pagesz, prot | PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
             log_fmt("P3: mprotect RWX failed errno=%d; skip", errno);
-            return;
+            return -1;
         }
         changed_prot = 1;
     }
@@ -797,13 +896,13 @@ static void apply_eye_mode(void *base, int mode)
         if (changed_prot)
             mprotect((void *)page, (size_t)pagesz, prot);
         append_log("P3 guard: eye-mode window hash mismatch; skip");
-        return;
+        return -1;
     }
     if (memcmp(sitep, eye_orig4, 4) != 0) {
         if (changed_prot)
             mprotect((void *)page, (size_t)pagesz, prot);
         append_log("P3 guard: eye-mode site bytes mismatch; skip");
-        return;
+        return -1;
     }
 
     uint32_t want_w = inst_word(want);
@@ -816,7 +915,7 @@ static void apply_eye_mode(void *base, int mode)
         if (changed_prot)
             mprotect((void *)page, (size_t)pagesz, prot);
         append_log("P3: readback mismatch after write; original restored; skip");
-        return;
+        return -1;
     }
 
     if (changed_prot) {
@@ -831,21 +930,22 @@ static void apply_eye_mode(void *base, int mode)
     log_fmt("P3 eye patch: mode=%s site=0x%lx orig=080941b9 -> %02x%02x%02x%02x; readback ok; prot=0x%x; p2_guard=%s",
             label, site, want[0], want[1], want[2], want[3], prot,
             g_plugin_guard_ok ? "ok" : "fail");
+    return 0;
 }
 
 static void on_plugin_found(void *b)
 {
-    int mode = read_eye_mode();
-    g_eye_mode = mode;
-    picoet_eye_mode = (unsigned long long)mode;
-
-    if (mode == 3) {
-        if (install_dual(b) != 0)
-            append_log("P4: dual install failed; leaving stock behavior");
+    int rc;
+    if (g_eye_mode == 3) {
+        rc = install_dual(b);
+        if (rc != 0)
+            append_log("P4: dual install failed; no dual gaze advertised");
     } else {
-        install_hooka_dryrun(b);
-        apply_eye_mode(b, mode);
+        rc = install_hooka_dryrun(b);
+        if (rc == 0)
+            rc = apply_eye_mode(b, g_eye_mode);
     }
+    report_runtime(rc == 0 ? "ready" : "failed");
 }
 
 static void *plugin_poll_thread(void *arg)
@@ -860,6 +960,7 @@ static void *plugin_poll_thread(void *arg)
         usleep(200 * 1000);
     }
     append_log("P2 plugin poll: not found after 60s");
+    report_runtime("failed");
     return NULL;
 }
 
@@ -871,10 +972,27 @@ __attribute__((constructor)) static void picoet_init(void)
     once = 1;
 
     picoet_hook_marker = 0x5049434F45543150ULL; /* "PICOET1P" */
+    g_start_ticks = process_start_ticks();
+    g_eye_mode = read_eye_mode();
+    g_gate_requested = read_gate_enabled();
+    picoet_eye_mode = (unsigned long long)g_eye_mode;
+    if (publish_runtime("initializing") != 0) {
+        append_log("runtime state unavailable; refusing all hooks (prepare picoet-runtime directory)");
+        return;
+    }
 
     // P1: gate hook (stable: ShadowHook init must run after sh_errno_ctor;
     // guaranteed by the object-link order in CMakeLists.txt).
-    install_gate_hook();
+    if (install_gate_hook() != 0) {
+        append_log("service guard/gate initialization failed; no plugin writes permitted");
+        report_runtime("failed");
+        return;
+    }
+    if (g_eye_mode == 0) {
+        report_runtime("ready");
+        return;
+    }
+    report_runtime("pending");
 
     // P2/P3/P4: find the plugin, then either install the dual hooks (mode
     // "dual") or the Hook A dry-run plus the left/right eye-mode patch.
@@ -886,7 +1004,9 @@ __attribute__((constructor)) static void picoet_init(void)
         pthread_t t;
         if (pthread_create(&t, NULL, plugin_poll_thread, NULL) == 0)
             pthread_detach(t);
-        else
+        else {
             append_log("P2: poll thread creation failed");
+            report_runtime("failed");
+        }
     }
 }
