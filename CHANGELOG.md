@@ -2,6 +2,16 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
+## [2.0.4] - 2026-10-08
+
+### Changed
+- Default fresh installs to `dual` + `gate on`, automatically enabling genuine per-eye gaze and pupil data after reboot without manual mode selection. Installation messages show the saved state.
+- Preserve valid mode/gate settings on upgrade, including `off` and `gate off`. Runtime failures still advertise only successfully installed hooks, never a forced enhanced state.
+
+### Validation
+- Android NDK builds, hook shape checks, shell/PowerShell syntax checks, module packaging and public-content checks pass.
+- The new installation defaults have not yet been validated on a headset.
+
 ## [2.0.3] - 2026-10-03
 
 ### Fixed

@@ -4,7 +4,7 @@ English | [简体中文](README_zh.md)
 
 An eye-tracking enhancement Magisk module for the PICO 4 Pro: it makes the headset's eye-tracking service output true per-eye gaze and pupil data, for use with [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) and [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule).
 
-> Current version v2.0.3 targets PICO 4 Pro running PICO OS 5.13.7. Version 2.0.2 was verified on that setup; this release's fixes have passed build and static checks and await headset revalidation. See the [changelog](CHANGELOG.md).
+> Current version v2.0.4 targets PICO 4 Pro running PICO OS 5.13.7. Version 2.0.2 was verified on that setup; this release has passed build and static checks and awaits headset revalidation. See the [changelog](CHANGELOG.md).
 
 ## What it does
 
@@ -46,13 +46,13 @@ Other models and firmware versions have not been confirmed to work. The installe
 2. Flash it in the Magisk app under Install from storage, or from a command line:
 
    ```sh
-   adb push magisk-picoet-enhance-v2.0.3.zip /data/local/tmp/
-   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.0.3.zip'
+   adb push magisk-picoet-enhance-v2.0.4.zip /data/local/tmp/
+   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.0.4.zip'
    ```
 
 3. Reboot the headset.
 
-A fresh install starts in `off`, that is, with no injection and stock behavior. Choose a mode after rebooting.
+Fresh installs default to `dual` and `gate on`, applied automatically after reboot. Upgrades preserve saved mode and gate settings.
 
 ## Usage
 
@@ -74,7 +74,7 @@ sh /data/adb/modules/picoet-enhance/picoet.sh gate off
 | `dual` | Per-eye gaze. Runs both single-eye models and outputs genuine per-eye vectors (recommended) |
 | `left` / `right` | The fused gaze comes from the selected eye's single-eye model only |
 | `off` | Restarts the service without injection; fully stock |
-| `gate on` / `gate off` | Controls the gate layer alone. With it open the firmware writes per-eye and pupil fields, but gaze is still the fixed-depth split of the fused result |
+| `gate on` / `gate off` | Controls the gate layer (on by default), allowing the firmware to write per-eye and pupil fields; genuine independent gaze is provided by `dual` mode |
 
 Switching restarts the eye-tracking service, so any active eye or face tracking client is disconnected. The switch is refused while clients are connected unless `--force` is given. The Magisk app's Action button cycles `off → left → right → dual → off`.
 

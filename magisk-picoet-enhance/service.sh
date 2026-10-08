@@ -21,9 +21,10 @@ rm -f "$STATE_DIR/recovery.used" "$STATE_DIR/injection.blocked" "$STATE_DIR/unsa
 resetprop --delete picoet.enhance.mode 2>/dev/null
 resetprop --delete picoet.enhance.gate 2>/dev/null
 
+# Match the installer defaults without overriding valid user settings.
 case "$(cat "$MODE_FILE" 2>/dev/null)" in
     off|left|right|dual) ;;
-    *) echo off > "$MODE_FILE" ;;
+    *) echo dual > "$MODE_FILE" ;;
 esac
 case "$(cat "$GATE_FILE" 2>/dev/null)" in
     on|off) ;;

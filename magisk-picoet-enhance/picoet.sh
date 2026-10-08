@@ -13,7 +13,7 @@
 # restarts the service and drops every eye/face tracking client; that is refused while
 # clients are connected unless --force is given.
 #
-#   /data/local/tmp/picoet-mode : off|left|right|dual   (off = no injection at all)
+#   /data/local/tmp/picoet-mode : off|left|right|dual   (default dual; off = no injection)
 #   /data/local/tmp/picoet-gate : on|off                (default on; only used when active)
 
 MODDIR=${0%/*}
@@ -44,6 +44,7 @@ mkdir -p "$STATE_DIR" 2>/dev/null
 log() { mkdir -p "$STATE_DIR"; echo "$*"; echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 die() { log "ERROR: $*"; exit 1; }
 sha() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+# Install/boot initializes dual/on; unexpected runtime mode reads still fail closed.
 saved_mode() { case "$(cat "$MODE_FILE" 2>/dev/null)" in off|left|right|dual) cat "$MODE_FILE" ;; *) echo off ;; esac; }
 saved_gate() { case "$(cat "$GATE_FILE" 2>/dev/null)" in on|off) cat "$GATE_FILE" ;; *) echo on ;; esac; }
 clients() { dumpsys "$SERVICE" 2>/dev/null | grep -E 'There is [1-9][0-9]* clients'; }

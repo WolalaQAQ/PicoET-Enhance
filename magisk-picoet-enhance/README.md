@@ -24,7 +24,7 @@ numeric offset at runtime, behind firmware guards.
 
 ```sh
 sh /data/adb/modules/picoet-enhance/picoet.sh status
-sh /data/adb/modules/picoet-enhance/picoet.sh dual            # per-eye gaze (gate on)
+sh /data/adb/modules/picoet-enhance/picoet.sh dual            # per-eye gaze; keeps saved gate setting
 sh /data/adb/modules/picoet-enhance/picoet.sh left|right      # select one eye
 sh /data/adb/modules/picoet-enhance/picoet.sh off             # restart without injection = stock
 sh /data/adb/modules/picoet-enhance/picoet.sh gate on|off     # gate layer only

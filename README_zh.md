@@ -4,7 +4,7 @@
 
 面向 PICO 4 Pro 的眼动增强 Magisk 模块：让头显的眼动服务输出真实的逐眼视线与瞳孔数据，配合 [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) 和 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) 使用。
 
-> 当前版本 v2.0.3，面向 PICO 4 Pro 的 PICO OS 5.13.7。v2.0.2 已在该环境完成实机验证；本版修复已通过构建与静态检查，尚待真机复测。详见[更新日志](CHANGELOG_zh.md)。
+> 当前版本 v2.0.4，面向 PICO 4 Pro 的 PICO OS 5.13.7。v2.0.2 已在该环境完成实机验证；本版已通过构建与静态检查，尚待真机复测。详见[更新日志](CHANGELOG_zh.md)。
 
 ## 它做什么
 
@@ -46,13 +46,13 @@ VRCFaceTracking → VRChat OSC
 2. 在 Magisk App 中通过“从本地安装”刷入，或使用命令行：
 
    ```sh
-   adb push magisk-picoet-enhance-v2.0.3.zip /data/local/tmp/
-   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.0.3.zip'
+   adb push magisk-picoet-enhance-v2.0.4.zip /data/local/tmp/
+   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.0.4.zip'
    ```
 
 3. 重启头显。
 
-新安装的默认状态是 `off`，即不注入、保持原版。重启后需要手动选择模式。
+首次安装默认启用 `dual` 和 `gate on`，重启后自动生效。升级保留已有的模式与门控设置。
 
 ## 使用
 
@@ -74,7 +74,7 @@ sh /data/adb/modules/picoet-enhance/picoet.sh gate off
 | `dual` | 逐眼视线。左右眼单眼模型同时运行，输出真实分眼视线（推荐） |
 | `left` / `right` | 融合视线改由指定一只眼的单眼模型给出 |
 | `off` | 重启眼动服务且不注入，回到完全原版 |
-| `gate on` / `gate off` | 单独控制门控层。打开后固件会写入逐眼与瞳孔字段，但视线仍是按固定深度拆分的融合结果 |
+| `gate on` / `gate off` | 单独控制门控层（默认开启），允许固件写入逐眼与瞳孔字段；真实独立逐眼视线由 `dual` 模式提供 |
 
 切换模式会重启眼动服务，正在使用的眼动与面捕客户端会断开。有客户端连接时切换会被拒绝，需要显式加 `--force`。Magisk App 的“操作”按钮会按 `off → left → right → dual → off` 循环。
 
