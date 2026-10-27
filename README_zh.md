@@ -6,6 +6,8 @@
 
 > v2.4.2 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
 
+**PC舌头开发：**`feat/tongue-pc`增加按需启动的JPEG相机源及PC推理／个人流程，配套UnifiedPicoModule同名分支。按[源码构建与测试说明](TONGUE_zh.md)使用；下方正常Magisk包保持不变。
+
 ## 它做什么
 
 PICO 4 Pro 的固件会对左右眼分别追踪，但面部表情模型在输出前把两眼混合，一侧的 Blink、视线方向、Wide 和眉部会受另一侧输入影响。眼部相机以 90 Hz 运行，这些表情却每秒只更新约 24 次。本模块在运行期做三处改动：

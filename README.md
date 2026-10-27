@@ -6,6 +6,8 @@ An eye-tracking enhancement Magisk module for the PICO 4 Pro: it opens the eye-t
 
 > v2.4.2 · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
 
+**PC tongue development:** `feat/tongue-pc` adds an opt-in JPEG camera source and PC inference/personalization app, paired with the same branch of UnifiedPicoModule. Follow the [source-build and testing guide](TONGUE.md); the normal Magisk package below is unchanged.
+
 ## What it does
 
 The PICO 4 Pro firmware tracks each eye, but its facial expression model mixes the two eyes before output, so blink, look direction, wideness and brows for one eye depend on the other eye's inputs. It also updates these expressions only about 24 times a second, although the eye cameras run at 90 Hz. This module changes three things at runtime:

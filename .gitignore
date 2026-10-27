@@ -10,3 +10,16 @@ artifacts/
 *.tmp
 Thumbs.db
 .DS_Store
+
+# PC tongue runtime and source-build outputs
+pc-tongue/.venv*/
+pc-tongue/assets/
+pc-tongue/user-data/
+pc-tongue/tests-work/
+pc-tongue/__pycache__/
+tongue-source/.deps/
+tongue-source/build-*/
+tongue-source/checks/__pycache__/
+tongue-source/__pycache__/
+tongue-source/checks/tests-work/
+tongue-source/checks/*results.json

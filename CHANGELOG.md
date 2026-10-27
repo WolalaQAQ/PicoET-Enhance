@@ -2,6 +2,21 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
+## [Unreleased] - 2026-10-28
+
+### Features
+- Add an opt-in 400×400 grayscale JPEG95 camera source with shared-slot IPC and a separate root transport daemon, targeting fresh 90 Hz inputs.
+- Add a bilingual PC app for FP32 ORT inference, local TJR1 output, calibration, consented recording/head retraining, validated activation and standard-profile restore.
+- Add portable source builds, pinned model acquisition/export, explicit owned source control and offline PC/web/native tests.
+
+### Design Rationale
+- Selectively adapt PR #4's model and personal workflow without importing its research photos/history or on-headset inference. Keep network/encoding outside the camera service and mouth ownership in VRCFT.
+- Preserve the synchronous camera protection copy, borrow the shared slot for encoding, and keep personal profiles separate from standard weights.
+
+### Notes & Caveats
+- Pair with UnifiedPicoModule `feat/tongue-pc`. Normal Magisk packaging, installed versions and default enhancement behavior remain unchanged; tongue components are started explicitly from source.
+- Real sustained worn input, personal-model accuracy and native/VD concurrency still require live testing. The portable controller has fake-device coverage; its integrated deployment has not been run on hardware.
+
 ## [2.4.2] - 2026-10-24
 
 ### Fixed

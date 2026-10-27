@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PICO Tongue</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script type="module" src="/static/app.mjs"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <h1 id="title">PICO Tongue</h1>
+      <select id="language" aria-label="Language">
+        <option value="en">English</option>
+        <option value="zh-CN">简体中文</option>
+      </select>
+    </header>
+    <form id="settings" novalidate>
+      <label><span id="host-label">Headset address</span><input id="headset_host" required autocomplete="off" spellcheck="false"></label>
+      <label><span id="model-label">Model path</span><input id="model_path" required autocomplete="off" spellcheck="false"></label>
+      <div class="actions">
+        <button id="start" type="submit" disabled>Start</button>
+        <button id="stop" type="button" disabled>Stop</button>
+        <span id="status" role="status">Connecting to local service…</span>
+      </div>
+      <details id="advanced">
+        <summary id="advanced-title">Advanced settings</summary>
+        <div class="fields">
+          <label><span id="port-label">Video port</span><input id="headset_port" type="number" min="1" max="65535" required></label>
+          <label><span id="device-label">Inference device</span><input id="device" list="devices" required><datalist id="devices"><option value="auto"></option><option value="cuda"></option><option value="dml"></option><option value="openvino"></option><option value="cpu"></option></datalist></label>
+          <label><span id="smoothing-label">Smoothing (ms)</span><input id="smoothing_ms" type="number" min="0" step="1" required></label>
+          <label><span id="hold-label">Uncertain hold (ms)</span><input id="uncertain_hold_ms" type="number" min="0" step="1" required></label>
+          <label><span id="expiry-label">Result expiry (ms)</span><input id="stale_ms" type="number" min="1" step="1" required></label>
+          <label><span id="fps-label">Preview rate (fps)</span><input id="preview_fps" type="number" min="1" max="10" step="1" required></label>
+        </div>
+        <label class="check"><input id="size_hysteresis" type="checkbox"><span id="hysteresis-label">Tongue size hysteresis (60% hold threshold)</span></label>
+        <label class="check"><input id="output_enabled" type="checkbox"><span id="udp-label">Send results over local UDP</span></label>
+        <div class="fields">
+          <label><span id="output-host-label">Loopback address</span><input id="output_host" value="127.0.0.1" readonly></label>
+          <label><span id="output-port-label">UDP port</span><input id="output_port" type="number" min="1" max="65535" required></label>
+        </div>
+        <p class="hint" id="settings-help">Changing connection, device or output settings stops the current run.</p>
+        <div class="actions"><button id="save" type="button" disabled>Save settings</button><span id="config-state"></span></div>
+        <div class="replay">
+          <button id="replay" type="button" disabled>Replay data</button>
+          <p id="replay-info" class="hint"></p>
+        </div>
+      </details>
+    </form>
+    <p id="error" role="alert" hidden></p>
+    <div class="viewer">
+      <section>
+        <label class="check"><input id="preview-enabled" type="checkbox" checked><span id="preview-label">Show preview</span></label>
+        <div class="preview">
+          <img id="preview" width="400" height="400" alt="Mouth image with tongue overlay" hidden>
+          <span id="placeholder">No video</span>
+        </div>
+      </section>
+      <div id="outputs" class="outputs" aria-label="Tongue output">
+        <label><span id="out-label">Out</span> <output id="out">—</output><progress id="bar-out" max="1" value="0"></progress></label>
+        <label><span id="left-label">Left</span> <output id="left">—</output><progress id="bar-left" max="1" value="0"></progress></label>
+        <label><span id="right-label">Right</span> <output id="right">—</output><progress id="bar-right" max="1" value="0"></progress></label>
+      </div>
+    </div>
+    <details id="personalization">
+      <summary id="personal-title">Personal calibration</summary>
+      <p id="personal-help" class="hint"></p>
+      <p id="profile-info"></p>
+      <label class="check"><input id="voice-enabled" type="checkbox" checked><span id="voice-label">Spoken guidance</span></label>
+      <p id="voice-info" class="hint"></p>
+      <div class="actions">
+        <button id="calibrate" type="button" disabled>Calibrate</button>
+        <button id="personal-cancel" type="button" disabled>Cancel</button>
+        <button id="restore-standard" type="button" disabled>Restore standard</button>
+      </div>
+      <p id="personal-state" role="status"></p>
+      <div id="guide" hidden>
+        <h2 id="guide-step"></h2><p id="guide-hint"></p>
+        <progress id="guide-progress" max="1" value="0"></progress>
+        <p id="guide-count" class="hint"></p>
+      </div>
+      <p id="personal-error" role="alert" hidden></p>
+      <p id="training-metrics" class="hint"></p>
+      <details id="personal-advanced">
+        <summary id="retrain-title">Personal retraining (advanced)</summary>
+        <p id="retrain-warning" class="hint"></p>
+        <label class="check"><input id="record-consent" type="checkbox"><span id="consent-label">I agree to local image recording and personal training.</span></label>
+        <button id="retrain" type="button" disabled>Record and retrain</button>
+      </details>
+    </details>
+    <details id="diagnostics">
+      <summary id="diagnostics-title">Diagnostics</summary>
+      <dl>
+        <dt id="engine-label">Active engine / device</dt><dd id="engine-info">—</dd>
+        <dt id="providers-label">Execution providers</dt><dd id="provider-info">—</dd>
+        <dt id="fallback-label">Backend fallback</dt><dd id="fallback-info">—</dd>
+        <dt id="source-label">Input session / seq</dt><dd id="source-info">—</dd>
+        <dt id="result-label">Result session / seq</dt><dd id="result-info">—</dd>
+        <dt>raw_identity</dt><dd id="raw-identity">—</dd>
+        <dt>eye0_sensor_ns</dt><dd id="time-eye0">—</dd>
+        <dt>eye1_sensor_ns</dt><dd id="time-eye1">—</dd>
+        <dt>mouth_sensor_ns</dt><dd id="time-mouth">—</dd>
+        <dt>sensor_ns</dt><dd id="time-sensor">—</dd>
+        <dt>vendor_ns</dt><dd id="time-vendor">—</dd>
+        <dt id="source-age-label">Source age</dt><dd id="source-age">—</dd>
+        <dt id="receive-age-label">Time since PC reception</dt><dd id="receive-age">—</dd>
+        <dt id="rate-label">Receive / infer (last 900 events)</dt><dd id="rates">—</dd>
+        <dt id="drop-label">Source gaps / PC drops</dt><dd id="drops">—</dd>
+        <dt id="order-label">Duplicates / out of order</dt><dd id="order">—</dd>
+        <dt id="queue-label">Pending / queue delay</dt><dd id="queue">—</dd>
+        <dt id="encode-label">JPEG encoding</dt><dd id="encode-time">—</dd>
+        <dt id="decode-label">JPEG decode P50 / P95</dt><dd id="decode-time">—</dd>
+        <dt id="inference-label">Model P50 / P95</dt><dd id="inference-time">—</dd>
+        <dt id="pc-label">PC processing</dt><dd id="pc-time">—</dd>
+        <dt id="latency-label">Copy → result P50 / P95</dt><dd id="latency">—</dd>
+        <dt id="clock-label">Clock uncertainty</dt><dd id="clock">—</dd>
+        <dt id="mask-label">Mask area / angle</dt><dd id="mask-info">—</dd>
+      </dl>
+      <p id="snapshot-state" class="hint"></p>
+    </details>
+  </main>
+</body>
+</html>

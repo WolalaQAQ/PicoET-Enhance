@@ -178,6 +178,37 @@ portions embedded by compilation. See the [LLVM license](https://llvm.org/LICENS
 and the fixed NDK's `NOTICE.toolchain` for its license and exception text. No NDK
 tool executables are distributed in the module.
 
+## PC tongue development dependencies and upstream work
+
+The optional `pc-tongue/` model architecture, preprocessing and geometry adapt
+Rulez777's MIT-licensed PicoET-Enhance PR #4, pinned to
+`04fe68ac88e8c1fcaf504eba8223ebf33c629d93` for `shadow_model.py`, with calibration,
+personal mask-head training/acceptance and size hysteresis based on tongue.2
+(`f5f7894c6b30a86fd4699d721f966b6a01861443`). The upstream copyright is
+`Copyright (c) 2026 PicoET-Enhance contributors`; the full MIT notice is retained
+in this repository's [LICENSE](LICENSE). The PC adaptation adds ONNX Runtime
+providers, fresh-source transport and transactional personal-profile activation.
+The upstream photographs and demo media are not distributed here. Standard
+weights are fetched from the author's `v2.4.2-tongue.1` release, not included in
+this source tree; its checkpoint digest is pinned by `prepare_model.py`.
+
+PC packages are installed separately: PyTorch/torchvision (BSD-style licenses),
+ONNX (Apache-2.0), ONNX Runtime (MIT), NumPy (BSD), Pillow (HPND), and optional
+OpenVINO (Apache-2.0). CUDA runtime components retain NVIDIA's terms. Their
+installed wheels carry the applicable notices; none of those packages or runtime
+DLLs is copied into this repository.
+
+The optional JPEG daemon links the libjpeg API from
+[libjpeg-turbo 3.1.2](https://github.com/libjpeg-turbo/libjpeg-turbo/tree/3.1.2).
+This software is based in part on the work of the Independent JPEG Group.
+The IJG license covers the libjpeg API and its SIMD implementation (whose source
+also carries zlib notices); the build system and TurboJPEG API carry a
+three-clause BSD license. This integration uses the libjpeg API, not TurboJPEG.
+`tongue-source/build.py` downloads a pinned source archive, builds it separately,
+and retains `LICENSE.md` and `README.ijg` with the build outputs. Keep those
+notices and this attribution when distributing a linked daemon. ShadowHook and
+the Android C++ runtime use the existing notices above.
+
 ## PICO system software
 
 This project does not contain or redistribute any PICO binary. It references the

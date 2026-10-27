@@ -1,0 +1,3 @@
+-r requirements-base.txt
+onnxruntime-directml==1.23.0; sys_platform == "win32"
+onnxruntime==1.23.2; sys_platform != "win32"
