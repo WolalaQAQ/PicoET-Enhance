@@ -2,6 +2,49 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## [2.4.2-tongue.4] - 2026-11-10（分支 Rulez777/PicoET-Enhance）
+
+### 新增
+- 三步一体化安装。头显端：Magisk zip 除 Tongue Calibration 应用外，还内置官方 PicoFacialBridge v0.6.0 APK（MIT，按 SHA-256 固定）；`apps.sh` 在安装时和每次开机后安装或升级两者，不会降级，并授予 Bridge 面部/眼动追踪权限。PC 端：`UnifiedPicoModule-0.4.1-tongue.4.zip` 内含 `Install.cmd`（双击即可，保留已有设置）。
+- 任意固件：安装脚本不再拒绝未知固件。在已验证的 PICO OS 5.13.7 之外的固件上，表情补丁（依赖固定地址）保持关闭，追踪插件保持原厂行为；舌头通过代码特征搜索找到接收嘴部图像的函数（`hook/src/tongue_compat.h`，只读取不修改），逐眼门控按符号名挂钩。该模式目前只在 5.13.7 上演练过（root 开关文件 `/data/local/tmp/picoet-tongue-only`），其他固件尚未测试。
+- 上唇与胡须忽略区：校准应用记录佩戴者在闭嘴和张嘴（不伸舌）时被模型标为舌头的掩码格（按姿势分别统计；整片嘴唇或胡须边缘外扩两格，零散格外扩一格），作为按人抑制图发送到头显（`/data/local/tmp/tongue-suppress.bin`，命令 `TSUP`/`TSUM`）。这些格不再计为舌头，也不进入重新训练的掩码。已对照唯一一例反馈核对（上唇被识别为 244 格、方向正前的舌头；用截图还原的帧在原模型上复现）；尚未在真实胡须上测试。
+- 校准节奏：每个姿势步骤改为“准备”（3 秒倒计时，不记录）、“记录中”、“完成！下一步：……”，留出阅读提示的时间。
+- 鼓腮不再出现舌头：当 PICO 报告鼓腮（高于 0.3，0.5 时完全生效，保持 400 ms）时，PC 模块不输出任何舌头，既不来自模型，也不来自 PICO 自带的 `TongueOut`（鼓腮时嘴唇闭合）。由作者在随附模型上发现。
+- 校准得到的面积阈值不会低于佩戴者最小舌头面积的 70%，忽略区不会把阈值降到嘴唇误检的范围。
+- VRCFaceTracking 6（包括 Steam 版）：PC 模块改为基于 UnifiedPicoModule v0.4.1。
+
+### 变更
+- 不再绑定某一台头显：快速 CPU 核通过 cpufreq 查找（原为固定的 4-7 / 5-7）；嘴部图像可从任意 8 位单通道尺寸做盒式平均（400x400 时与原 2x2 平均完全一致）；头戴没有饱和鼻部反光时，鼻部参考点回退到最亮的 3%；应用中的佩戴、变化与静止阈值均相对于佩戴者自己的录制。
+- 舌头订阅方也接受 100.64.0.0/10（如 Tailscale）和链路本地地址。
+- `calibration-app/build.sh` 从 `ANDROID_SDK_ROOT` / `JAVA_HOME` 或任意 Unity 安装查找 Android SDK/JDK，不再固定某个 Unity 版本。
+- Tongue Calibration 应用 3.0；`tongue-app.sh` 由 `apps.sh` 取代。
+- 发布构建关闭诊断：不再写逐帧 `tongue-shadow.log`，不保存帧（两者需要 `-DPICOET_TONGUE_DIAG=ON`）；PC 端的 `tongue-status.json` 和每秒日志需要 `tongue-diagnostics.enabled` 文件。旧版本会无上限地追加 `tongue-shadow.log`，可以删除。
+
+### 修复
+- PicoFacialBridge 的追踪权限在每次开机时授予，而不只是在安装后：安装后立即重启可能丢失授权。
+- 卸载模块时会同时卸载 Tongue Calibration 应用（原卸载脚本在包管理器就绪前运行）。
+
+### 说明与注意事项
+- 没有校准、没有忽略区时，默认输出与 tongue.2/tongue.3 相同。
+- 如果已安装的 PicoFacialBridge 与官方发布版签名不同，会先卸载再安装，其设置会被重置。
+- `versionCode` 为 24。
+
+## [2.4.2-tongue.2] - 2026-10-27（分支 Rulez777/PicoET-Enhance）
+
+### 新增
+- 模块内置 Tongue Calibration 应用（安装时安装、每次开机检查）：按人校准角度/阈值、在头显上重新训练掩码头（仅在保留帧上验证更好时保存）、恢复标准。
+- 掩码面积滞回：达到阈值才出现，保持在阈值的 60% 以上即持续显示（侧面舌头不再闪断）。
+
+### 修复
+- uninstall.sh 舌头清理行；卸载时同时移除应用、校准与个人模型。
+
+## [2.4.2-tongue.1] - 2026-10-27（分支 Rulez777/PicoET-Enhance）
+
+### 新增
+- 舌头左右：头显端 MobileNetV3-small 分割模型（C++ 移植，大核 4-7，约 20 Hz），输出 TongueLeft/TongueRight 及 TongueOut 补充值，经 Wi-Fi 发送给 UnifiedPicoModule（UDP 19031，由 PC 订阅，无需 ADB）。默认通过 `/data/local/tmp/tongue-live.ip` 开启。见 `TONGUE.md`。
+- `sepolicy.rule`：舌头通道的 UDP 套接字规则（未在 enforcing 头显上测试）。
+- 可选 shadow 模式（`/data/local/tmp/tongue-shadow.arm`）保存 200x200 嘴部帧用于重新训练。
+
 ## [2.4.2] - 2026-10-24
 
 ### 修复

@@ -20,6 +20,9 @@ while :; do
     sleep 1
 done
 
+# Bundled apps (Tongue Calibration, PicoFacialBridge): install or update if missing or older.
+/system/bin/sh "$MODDIR/apps.sh" "$MODDIR" &
+
 # Always reconcile through the same readiness/mapping checks as a manual ensure.
 # This also observes async plugin completion, clears a dead PID's properties and
 # allows read-only fragments to reach the injector's bounded recovery path.

@@ -48,6 +48,11 @@ target_compile_options(picoet_obj PRIVATE
     -std=c++17 -O2 -fPIC -fexceptions -fvisibility=hidden -Wall -Wextra
     -fno-omit-frame-pointer -ffp-contract=off)
 target_include_directories(picoet_obj PRIVATE ${SH_DIR}/include)
+# Tongue diagnostics (per-frame log, raw frame capture) are compiled out of release builds.
+option(PICOET_TONGUE_DIAG "Build the tongue diagnostics (shadow log, frame capture)" OFF)
+if(PICOET_TONGUE_DIAG)
+    target_compile_definitions(picoet_obj PRIVATE PICOET_TONGUE_DIAG)
+endif()
 
 add_library(picoet_hook SHARED
     $<TARGET_OBJECTS:shadowhook_obj>
@@ -69,3 +74,16 @@ target_link_libraries(picoet-inject PRIVATE dl)
 add_executable(picoet-target src/picoet-target.c)
 target_compile_options(picoet-target PRIVATE -O2 -fPIE -Wall -Wextra)
 target_link_libraries(picoet-target PRIVATE dl)
+
+
+add_executable(tongue-seg-check src/tongue-seg-check.cpp)
+target_compile_options(tongue-seg-check PRIVATE -O2 -std=c++17 -ffp-contract=off)
+target_link_options(tongue-seg-check PRIVATE -static-libstdc++)
+
+add_executable(tongue-train-check src/tongue-train-check.cpp)
+target_compile_options(tongue-train-check PRIVATE -O2 -std=c++17 -ffp-contract=off)
+target_link_options(tongue-train-check PRIVATE -static-libstdc++)
+
+add_executable(tongue-train-accept-check src/tongue-train-accept-check.cpp)
+target_compile_options(tongue-train-accept-check PRIVATE -O2 -std=c++17 -ffp-contract=off)
+target_link_options(tongue-train-accept-check PRIVATE -static-libstdc++)
