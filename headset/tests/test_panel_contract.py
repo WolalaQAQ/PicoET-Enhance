@@ -227,6 +227,8 @@ class RootlessPanelContract(unittest.TestCase):
         service = (ROOT/'magisk-picoet-enhance/service.sh').read_text()
         self.assertIn('cmd package list packages -U dev.pico.etenhance', service)
         self.assertIn('"$MODDIR/bin/picoet-panel" "$MODDIR" "$panel_uid"', service)
+        installer = (ROOT/'magisk-picoet-enhance/customize.sh').read_text()
+        self.assertIn('rm -f /data/system/package_cache/*/PicoETEnhance-*', installer)
 
 
 if __name__ == '__main__':

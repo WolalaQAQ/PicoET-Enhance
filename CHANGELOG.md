@@ -2,6 +2,15 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
+## [2.5.1] - 2026-11-15
+
+### Fixed
+- After a module upgrade, the system kept showing the settings app's previous version (for example 2.4.2 after installing 2.5.0) and would have ignored any new app components. Android caches the parsed app and judges that cache by the app directory's modification time, which stays fixed under the Magisk mount. Installing the module now deletes the app's entry from `/data/system/package_cache`, so the next boot reads the new APK.
+
+### Notes & Caveats
+- `versionCode` is 22. Only the installer changed; the native files, settings app, presets and saved settings behave as in 2.5.0.
+- Verified on PICO 4 Pro / PICO OS 5.13.7 with SELinux enforcing: after installing over 2.5.0 and one reboot, the system reported the settings app's current version.
+
 ## [2.5.0] - 2026-11-15
 
 ### Features
