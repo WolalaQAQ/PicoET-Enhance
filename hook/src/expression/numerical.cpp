@@ -45,16 +45,19 @@ float clamp01(float value) {
     return value;
 }
 
-float blink_endpoint(float value) {
+float blink_endpoint(float value, const PostProcessingConfig& config) {
     // 0x62568..0x62594 compares float converted to DOUBLE constants.
     // Strict thresholds matter: float(0.04) is below double(0.04), while
     // float(0.8) is above double(0.8).
-    if (static_cast<double>(value) < 0.04) value = 0.0f;
-    if (static_cast<double>(value) > 0.8) value = 1.0f;
+    if (static_cast<double>(value) < config.blink_low) value = 0.0f;
+    if (static_cast<double>(value) > config.blink_high) value = 1.0f;
     return value;
 }
 
-void postprocess_one(const float input[kChannelsPerEye], float output[kChannelsPerEye]) {
+void postprocess_one(const float input[kChannelsPerEye], float output[kChannelsPerEye],
+                     const PostProcessingConfig& config) {
+    memcpy(output, input, sizeof(float) * kChannelsPerEye);
+    if (!config.eye_enabled) return;
     const float down = input[BrowDown];
     const float up = input[BrowInnerUp];
     float down4 = down * down;
@@ -64,6 +67,10 @@ void postprocess_one(const float input[kChannelsPerEye], float output[kChannelsP
     down4 = down * down4;
     up4 = up * up4;
 
+    if (config.brow_power != 4) {
+        down4 = powf(fabsf(down), static_cast<float>(config.brow_power));
+        up4 = powf(fabsf(up), static_cast<float>(config.brow_power));
+    }
     // 0x6242c adds the fourth powers as float BEFORE converting to double.
     const double denominator = static_cast<double>(down4 + up4) + 1e-10;
     const double down_weight = static_cast<double>(down4) / denominator;
@@ -73,17 +80,19 @@ void postprocess_one(const float input[kChannelsPerEye], float output[kChannelsP
     // 0x62458 uses the ALREADY transformed down value; not raw down+up again.
     const float processed_up = static_cast<float>(up_weight *
                                                  static_cast<double>(up + processed_down));
-    float linked_up = processed_up;
-    if (processed_up < 0.2f) linked_up = input[Wide] * 0.5f + processed_up;
-    float linked_down = processed_down;
-    if (processed_down < 0.8f) linked_down = input[Blink] * 0.5f + processed_down;
-
-    memcpy(output, input, sizeof(float) * kChannelsPerEye);
+    float linked_up = processing_mix(up, processed_up, config.brow_curve);
+    if (linked_up < static_cast<float>(config.wide_brow_threshold))
+        linked_up = processing_mix(linked_up,
+            input[Wide] * static_cast<float>(config.wide_brow_gain) + linked_up, config.wide_brow);
+    float linked_down = processing_mix(down, processed_down, config.brow_curve);
+    if (linked_down < static_cast<float>(config.blink_brow_threshold))
+        linked_down = processing_mix(linked_down,
+            input[Blink] * static_cast<float>(config.blink_brow_gain) + linked_down, config.blink_brow);
     output[BrowDown] = linked_down;
     // Original overwrites outer with the transformed inner, even on one eye.
     output[BrowInnerUp] = linked_up;
-    output[BrowOuterUp] = linked_up;
-    output[Blink] = blink_endpoint(input[Blink]);
+    output[BrowOuterUp] = processing_mix(input[BrowOuterUp], linked_up, config.inner_outer);
+    output[Blink] = processing_mix(input[Blink], blink_endpoint(input[Blink], config), config.blink_endpoints);
 }
 
 float adaptive(float previous, float current) {
@@ -172,10 +181,44 @@ float composite_dt(float previous, float current, float motion, double ratio) {
     return new_part + old_part;
 }
 
+float configured_adaptive(float previous, float current, double ratio, const PostProcessingConfig& config) {
+    if (!config.eye_adaptive) return current;
+    float filtered;
+    if (config.eye_k == 9) filtered = adaptive_dt(previous, current, ratio);
+    else {
+        const float difference = fabsf(previous - current);
+        const float weight = ratio == 1 ? expf(-static_cast<float>(config.eye_k) * difference) :
+            static_cast<float>(exp(-config.eye_k * static_cast<double>(difference) * ratio));
+        filtered = previous * weight + current * (1.0f - weight);
+    }
+    return processing_mix(current, filtered, config.eye_adaptive);
+}
+
+float configured_composite(float previous, float current, float motion, double ratio,
+                            const PostProcessingConfig& config) {
+    if (!config.brow_composite) return current;
+    const float weighted_motion = motion * static_cast<float>(config.brow_motion);
+    float filtered;
+    if (config.brow_current == 0x1.333334p-1) filtered = composite_dt(previous, current, weighted_motion, ratio);
+    else {
+        const float weight = static_cast<float>(config.brow_current);
+        if (ratio == 1) {
+            const float intermediate = current * weight + previous * (1.0f - weight);
+            const float complement = 1.0f - weighted_motion;
+            filtered = intermediate * complement * weight + previous * (1.0f - complement * weight);
+        } else {
+            const double stock_alpha = static_cast<double>(weight) * weight * (1.0 - weighted_motion);
+            const float alpha = static_cast<float>(-expm1(log1p(-stock_alpha) * ratio));
+            filtered = current * alpha + previous * (1.0f - alpha);
+        }
+    }
+    return processing_mix(current, filtered, config.brow_composite);
+}
+
 void filter_one_dt(SourceDtEyeHistory &history, const float raw[kChannelsPerEye],
                    const float postprocessed[kChannelsPerEye],
                    float output[kChannelsPerEye], uint64_t source_ns,
-                   BrowPredictDt predict, void *context) {
+                   BrowPredictDt predict, void *context, const PostProcessingConfig& config) {
     const auto &last = history.diagnostics;
     if (last.filter_steps && source_ns <= last.last_source_ns) {
         history.diagnostics.update = source_ns == last.last_source_ns
@@ -197,7 +240,7 @@ void filter_one_dt(SourceDtEyeHistory &history, const float raw[kChannelsPerEye]
         ? source_ns - kSourceDtMotionNs : 0;
     float current[kChannelsPerEye];
     for (unsigned i = 0; i < kChannelsPerEye; ++i) current[i] = clamp01(postprocessed[i]);
-    if (diagnostics.warmup) {
+    if (diagnostics.warmup || !config.eye_enabled) {
         memcpy(output, current, sizeof(current));
     } else {
         // Choose the actual past output nearest t-2*T0. Always rounding toward
@@ -214,20 +257,22 @@ void filter_one_dt(SourceDtEyeHistory &history, const float raw[kChannelsPerEye]
         diagnostics.motion_age_ns = source_ns - sample.source_ns;
         diagnostics.motion = motion_weight(raw, sample.values);
         for (unsigned i = BrowDown; i <= BrowOuterUp; ++i)
-            output[i] = composite_dt(history.outputs.back().values[i], current[i],
-                                     diagnostics.motion, diagnostics.ratio);
+            output[i] = configured_composite(history.outputs.back().values[i], current[i],
+                                             diagnostics.motion, diagnostics.ratio, config);
         for (unsigned i = Blink; i < kChannelsPerEye; ++i)
-            output[i] = adaptive_dt(history.outputs.back().values[i], current[i], diagnostics.ratio);
+            output[i] = configured_adaptive(history.outputs.back().values[i], current[i], diagnostics.ratio, config);
         const float measurement[2] = {output[BrowInnerUp], output[BrowOuterUp]};
         float prediction[2];
         BrowStepDiagnostics brow;
-        predict(context, measurement, prediction, diagnostics.ratio, brow);
-        output[BrowInnerUp] = prediction[0];
-        output[BrowOuterUp] = prediction[1];
-        ++diagnostics.kalman_steps;
-        diagnostics.process_noise = brow.process_noise;
-        diagnostics.process_noise_limited = brow.process_noise_limited;
-        if (brow.process_noise_limited) ++diagnostics.process_noise_limit_steps;
+        if (config.brow_kalman) {
+            predict(context, measurement, prediction, diagnostics.ratio, brow);
+            output[BrowInnerUp] = processing_mix(measurement[0], prediction[0], config.brow_kalman);
+            output[BrowOuterUp] = processing_mix(measurement[1], prediction[1], config.brow_kalman);
+            ++diagnostics.kalman_steps;
+            diagnostics.process_noise = brow.process_noise;
+            diagnostics.process_noise_limited = brow.process_noise_limited;
+            if (brow.process_noise_limited) ++diagnostics.process_noise_limit_steps;
+        }
     }
     for (unsigned i = 0; i < kChannelsPerEye; ++i) output[i] = clamp01(output[i]);
 
@@ -243,19 +288,22 @@ void filter_one_dt(SourceDtEyeHistory &history, const float raw[kChannelsPerEye]
     history.diagnostics = diagnostics;
 }
 
-float brow_process_noise(double ratio, bool &limited) {
+float brow_process_noise(double ratio, bool &limited, float process_noise, float measurement_noise) {
     // q/R = K^2/(1-K), K=1-(1-K0)^r, K0=(sqrt(5)-1)/2.
     // Compute the DECAYING pole instead of exp(+r) or 1-rounded-to-one K.
     // A pole below FLT_EPSILON puts gain within one machine epsilon of unity.
     // Keep one epsilon of damping so q and Ppre remain finite; the maximum q is
     // float(.1*(1-eps)^2/eps) ~= 838860.625, not FLT_MAX or a silent r=1 clamp.
-    if (ratio == 1.0) { limited = false; return 0.1f; }
-    constexpr double log_pole = -0.9624236501192069;
+    if (ratio == 1.0) { limited = false; return process_noise; }
+    const double relative = static_cast<double>(process_noise) / measurement_noise;
+    const double gain0 = 2 * relative / (sqrt(relative * relative + 4 * relative) + relative);
+    const double log_pole = process_noise == measurement_noise ? -0.9624236501192069 : log1p(-gain0);
     double pole = exp(log_pole * ratio);
     limited = pole < static_cast<double>(FLT_EPSILON);
     if (limited) pole = static_cast<double>(FLT_EPSILON);
     const double gain = limited ? 1.0 - pole : -expm1(log_pole * ratio);
-    return static_cast<float>(0.1 * gain * gain / pole);
+    const double noise = measurement_noise == 0.1f ? 0.1 : static_cast<double>(measurement_noise);
+    return static_cast<float>(noise * gain * gain / pole);
 }
 
 float *matrix_row(void *matrix, unsigned row) {
@@ -269,12 +317,12 @@ float *matrix_row(void *matrix, unsigned row) {
 
 } // namespace
 
-void postprocess_eye20(const float input[kEyeChannels], float output[kEyeChannels]) {
+void postprocess_eye20(const float input[kEyeChannels], float output[kEyeChannels], const PostProcessingConfig& config) {
     float snapshot[kEyeChannels];
     memcpy(snapshot, input, sizeof(snapshot));
     for (unsigned eye = 0; eye < kEyeCount; ++eye) {
         const unsigned offset = eye * kChannelsPerEye;
-        postprocess_one(snapshot + offset, output + offset);
+        postprocess_one(snapshot + offset, output + offset, config);
     }
 }
 
@@ -311,14 +359,14 @@ void reset_source_dt(SourceDtState &state) {
 void filter_eye20_dt(SourceDtState &state, const float raw[kEyeChannels],
                      const float postprocessed[kEyeChannels],
                      float filtered[kEyeChannels], const uint64_t source_ns[kEyeCount],
-                     BrowPredictDt predict, void *const contexts[kEyeCount]) {
+                      BrowPredictDt predict, void *const contexts[kEyeCount], const PostProcessingConfig& config) {
     float raw_snapshot[kEyeChannels], post_snapshot[kEyeChannels];
     memcpy(raw_snapshot, raw, sizeof(raw_snapshot));
     memcpy(post_snapshot, postprocessed, sizeof(post_snapshot));
     for (unsigned eye = 0; eye < kEyeCount; ++eye) {
         const unsigned offset = eye * kChannelsPerEye;
         filter_one_dt(state.eye[eye], raw_snapshot + offset, post_snapshot + offset,
-                       filtered + offset, source_ns[eye], predict, contexts[eye]);
+                        filtered + offset, source_ns[eye], predict, contexts[eye], config);
     }
 }
 
@@ -336,7 +384,9 @@ float writeback_expression52(const float filtered[kEyeChannels], float expressio
     return snapshot[kChannelsPerEye + BrowInnerUp];
 }
 
-NativeBrowFilter::NativeBrowFilter(uintptr_t plugin_base) : base_(plugin_base) {
+NativeBrowFilter::NativeBrowFilter(uintptr_t plugin_base, double process_noise, double measurement_noise)
+    : base_(plugin_base), process_noise_(static_cast<float>(process_noise)),
+      measurement_noise_(static_cast<float>(measurement_noise)) {
     // Stock 0x5ff80..0x5ff94 constructs sixteen 0x60-byte Mats in Kalman.
     // Its constructor handles failures before completion; after it completes,
     // our ownership mirrors the stock reverse-order Mat destruction.
@@ -348,7 +398,7 @@ NativeBrowFilter::NativeBrowFilter(uintptr_t plugin_base) : base_(plugin_base) {
         };
         for (unsigned i = 0; i < 4; ++i) {
             const NativeArray target = {0x3010000, 0, kalman_ + matrices[i], 0};
-            const double scalar[4] = {i < 2 ? 1.0 : 0.1, 0.0, 0.0, 0.0};
+            const double scalar[4] = {i < 2 ? 1.0 : i == 2 ? process_noise : measurement_noise, 0.0, 0.0, 0.0};
             entry<SetIdentity>(base_, StockLayout::set_identity)(&target, scalar);
         }
     } catch (...) {
@@ -384,7 +434,8 @@ void NativeBrowFilter::predict_dt(void *context, const float measurement[2], flo
                                  double ratio, BrowStepDiagnostics &diagnostics) {
     auto &filter = *static_cast<NativeBrowFilter *>(context);
     BrowStepDiagnostics step;
-    step.process_noise = brow_process_noise(ratio, step.process_noise_limited);
+    step.process_noise = brow_process_noise(ratio, step.process_noise_limited,
+                                           filter.process_noise_, filter.measurement_noise_);
     NativeMat input(filter.base_, measurement);
     NativeMat empty_control(filter.base_);
     for (unsigned row = 0; row < 2; ++row) {

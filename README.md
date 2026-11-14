@@ -4,7 +4,7 @@ English | [简体中文](README_zh.md)
 
 An eye-tracking enhancement Magisk module for the PICO 4 Pro: it opens the eye-tracking service's per-eye gate for real pupil data, decouples the facial expression model so each eye is processed on its own, and targets 90 Hz for both eye and mouth expressions by default instead of the stock rate of about 24 Hz. Use it with [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) and [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule).
 
-> v2.4.2 · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
+> v2.5.0 · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
 
 ## What it does
 
@@ -16,7 +16,7 @@ The PICO 4 Pro firmware tracks each eye, but its facial expression model mixes t
 
 Smoothing, mouth baseline adaptation and quality windows follow each source's own timestamps: a long gap pauses the quality window, and a repeated or backward source does not advance anything.
 
-The inference models and combined gaze stay stock. Each eye keeps blink endpoints, filtering and the within-eye inner/outer brow linkage, and mouth postprocessing keeps the stock rules. Dark-image admission, reference protection and model quantization remain enabled. On the PC, eye direction and eyelid openness use EyeLook and `1−Blink`; native eye data supplies measured pupil diameter only.
+The inference models and combined gaze stay stock. Blink endpoints, within-eye brow linkage and eye/mouth postprocessing remain enabled by default and can be individually adjusted or bypassed in [headset postprocessing](#headset-postprocessing). Dark-image admission, reference protection and model quantization remain enabled. On the PC, eye direction and eyelid openness use EyeLook and `1−Blink`; native eye data supplies measured pupil diameter only.
 
 The enhancement runs as hooks in the eye-tracking service and is unloaded when that service restarts.
 
@@ -68,8 +68,8 @@ The installer verifies the SHA-256 of the device's eye-tracking libraries and st
 2. Flash it in the Magisk app under Install from storage, or from a command line:
 
    ```sh
-    adb push magisk-picoet-enhance-v2.4.2.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.4.2.zip'
+    adb push magisk-picoet-enhance-v2.5.0.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.5.0.zip'
    ```
 
 3. Reboot the headset.
@@ -128,15 +128,38 @@ sh /data/adb/modules/picoet-enhance/picoet.sh status
 
 Rates set in 2.4.0 or later survive reinstalls and upgrades. Only the first migration from a version before 2.4.0 clears old overrides to start at 90/90. Normal mode (`off`) is fully stock regardless of these files.
 
+### Headset postprocessing
+
+PICO's stock firmware postprocesses the expression model's output: brow curves and links, Blink endpoint snapping, adaptive/composite/Kalman filters, mouth baseline removal, log compression, the tongue threshold and smoothing. Its parameters were fixed. Since 2.5.0 this module exposes 44 of them as settings whose defaults are the stock values; the processing algorithms themselves remain PICO's.
+
+The module includes a separate **PicoET-Enhance** settings app. Open it from the headset application library after installation and reboot; uninstalling the module and rebooting removes it together with the module. Start offers four presets. The list on the left names 15 movements to check in a mirror, such as a blink, raising the brows or talking. Each movement page draws what the model outputs and what the avatar receives for that movement, says what usually goes wrong and which slider to move, and shows the settings that shape it; the chart recalculates as you drag. These charts are worked examples at a fixed 90 updates per second, for comparing settings. All settings lists all 44 values in processing order. A switch at the top shows the same settings in Simple wording or Technical wording (variables, formulas and calculation conditions) without changing any setting. Tap a value for precise input or an individual reset; no configuration-text editing is needed. Both the panel and PicoFacialBridge remain rootless: the panel submits fixed requests from its private Android sandbox to the module-owned worker. The VRCFT module manages only PC-side processing.
+
+The file is `/data/local/tmp/picoet-postprocessing.conf`: `key=value`, with `#` comments. `version=1` is required; omitted fields keep existing defaults. Each `.strength` accepts 0–1: 0 bypasses the stage, 1 retains its existing amount, and intermediate values mix its input with its result. `eye.enabled` and `mouth.enabled` accept 0/1 to bypass/enable the entire region.
+
+- **Balanced (recommended)**: [`postprocessing-balanced.conf`](magisk-picoet-enhance/postprocessing-balanced.conf) lowers the brow Kalman share and raises its follow speed, so brows settle in about 0.2 s instead of about 1 s. It also weakens the wide-eye and blink brow links and the outer-brow follow, removes the second mouth smoothing pass, halves weak-shape compression and lowers the tongue threshold to 0.35. Held expressions stay about as steady as stock. Unlisted fields use the defaults.
+- **Responsive**: [`postprocessing-responsive.conf`](magisk-picoet-enhance/postprocessing-responsive.conf) keeps about half of the smoothing and turns the brow links off, so every movement follows the model within about 0.1 s. Small jitter shows while holding still. Blink snapping, rest removal and the MouthClose addition stay on.
+- **No processing**: [`postprocessing-raw.conf`](magisk-picoet-enhance/postprocessing-raw.conf) emits bounded current model values and skips the stock postprocessing above. Per-eye quality, references, source identity, validity and 0–1 output bounds remain enabled. This is not raw camera data or a bypass of processing inside the model.
+- **Stock / individual tuning**: [`postprocessing-default.conf`](magisk-picoet-enhance/postprocessing-default.conf) lists all 44 parameters with PICO's original values. Higher `adaptive.k` or `current_weight` follows current samples more closely. Increasing Kalman process noise or decreasing measurement noise generally reduces smoothing. Bypassing filters exposes more noise and abrupt changes; PC/VRCFT filters remain independent.
+
+The bottom bar distinguishes unsaved changes, saved settings awaiting application, and a successful application in the current session. Save changes before applying; unsaved edits disable Apply. Reloading saved values alone does not verify the running configuration. Saving does not restart tracking. Stop Bridge and other eye/face clients, then tap **Apply**. This restarts the eye service only if no clients are connected and enhancement is already enabled. Alternatively, in a headset root shell:
+
+```sh
+MOD=/data/adb/modules/picoet-enhance
+"$MOD/bin/picoet-config" write < "$MOD/postprocessing-balanced.conf"
+sh "$MOD/picoet.sh" reload-processing
+```
+
+Changes load at the next payload startup and survive reinstalls/upgrades. Invalid, duplicate or unknown fields reject a save; malformed or incorrectly owned files at startup report failure rather than silently restoring filters. A missing file keeps existing behavior. Headset native numerical tests, companion boot integration and rootless IPC save/apply/restore pass on PICO 4 Pro / PICO OS 5.13.7 with SELinux enforcing. Worn response and noise still need comparison.
+
 ## About the enterprise gate
 
 The firmware uses `PXR::EyeUtil::isBusinessDev()` to control per-eye output, including the real pupil diameter. This module makes the function return true inside the eye-tracking service. The device-wide enterprise-mode property `ro.pxr.externalfunc` keeps its existing value.
 
 ## Compatibility and verification
 
-The startup-safety changes were validated with a local NDK 26.1.10909125 build on PICO 4 Pro / PICO OS 5.13.7 with SELinux permissive: normal boot, upgrade, mode switching, repeated control commands and targeted failure branches passed. A 45-second worn session confirmed live eye and mouth updates, blink and mouth response, profile 0 initialization without retries, and normal tracking shutdown without a service restart. The stock libraries were unchanged. SELinux enforcing has not been tested. The 2.4.2 workflow explicitly selects NDK 26.1.10909125 and CMake 3.22.1.
+The startup-safety changes were validated with a local NDK 26.1.10909125 build on PICO 4 Pro / PICO OS 5.13.7 with SELinux permissive: normal boot, upgrade, mode switching, repeated control commands and targeted failure branches passed. A 45-second worn session confirmed live eye and mouth updates, blink and mouth response, profile 0 initialization without retries, and normal tracking shutdown without a service restart. The stock libraries were unchanged. The 2.5.0 settings app, configuration helper and preset files also passed boot and companion IPC checks with SELinux enforcing. The release workflow explicitly selects NDK 26.1.10909125 and CMake 3.22.1.
 
-The following 90/90 measurements are from the earlier 2.4.0 validation, not a new throughput test for 2.4.2. The PICO 4 Pro (PICO OS 5.13.7) was awake with tracking ready and not worn. The test replayed 2,700 recorded camera inputs (about 30 seconds) through a test harness that drives the module's expression-processing algorithm, with PicoFacialBridge 0.5.0, UnifiedPicoModule 0.4.0, VRCFT-Enhance and desktop VRChat:
+The following 90/90 measurements are from the earlier 2.4.0 validation, not a new throughput test for later versions. The PICO 4 Pro (PICO OS 5.13.7) was awake with tracking ready and not worn. The test replayed 2,700 recorded camera inputs (about 30 seconds) through a test harness that drives the module's expression-processing algorithm, with PicoFacialBridge 0.5.0, UnifiedPicoModule 0.4.0, VRCFT-Enhance and desktop VRChat:
 
 | Stage | Rate |
 |---|---:|
@@ -152,25 +175,27 @@ Not yet covered: single-eye quality failure, staggered reference rebuild, a live
 
 ## Disabling and uninstalling
 
-Run `picoet.sh off` to disable enhancement and restore the stock eye-tracking service. To remove the module, uninstall it in Magisk and reboot the headset. Cleanup removes known state files without recursively entering unexpected directories or nested mounts, so those directories may remain.
+Run `picoet.sh off` to disable enhancement and restore the stock eye-tracking service. To remove the module, uninstall it in Magisk and reboot the headset; the settings app is removed with the module and the postprocessing configuration file is deleted. Cleanup removes known state files without recursively entering unexpected directories or nested mounts, so those directories may remain.
 
 ## Building from source
 
-Building requires the Android NDK and CMake/Ninja. The scripts look for the toolchain in the `-Ndk` / `-CmakeBin` parameters, the `PICOET_NDK` / `PICOET_CMAKE_BIN` environment variables, or a standard layout under `ANDROID_HOME`.
+Building requires Python 3, JDK 17 or newer (`JAVA_HOME`), Android platform 35 and build-tools 35.0.0 (`ANDROID_HOME`), plus NDK 26.1.10909125 and CMake 3.22.1/Ninja. Native scripts accept `-Ndk` / `-CmakeBin`, `PICOET_NDK` / `PICOET_CMAKE_BIN`, or the SDK layout under `ANDROID_HOME`.
 
 ```powershell
 pwsh -File hook\build-hook.ps1                 # build the injector and payload
-pwsh -File build-picoet-enhance.ps1            # package the Magisk zip
+pwsh -File build-picoet-enhance.ps1 -Python python # build companion and package the Magisk zip
 ```
 
-The output is `artifacts/magisk-picoet-enhance-v<version>.zip`, containing the module scripts, injector and hook payload. Packaging checks the ELF file list and stock-library hashes.
+The output is `artifacts/magisk-picoet-enhance-v<version>.zip`, containing the module scripts, native tools, hook payload and `system/app/PicoETEnhance/PicoETEnhance.apk`. Packaging checks the ELF file list and stock-library hashes. The companion uses the SDK directly, without Gradle or downloaded Android libraries.
+
+Without a keystore, local builds create and reuse a development-only signing key. For distribution, pass a stable `-PanelKeystore` (or `PICOET_PANEL_KEYSTORE`), optionally `-PanelKeyAlias`, and set `PICOET_PANEL_PASSWORD`. Updates must use the same panel signing identity. Tag builds require the `PICOET_PANEL_KEYSTORE_BASE64` and `PICOET_PANEL_PASSWORD` repository secrets; `PICOET_PANEL_KEY_ALIAS` is optional and defaults to `panel`.
 
 Pushing a `v<version>` tag makes GitHub Actions build on a Windows runner and publish the zip with a checksum.
 
 ## TODO
 
 - [ ] Tongue-direction support: PICO currently exposes only the scalar `TongueOut`, while VRCFaceTracking already defines direction channels such as `TongueLeft/Right/Up/Down`. The plan is to capture raw frames from the lower-face camera, auto-label them with visual segmentation foundation models, train a small model, and let users collect their own data for a local online fine-tune.
-- [ ] Unfiltered face output: make the on-device FaceTrackor temporal smoothing optional so the module can forward per-frame raw face data. Filtering then moves to the PC side, where it can be tuned as needed.
+- [ ] Worn comparison of the balanced, responsive and no-processing presets: stationary noise and avatar response.
 
 ## Feedback
 

@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <deque>
+#include "postprocessing.h"
 
 // Local PICO OS 5.13.7 numerical reconstruction from stock AArch64 instructions.
 // Compile with -ffp-contract=off, without fast-math. No device or hook dependency.
@@ -29,7 +30,8 @@ enum EyeChannel : unsigned {
 // linkage and Blink endpoints. Directions, Squint and Wide pass through here.
 // No pre-clamp: stock 0x62330 also runs before the final-filter input clamp.
 // Exact input == output aliasing is supported by all array functions below.
-void postprocess_eye20(const float input[kEyeChannels], float output[kEyeChannels]);
+void postprocess_eye20(const float input[kEyeChannels], float output[kEyeChannels],
+                       const PostProcessingConfig& config = {});
 
 struct EyeHistory {
     uint32_t successful_frames; // Saturates at two: stock needs two prior outputs.
@@ -127,7 +129,8 @@ void reset_source_dt(SourceDtState &state);
 void filter_eye20_dt(SourceDtState &state, const float raw[kEyeChannels],
                      const float postprocessed[kEyeChannels],
                      float filtered[kEyeChannels], const uint64_t source_ns[kEyeCount],
-                     BrowPredictDt predict, void *const contexts[kEyeCount]);
+                      BrowPredictDt predict, void *const contexts[kEyeCount],
+                      const PostProcessingConfig& config = {});
 
 // Updates only the 19 stock eye slots in an existing final expression52.
 // Returns filtered right inner brow, which the stock 53->52 reorder discards.
@@ -161,7 +164,8 @@ struct StockLayout {
 // operate devices or install hooks. Non-copyable: stock Mat owns native buffers.
 class NativeBrowFilter {
 public:
-    explicit NativeBrowFilter(uintptr_t plugin_base);
+    explicit NativeBrowFilter(uintptr_t plugin_base, double process_noise = 0.1,
+                              double measurement_noise = 0.1);
     ~NativeBrowFilter();
     NativeBrowFilter(const NativeBrowFilter &) = delete;
     NativeBrowFilter &operator=(const NativeBrowFilter &) = delete;
@@ -173,6 +177,7 @@ private:
     uintptr_t base_;
     alignas(8) unsigned char kalman_[StockLayout::kalman_bytes];
     bool dt_corrected_ = false;
+    float process_noise_, measurement_noise_;
     void destroy();
 };
 

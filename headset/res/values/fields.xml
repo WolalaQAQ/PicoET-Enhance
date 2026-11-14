@@ -1,0 +1,189 @@
+<resources>
+    <string name="p_eye_enabled">Eye and brow processing</string>
+    <string name="p_eye_enabled_hint">When off, eyes and brows use the model output directly and the eye and brow settings have no effect. Eye tracking and the model keep running.</string>
+    <string name="p_eye_enabled_tech">0 bypasses all eye and brow post-processing and temporal smoothing; the output is the model value limited to [0, 1].</string>
+    <string name="p_mouth_enabled">Mouth and tongue processing</string>
+    <string name="p_mouth_enabled_hint">When off, mouth shapes and the tongue use the model output directly and the mouth and tongue settings have no effect. Face tracking keeps running.</string>
+    <string name="p_mouth_enabled_tech">0 bypasses all mouth post-processing and temporal smoothing; the output is the model value limited to [0, 1].</string>
+
+    <string name="p_eye_adaptive_strength">Eye smoothing</string>
+    <string name="p_eye_adaptive_strength_less">Follows closely; small jitter shows</string>
+    <string name="p_eye_adaptive_strength_more">Steadier, but movements trail a little</string>
+    <string name="p_eye_adaptive_strength_tech" formatted="false">s: strength. 0% skips this layer, 100% uses the smoothed result fully.</string>
+    <string name="p_eye_adaptive_k">Eye small-movement speed</string>
+    <string name="p_eye_adaptive_k_less">Small eye movements are held back; steadier gaze</string>
+    <string name="p_eye_adaptive_k_more">Small eye movements follow quickly, and shake more easily</string>
+    <string name="p_eye_adaptive_k_tech">k: adaptive sensitivity, dimensionless. α₀ = 1 − exp(−k·|x − y₋₁|).</string>
+
+    <string name="p_eye_blink_endpoints_strength">Blink snapping</string>
+    <string name="p_eye_blink_endpoints_strength_less">Show the openness the model gives</string>
+    <string name="p_eye_blink_endpoints_strength_more">Snap to fully open or closed near the ends</string>
+    <string name="p_eye_blink_endpoints_strength_tech">s: strength.</string>
+    <string name="p_eye_blink_endpoints_low">Snap-open line</string>
+    <string name="p_eye_blink_endpoints_low_less">Only nearly open eyes snap open; slight squints show</string>
+    <string name="p_eye_blink_endpoints_low_more">Slightly drooping eyelids also snap open</string>
+    <string name="p_eye_blink_endpoints_low_tech">θ_low: lower Blink threshold, action coefficient 0–1.</string>
+    <string name="p_eye_blink_endpoints_high">Snap-shut line</string>
+    <string name="p_eye_blink_endpoints_high_less">Shallower closing already snaps shut</string>
+    <string name="p_eye_blink_endpoints_high_more">Eyes must close further to snap shut</string>
+    <string name="p_eye_blink_endpoints_high_tech">θ_high: upper Blink threshold, action coefficient 0–1, above θ_low.</string>
+
+    <string name="p_eye_brow_composite_strength">Brow smoothing</string>
+    <string name="p_eye_brow_composite_strength_less">Brows follow closely; small shakes show</string>
+    <string name="p_eye_brow_composite_strength_more">Steadier; raising and lowering are slower</string>
+    <string name="p_eye_brow_composite_strength_tech">s₁: strength of the composite smoothing.</string>
+    <string name="p_eye_brow_composite_current_weight">Brow speed</string>
+    <string name="p_eye_brow_composite_current_weight_less">Slower and steadier</string>
+    <string name="p_eye_brow_composite_current_weight_more">Faster</string>
+    <string name="p_eye_brow_composite_current_weight_tech">w: update weight; 24 Hz reference share α₀ = w²·(1 − q·m).</string>
+    <string name="p_eye_brow_motion_strength">Hold brows during blinks</string>
+    <string name="p_eye_brow_motion_strength_less">Brows keep moving during blinks and eye turns</string>
+    <string name="p_eye_brow_motion_strength_more">Brows stop for the moment of a blink or eye turn</string>
+    <string name="p_eye_brow_motion_strength_tech" formatted="false">q: eye-movement suppression. With q = 100% and m = 1, α₀ = 0.</string>
+    <string name="p_eye_brow_kalman_strength">Extra brow steadying</string>
+    <string name="p_eye_brow_kalman_strength_less">Use less of it; brow raises follow faster</string>
+    <string name="p_eye_brow_kalman_strength_more">Use it fully; steadier but slower</string>
+    <string name="p_eye_brow_kalman_strength_tech">s₂: share of the Kalman result.</string>
+    <string name="p_eye_brow_kalman_process_noise">Steadying speed</string>
+    <string name="p_eye_brow_kalman_process_noise_less">Brow raises steadier and slower</string>
+    <string name="p_eye_brow_kalman_process_noise_more">Brow raises faster; small shakes show more easily</string>
+    <string name="p_eye_brow_kalman_process_noise_tech">Q: process noise variance, in squared action coefficient. The steady state depends only on Q/R.</string>
+    <string name="p_eye_brow_kalman_measurement_noise">Steadying resistance</string>
+    <string name="p_eye_brow_kalman_measurement_noise_less">Brow raises faster; small shakes show more easily</string>
+    <string name="p_eye_brow_kalman_measurement_noise_more">Brow raises steadier and slower</string>
+    <string name="p_eye_brow_kalman_measurement_noise_tech">R: measurement noise variance, in squared action coefficient. A smaller Q/R lowers the steady-state gain.</string>
+
+    <string name="p_eye_brow_curve_strength">Raise or frown, not both</string>
+    <string name="p_eye_brow_curve_strength_less">Raised-and-frowning brows show as they are</string>
+    <string name="p_eye_brow_curve_strength_more">The weaker of the two is pushed down</string>
+    <string name="p_eye_brow_curve_strength_tech">s: strength.</string>
+    <string name="p_eye_brow_curve_power">Strictness</string>
+    <string name="p_eye_brow_curve_power_less">Both stay when they are similar</string>
+    <string name="p_eye_brow_curve_power_more">Even a slightly weaker one goes to near 0</string>
+    <string name="p_eye_brow_curve_power_tech">p: exponent, dimensionless.</string>
+
+    <string name="p_eye_wide_brow_strength">Wide eyes lift brows</string>
+    <string name="p_eye_wide_brow_strength_less">Brows stay put when the eyes widen</string>
+    <string name="p_eye_wide_brow_strength_more">Brows rise when the eyes widen</string>
+    <string name="p_eye_wide_brow_strength_tech">s: strength.</string>
+    <string name="p_eye_wide_brow_gain">Wide-eye lift amount</string>
+    <string name="p_eye_wide_brow_gain_less">Even fully wide eyes lift the brows only a little</string>
+    <string name="p_eye_wide_brow_gain_more">Wide eyes lift the brows more</string>
+    <string name="p_eye_wide_brow_gain_tech">g: BrowInnerUp added per unit of Wide, dimensionless. By default fully wide eyes add 0.5.</string>
+    <string name="p_eye_wide_brow_threshold">Wide-eye lift stops at</string>
+    <string name="p_eye_wide_brow_threshold_less">Stops adding once the brows lift slightly</string>
+    <string name="p_eye_wide_brow_threshold_more">Keeps adding when the brows are already high</string>
+    <string name="p_eye_wide_brow_threshold_tech">θ: add only while BrowInnerUp is below this, action coefficient 0–1.</string>
+
+    <string name="p_eye_blink_brow_strength">Closed eyes lower brows</string>
+    <string name="p_eye_blink_brow_strength_less">Brows stay put when the eyes close</string>
+    <string name="p_eye_blink_brow_strength_more">Brows drop when the eyes close</string>
+    <string name="p_eye_blink_brow_strength_tech">s: strength.</string>
+    <string name="p_eye_blink_brow_gain">Blink frown amount</string>
+    <string name="p_eye_blink_brow_gain_less">Closed eyes add only a little frown</string>
+    <string name="p_eye_blink_brow_gain_more">Closed eyes add more frown</string>
+    <string name="p_eye_blink_brow_gain_tech">g: BrowDown added per unit of Blink, dimensionless. By default fully closed eyes add 0.5.</string>
+    <string name="p_eye_blink_brow_threshold">Blink frown stops at</string>
+    <string name="p_eye_blink_brow_threshold_less">Stops adding once the brows lower slightly</string>
+    <string name="p_eye_blink_brow_threshold_more">Keeps adding when the brows are already low</string>
+    <string name="p_eye_blink_brow_threshold_tech">θ: add only while BrowDown is below this, action coefficient 0–1.</string>
+
+    <string name="p_eye_inner_outer_strength">Outer brow follow</string>
+    <string name="p_eye_inner_outer_strength_less">Brow tails move as the model gives them</string>
+    <string name="p_eye_inner_outer_strength_more">Brow tails match the inner brows</string>
+    <string name="p_eye_inner_outer_strength_tech">s: strength.</string>
+
+    <string name="p_mouth_adaptive_strength">Mouth smoothing</string>
+    <string name="p_mouth_adaptive_strength_less">Follows closely; small jitter shows</string>
+    <string name="p_mouth_adaptive_strength_more" formatted="false">Steadier but trails; at 0% the extra smoothing is off too</string>
+    <string name="p_mouth_adaptive_strength_tech">s: strength, governing both passes.</string>
+    <string name="p_mouth_adaptive_k">Mouth small-movement speed</string>
+    <string name="p_mouth_adaptive_k_less">Small mouth changes are held back and follow slower</string>
+    <string name="p_mouth_adaptive_k_more">Small changes follow quickly, and jitter more easily</string>
+    <string name="p_mouth_adaptive_k_tech">k: adaptive sensitivity, dimensionless, shared by both passes.</string>
+    <string name="p_mouth_double_pass_strength">Jaw and smile extra smoothing</string>
+    <string name="p_mouth_double_pass_strength_less">Jaw and smiles follow as fast as other shapes</string>
+    <string name="p_mouth_double_pass_strength_more">These shapes steadier, but clearly slower with lower peaks</string>
+    <string name="p_mouth_double_pass_strength_tech">s₂: weight of the second pass in the composite share.</string>
+
+    <string name="p_mouth_baseline_strength">Leftover removal</string>
+    <string name="p_mouth_baseline_strength_less">Leftover shapes at rest stay</string>
+    <string name="p_mouth_baseline_strength_more">Leftovers removed cleanly; very slight shapes shrink too</string>
+    <string name="p_mouth_baseline_strength_tech">s: subtraction strength. At 0 learning continues for the lip closure addition.</string>
+    <string name="p_mouth_baseline_current_weight">Leftover learning speed</string>
+    <string name="p_mouth_baseline_current_weight_less">Removed after a while; brief small movements are unaffected</string>
+    <string name="p_mouth_baseline_current_weight_more">Removed quickly; held slight expressions may be removed too</string>
+    <string name="p_mouth_baseline_current_weight_tech" formatted="false">w: 24 Hz reference learning weight. At 50% the time constant is about 60 ms.</string>
+    <string name="p_mouth_baseline_window">Leftover range width</string>
+    <string name="p_mouth_baseline_window_less">Only values near the centre count as leftover; 0 stops learning</string>
+    <string name="p_mouth_baseline_window_more">A wider range counts as leftover; slight movements are removed more easily</string>
+    <string name="p_mouth_baseline_window_tech">h: half-width of the learning interval, action coefficient.</string>
+    <string name="p_mouth_baseline_center">Leftover range centre (other shapes)</string>
+    <string name="p_mouth_baseline_center_less">Range moves down; only smaller values count</string>
+    <string name="p_mouth_baseline_center_more">Range moves up; larger values count too</string>
+    <string name="p_mouth_baseline_center_tech">c: centre of the learning interval for general channels, action coefficient.</string>
+    <string name="p_mouth_baseline_channel5_center">Leftover range centre (jaw)</string>
+    <string name="p_mouth_baseline_channel5_center_less">The jaw range moves down</string>
+    <string name="p_mouth_baseline_channel5_center_more">The jaw range moves up; larger openings count too</string>
+    <string name="p_mouth_baseline_channel5_center_tech">c₅: centre of the learning interval for JawOpen (mouth33 index 5).</string>
+    <string name="p_mouth_baseline_max_abs">Largest removable leftover</string>
+    <string name="p_mouth_baseline_max_abs_less">Leftovers above this are not removed</string>
+    <string name="p_mouth_baseline_max_abs_more">Larger leftovers may be removed</string>
+    <string name="p_mouth_baseline_max_abs_tech">L: subtract only while |β| &lt; L, action coefficient.</string>
+
+    <string name="p_mouth_channel7_correction_strength">Lip closure boost</string>
+    <string name="p_mouth_channel7_correction_strength_less">Add nothing</string>
+    <string name="p_mouth_channel7_correction_strength_more">Add the full amount from the settings below</string>
+    <string name="p_mouth_channel7_correction_strength_tech">s: strength.</string>
+    <string name="p_mouth_channel7_correction_bias">Base boost</string>
+    <string name="p_mouth_channel7_correction_bias_less">Adds less</string>
+    <string name="p_mouth_channel7_correction_bias_more">Adds more, up to the limit</string>
+    <string name="p_mouth_channel7_correction_bias_tech">b: action coefficient.</string>
+    <string name="p_mouth_channel7_correction_ceiling">Boost limit</string>
+    <string name="p_mouth_channel7_correction_ceiling_less">Adds at most this much</string>
+    <string name="p_mouth_channel7_correction_ceiling_more">Allows adding more</string>
+    <string name="p_mouth_channel7_correction_ceiling_tech">c: action coefficient.</string>
+    <string name="p_mouth_channel7_correction_scale">Extra per leftover</string>
+    <string name="p_mouth_channel7_correction_scale_less">Adds about the same whatever the leftover</string>
+    <string name="p_mouth_channel7_correction_scale_more">The larger the leftover, the more it adds</string>
+    <string name="p_mouth_channel7_correction_scale_tech">a: multiplier of the β₇/d term, action coefficient.</string>
+    <string name="p_mouth_channel7_correction_divisor">Leftover step</string>
+    <string name="p_mouth_channel7_correction_divisor_less">A small leftover already adds more</string>
+    <string name="p_mouth_channel7_correction_divisor_more">More leftover is needed to add the same</string>
+    <string name="p_mouth_channel7_correction_divisor_tech">d: divisor of β₇, action coefficient.</string>
+
+    <string name="p_mouth_log_scale_strength">Shrink weak shapes</string>
+    <string name="p_mouth_log_scale_strength_less">Mouth shapes keep the model\'s proportions</string>
+    <string name="p_mouth_log_scale_strength_more">Weaker mouth shapes shrink more</string>
+    <string name="p_mouth_log_scale_strength_tech">s: strength.</string>
+    <string name="p_mouth_log_scale_coefficient">Shrink and boost range</string>
+    <string name="p_mouth_log_scale_coefficient_less">Little change between weak and strong</string>
+    <string name="p_mouth_log_scale_coefficient_more">Weak shapes shrink more, the strongest is boosted more</string>
+    <string name="p_mouth_log_scale_coefficient_tech">k: log coefficient, dimensionless.</string>
+    <string name="p_mouth_log_scale_offset">Keep weak shapes</string>
+    <string name="p_mouth_log_scale_offset_less">The weakest shapes nearly vanish</string>
+    <string name="p_mouth_log_scale_offset_more">Weak shapes keep more; strong ones are boosted more too</string>
+    <string name="p_mouth_log_scale_offset_tech">d: log offset, dimensionless.</string>
+
+    <string name="p_mouth_tongue_ema_strength">Tongue smoothing</string>
+    <string name="p_mouth_tongue_ema_strength_less">The tongue follows closely</string>
+    <string name="p_mouth_tongue_ema_strength_more">Steadier; sticking out and pulling back trail</string>
+    <string name="p_mouth_tongue_ema_strength_tech">s: strength.</string>
+    <string name="p_mouth_tongue_ema_current_weight">Tongue speed</string>
+    <string name="p_mouth_tongue_ema_current_weight_less">Steadier; sticking out and pulling back are slower</string>
+    <string name="p_mouth_tongue_ema_current_weight_more">Sticking out and pulling back are faster</string>
+    <string name="p_mouth_tongue_ema_current_weight_tech" formatted="false">w: 24 Hz reference weight. At 60% the time constant is about 45 ms.</string>
+
+    <string name="p_mouth_tongue_gate_strength">Tongue trigger</string>
+    <string name="p_mouth_tongue_gate_strength_less">No trigger; small tongue values show as they are</string>
+    <string name="p_mouth_tongue_gate_strength_more">Below the line counts as no tongue; above it is boosted</string>
+    <string name="p_mouth_tongue_gate_strength_tech">s: strength.</string>
+    <string name="p_mouth_tongue_gate_threshold">Tongue trigger line</string>
+    <string name="p_mouth_tongue_gate_threshold_less">A slight tongue shows, with more false triggers</string>
+    <string name="p_mouth_tongue_gate_threshold_more">The tongue must come out further to show</string>
+    <string name="p_mouth_tongue_gate_threshold_tech">θ: TongueOut threshold, action coefficient 0–1.</string>
+    <string name="p_mouth_tongue_gate_gain">Boost past the line</string>
+    <string name="p_mouth_tongue_gate_gain_less">Past the line the tongue comes out less</string>
+    <string name="p_mouth_tongue_gate_gain_more">Past the line the tongue quickly comes out fully</string>
+    <string name="p_mouth_tongue_gate_gain_tech">g: dimensionless multiplier; the result is limited to 1.</string>
+</resources>

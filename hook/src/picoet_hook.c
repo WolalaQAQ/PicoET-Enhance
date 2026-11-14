@@ -18,6 +18,7 @@
 #include "shadowhook.h"
 #include "expression/high_rate.h"
 #include "expression/integration.h"
+#include "expression/postprocessing_file.h"
 #include "root_file.h"
 
 extern "C" {
@@ -820,6 +821,25 @@ __attribute__((constructor)) void picoet_init()
         append_log("runtime state unavailable; refusing all hooks (prepare picoet-runtime directory)");
         return;
     }
+    expression_independent::PostProcessingConfig processing;
+    std::string processing_error;
+    if (!expression_independent::read_postprocessing_file(processing, processing_error)) {
+        log_fmt("postprocessing configuration rejected: %s", processing_error.c_str());
+        report_runtime("failed");
+        return;
+    }
+    expression_independent::configure_postprocessing(processing);
+    const std::string processing_text = expression_independent::format_postprocessing(processing);
+    char processing_name[64];
+    snprintf(processing_name, sizeof(processing_name), "%ld.processing", (long)getpid());
+    if (publish_record(processing_name, processing_text.data(), processing_text.size()) != 0) {
+        append_log("cannot publish active postprocessing configuration");
+        report_runtime("failed");
+        return;
+    }
+    log_fmt("postprocessing loaded: eye=%g mouth=%g eye_adaptive=%g brow_composite=%g brow_kalman=%g mouth_adaptive=%g tongue_ema=%g",
+        processing.eye_enabled, processing.mouth_enabled, processing.eye_adaptive, processing.brow_composite,
+        processing.brow_kalman, processing.mouth_adaptive, processing.tongue_ema);
     if (install_gate_hook() != 0) {
         append_log("service guard/gate initialization failed; no plugin writes permitted");
         report_runtime("failed");

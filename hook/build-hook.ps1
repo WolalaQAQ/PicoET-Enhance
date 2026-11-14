@@ -61,9 +61,11 @@ if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
 $payload = Join-Path $BuildDir 'libpicoet_hook.so'
 $injector = Join-Path $BuildDir 'picoet-inject'
 $ctl = Join-Path $BuildDir 'picoet-target'
+$configHelper = Join-Path $BuildDir 'picoet-config'
+$panelWorker = Join-Path $BuildDir 'picoet-panel'
 # Debug sections contain build-machine paths. Keep ordinary symbols for the
 # structural checks and diagnostics, but remove debug-only data before packaging.
-& $strip --strip-debug $payload $injector $ctl
+& $strip --strip-debug $payload $injector $ctl $configHelper $panelWorker
 if ($LASTEXITCODE -ne 0) { throw 'failed to strip build-time debug information' }
 Get-Item $injector, $payload, $ctl | Format-Table Name, Length -AutoSize | Out-String | Write-Host
 
@@ -76,6 +78,8 @@ function Assert-AArch64([string]$f, [string]$tag) {
 Assert-AArch64 $injector 'injector'
 Assert-AArch64 $payload 'payload'
 Assert-AArch64 $ctl 'control target'
+Assert-AArch64 $configHelper 'configuration helper'
+Assert-AArch64 $panelWorker 'panel worker'
 
 $injDyn = & $readelf -d $injector | Out-String
 if ($injDyn -notmatch 'libdl\.so') { throw 'injector does not link libdl.so' }

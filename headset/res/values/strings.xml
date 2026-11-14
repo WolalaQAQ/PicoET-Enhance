@@ -1,0 +1,121 @@
+<resources>
+    <string name="subtitle">Expression post-processing</string>
+    <string name="language">中文</string>
+    <string name="change_language">Change language</string>
+    <string name="reload">Reload</string>
+    <string name="save">Save</string>
+    <string name="apply">Apply</string>
+    <string name="apply_confirm">Apply and restart the tracking service</string>
+    <string name="apply_warning">Stop Bridge and any other eye or face tracking client first. Applying restarts the tracking service, not the headset; reconnect tracking afterwards.</string>
+    <string name="wording_label">Wording</string>
+    <string name="wording_simple">Simple</string>
+    <string name="wording_pro">Technical</string>
+    <string name="nav_start">Start</string>
+    <string name="nav_all">All settings</string>
+    <string name="nav_guide">Guide</string>
+    <string name="part_eye">EYES</string>
+    <string name="part_brow">BROWS</string>
+    <string name="part_mouth">MOUTH</string>
+    <string name="part_tongue">TONGUE</string>
+    <string name="start_title">Tune it in front of a mirror</string>
+    <string name="start_hint">Pick a preset, save and apply it, then look in a mirror with the headset on. If a movement looks wrong, open it on the left: grey is what the model outputs, green is what the avatar receives, and the settings that change it are right beside the chart.</string>
+    <string name="preset_balanced">Balanced (recommended)</string>
+    <string name="preset_balanced_hint">Brows catch up in about 0.2 s instead of 1 s, the jaw opens more fully while talking, the mouth closes fully at rest, a slight tongue shows, and blinks and wide eyes barely move the brows. Held expressions stay as steady as stock.</string>
+    <string name="preset_balanced_pro" formatted="false">Changes from stock: brow Kalman share 60%, Q = 1 (Q/R = 10); composite w = 0.85, eye-motion hold q = 30%; raise/frown p = 2 at 70%; outer follow 40%; Wide link g = 0.15; Blink link share 20%; eye k = 14; mouth smoothing share 80%, k = 9, second pass 0%; log compression 50%; tongue threshold 0.35, gain 1.25, EMA weight 75%. Everything else at the defaults.</string>
+    <string name="preset_responsive">Responsive</string>
+    <string name="preset_responsive_hint">Every movement catches up within about 0.1 s, close to the model itself; half of the smoothing is kept, so small jitter shows while holding still. Blinks and wide eyes do not move the brows, and the brow tails move on their own.</string>
+    <string name="preset_responsive_pro" formatted="false">Changes from stock: eye smoothing share 50%, k = 24; composite w = 1, eye-motion hold 0%; Kalman share 30%, Q = 1, R = 0.05; raise/frown p = 2 at 30%; outer follow, Wide and Blink links 0%; mouth smoothing share 50%, k = 16, second pass 0%; log compression 25%; tongue threshold 0.3, gain 1.2, EMA share 50%, weight 90%. Everything else at the defaults.</string>
+    <string name="preset_defaults">Stock</string>
+    <string name="preset_defaults_hint">PICO\'s original processing, for comparison. Blinks and gaze are very steady; the brows take about a second to rise, the jaw opens less while talking, and a slight tongue does not show.</string>
+    <string name="preset_defaults_pro">The stock defaults in postprocessing.h, identical to postprocessing-default.conf.</string>
+    <string name="preset_raw">No processing</string>
+    <string name="preset_raw_hint" formatted="false">Uses the model\'s values directly, only limited to 0–100%. Use it to compare: if a movement also looks wrong here, the model itself is the likely cause.</string>
+    <string name="preset_raw_pro">eye.enabled = mouth.enabled = 0; the output is the model value limited to [0, 1].</string>
+    <string name="start_steps_title">How to tune</string>
+    <string name="start_steps">1. Tap Balanced, then Save and Apply at the bottom. Disconnect Bridge and other tracking clients before applying.\n2. Put on the headset, look in a mirror in VRChat and go through the movements listed on the left.\n3. If a movement looks wrong, open it and drag the sliders as the page suggests; the green line changes at once.\n4. Save, apply, and check the same movement in the mirror.</string>
+    <string name="legend_model">Model output</string>
+    <string name="legend_avatar">Avatar receives</string>
+    <string name="legend_saved">Saved settings</string>
+    <string name="scope_example">The movement is a synthetic example computed at 90 updates per second, for comparing settings; it is not measured on the headset. See the Guide for how time is handled.</string>
+    <string name="settings_for">Settings that shape this movement</string>
+    <string name="settings_for_hint">The chart recalculates while you drag. Tap a value to type an exact number or reset that setting alone.</string>
+    <string name="also_moves">Also affects: {0}</string>
+    <string name="list_separator">, </string>
+    <string name="changed_badge">{0} unsaved</string>
+    <string name="off_eye">Eye and brow processing is off, so the settings on this page have no effect.</string>
+    <string name="off_mouth">Mouth and tongue processing is off, so the settings on this page have no effect.</string>
+    <string name="inactive_stage" formatted="false">{0} is 0%, so this has no effect.</string>
+    <string name="inactive_follows" formatted="false">{0} is 0%, so this step is skipped too.</string>
+    <string name="inactive_region">Processing for this part is off.</string>
+    <string name="all_hint">All 44 settings in processing order. The buttons under each group open the movements it affects, where you can see the effect.</string>
+    <string name="see_effect">See it on:</string>
+    <string name="step_eye_master">Eye and brow processing</string>
+    <string name="step_eye_master_hint">Master switch for all eye and brow processing.</string>
+    <string name="step_brow_curve">Raise or frown, not both</string>
+    <string name="step_brow_curve_hint">When the model outputs both a brow raise and a frown, the weaker one is pushed down.</string>
+    <string name="step_wide_brow">Wide eyes lift brows</string>
+    <string name="step_wide_brow_hint">Opening the eyes wide adds some brow raise.</string>
+    <string name="step_blink_brow">Closed eyes lower brows</string>
+    <string name="step_blink_brow_hint">Closing the eyes adds some frown.</string>
+    <string name="step_inner_outer">Outer brow follows inner brow</string>
+    <string name="step_inner_outer_hint">Pulls the brow tails towards the height of the inner brows.</string>
+    <string name="step_blink_endpoints">Blink snapping</string>
+    <string name="step_blink_endpoints_hint">Values near fully open or closed snap to the end.</string>
+    <string name="step_eye_adaptive">Eye smoothing</string>
+    <string name="step_eye_adaptive_hint">Smoothing for blinks, gaze, squints and wide eyes: large changes follow fast, small jitter is held back.</string>
+    <string name="step_brow_composite">Brow smoothing</string>
+    <string name="step_brow_composite_hint">Smoothing for brow raise and frown.</string>
+    <string name="step_brow_motion">Hold brows during blinks</string>
+    <string name="step_brow_motion_hint">Briefly holds the brows while the eyes blink or turn.</string>
+    <string name="step_brow_kalman">Extra brow steadying</string>
+    <string name="step_brow_kalman_hint">Applies to brow raises after brow smoothing; with stock settings it is the main reason brows are slow.</string>
+    <string name="step_mouth_master">Mouth and tongue processing</string>
+    <string name="step_mouth_master_hint">Master switch for all mouth and tongue processing.</string>
+    <string name="step_baseline">Leftover removal</string>
+    <string name="step_baseline_hint">Learns the small mouth shapes left at rest and subtracts them.</string>
+    <string name="step_channel7">Lip closure boost</string>
+    <string name="step_channel7_hint">Always adds a little to lip closure (MouthClose).</string>
+    <string name="step_log_scale">Shrink weak shapes</string>
+    <string name="step_log_scale_hint">Weaker mouth shapes at the same moment are scaled down.</string>
+    <string name="step_tongue_gate">Tongue trigger</string>
+    <string name="step_tongue_gate_hint">Below the line counts as no tongue; above it is boosted.</string>
+    <string name="step_mouth_adaptive">Mouth smoothing</string>
+    <string name="step_mouth_adaptive_hint">Smoothing for every mouth shape except the tongue: large changes follow fast, small jitter is held back.</string>
+    <string name="step_double_pass">Jaw and smile extra smoothing</string>
+    <string name="step_double_pass_hint">Jaw opening, smiles and sideways mouth movement get a second smoothing pass.</string>
+    <string name="step_tongue_ema">Tongue smoothing</string>
+    <string name="step_tongue_ema_hint">Smoothing for the tongue.</string>
+    <string name="guide_read_title">Reading a movement chart</string>
+    <string name="guide_read" formatted="false">The horizontal axis is time; the vertical axis is how far the movement goes: 0% is not at all, 100% is fully.\nGrey: the model\'s value.\nGreen: what the avatar receives after processing. The gap between the two is what the settings do.\nBlue dotted: a related movement at the same time, such as the blink while raising the brows.\nWhite dashed: with unsaved changes, the result under the saved settings, for comparison.\nThe readings under the chart are taken at the yellow dots on green; the model figure is the same reading on grey. How far the avatar actually moves also depends on the PC-side mapping and the avatar\'s blendshapes.</string>
+    <string name="guide_time_title">Time in the charts</string>
+    <string name="guide_time" formatted="false">The charts are computed at 90 updates per second to compare settings; the milliseconds are not latency measured on the headset. What you see on the avatar also includes the camera, model inference, streaming and PC-side processing.\nOn the headset, coefficients are converted using the actual time between updates, so the same settings behave about the same at a different frame rate. The exception is a smoothing amount between 0% and 100%: at a higher frame rate it follows faster.</string>
+    <string name="guide_time_pro" formatted="false">The stock coefficients use 24 Hz as the reference scale (Δt₀ = 1/24 s ≈ 41.7 ms). For each source update the module takes Δt between adjacent source timestamps, sets r = Δt ÷ Δt₀ and converts a reference share a₂₄ to a = 1 − (1 − a₂₄)^r.\nThis makes fixed-weight smoothing (the brow composite at fixed m, rest learning, the tongue EMA) and the Kalman steady-state gain independent of the source rate; adaptive smoothing depends on each difference and is only approximately independent; a mix ratio s between 0 and 1 blends linearly per update without Δt conversion.\nExample: a 60% reference weight takes 60% per update at 24 Hz and about 21.7% at 90 Hz, both with a time constant of about 45 ms. The movement charts use a fixed Δt = 1/90 s and first run 1.5 s on the starting pose so that smoothing and rest learning settle; the Kalman filter uses its steady-state gain. The panel does not read the device\'s current source rate.</string>
+    <string name="guide_flow_title">Draft, save and apply</string>
+    <string name="guide_flow">Changes go into a draft first; the footer shows how many are unsaved, and the affected movements on the left are marked. Save writes the draft to the settings file. Apply makes the running processing use the saved settings; it restarts the tracking service, so stop Bridge and other tracking clients first. Reloading or loading a preset replaces the draft and asks first if there are unsaved changes. Tap any value to type an exact number, see its range and default, or reset it alone; percentages are entered as 0–100.</string>
+    <string name="range">Range {0} – {1}, default {2}</string>
+    <string name="range_percent" formatted="false">Range {0} – {1}, default {2}. Enter a percentage, for example 25 for 25%.</string>
+    <string name="direction_less">Lower: </string>
+    <string name="direction_more">Higher: </string>
+    <string name="reset_value">Reset to default</string>
+    <string name="done">Done</string>
+    <string name="invalid_number">Enter a number within the allowed range.</string>
+    <string name="blink_order">The fully-open line must be below the fully-closed line.</string>
+    <string name="discard_title">Replace unsaved changes?</string>
+    <string name="discard_hint">Your changes are not saved. Reloading or loading a preset replaces them.</string>
+    <string name="replace">Replace</string>
+    <string name="draft_invalid">Could not restore the last draft; reload the saved settings.</string>
+    <string name="failed">Failed:</string>
+    <string name="valid">Settings are valid.</string>
+    <string name="state_connecting">Connecting to the module</string>
+    <string name="state_waiting">Working…</string>
+    <string name="state_unsaved_count">{0} unsaved changes</string>
+    <string name="state_loaded">Saved settings loaded</string>
+    <string name="state_saved">Saved · waiting to apply</string>
+    <string name="state_applied">Applied</string>
+    <string name="hint_connecting">Reading the current settings; tracking is not started.</string>
+    <string name="hint_unsaved">Running tracking is unchanged. Save first.</string>
+    <string name="hint_loaded">The running settings have not been checked. Apply to use these saved settings.</string>
+    <string name="hint_saved">Stop tracking clients, then Apply to use the saved settings.</string>
+    <string name="hint_applied">The module applied these settings; you can reconnect tracking clients.</string>
+    <string name="waiting">Waiting for the module; closing the panel does not interrupt it.</string>
+</resources>

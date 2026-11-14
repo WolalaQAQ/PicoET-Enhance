@@ -1,0 +1,121 @@
+<resources>
+    <string name="subtitle">表情后处理设置</string>
+    <string name="language">EN</string>
+    <string name="change_language">切换语言</string>
+    <string name="reload">重新读取</string>
+    <string name="save">保存</string>
+    <string name="apply">应用</string>
+    <string name="apply_confirm">应用并重启眼追服务</string>
+    <string name="apply_warning">请先停止Bridge和其他眼追／面捕客户端。应用会重启眼追服务，不会重启头显；完成后重新连接追踪即可。</string>
+    <string name="wording_label">说明方式</string>
+    <string name="wording_simple">简单</string>
+    <string name="wording_pro">专业</string>
+    <string name="nav_start">开始</string>
+    <string name="nav_all">全部设置</string>
+    <string name="nav_guide">说明</string>
+    <string name="part_eye">眼睛</string>
+    <string name="part_brow">眉毛</string>
+    <string name="part_mouth">嘴</string>
+    <string name="part_tongue">舌头</string>
+    <string name="start_title">照着镜子调</string>
+    <string name="start_hint">先选一个预设，保存并应用，然后戴上头显照镜子。哪个动作看着不对，就在左边点开它：图里灰线是模型给出的，绿线是Avatar收到的，旁边就是能改善它的设置。</string>
+    <string name="preset_balanced">均衡（推荐）</string>
+    <string name="preset_balanced_hint">眉毛约0.2秒跟上（原厂要1秒），说话时张嘴更完整，闭嘴后不留缝，轻轻伸舌也能显示，眨眼和瞪眼不再明显带动眉毛。停住不动时和原厂一样稳。</string>
+    <string name="preset_balanced_pro" formatted="false">相对原厂：眉部Kalman比例60%、Q = 1（Q/R = 10）；复合平滑w = 0.85，眼动抑制q = 30%；取舍p = 2、比例70%；外眉跟随40%；Wide带动g = 0.15；Blink带动比例20%；眼睛k = 14；嘴部平滑比例80%、k = 9，二次平滑0%；log压缩比例50%；伸舌门槛0.35、倍率1.25、EMA权重75%。其余为默认值。</string>
+    <string name="preset_responsive">灵敏</string>
+    <string name="preset_responsive_hint">所有动作约0.1秒内跟上，接近模型原样；防抖只留一半，停住时能看到细小抖动。眉毛不受眨眼和瞪眼带动，眉梢可以单独动。</string>
+    <string name="preset_responsive_pro" formatted="false">相对原厂：眼睛平滑比例50%、k = 24；复合平滑w = 1，眼动抑制0%；Kalman比例30%、Q = 1、R = 0.05；取舍p = 2、比例30%；外眉跟随、Wide和Blink带动均为0%；嘴部平滑比例50%、k = 16，二次平滑0%；log压缩比例25%；伸舌门槛0.3、倍率1.2，EMA比例50%、权重90%。其余为默认值。</string>
+    <string name="preset_defaults">原厂</string>
+    <string name="preset_defaults_hint">PICO原来的处理，用来对比。眨眼和眼神很稳；眉毛要1秒左右才抬到位，说话时张嘴偏小，轻轻伸舌不显示。</string>
+    <string name="preset_defaults_pro">postprocessing.h中的原厂默认值，与postprocessing-default.conf相同。</string>
+    <string name="preset_raw">不处理</string>
+    <string name="preset_raw_hint" formatted="false">直接使用模型的结果，只限制在0–100%。用来对照：某个动作在这里也不对，问题多半出在模型本身。</string>
+    <string name="preset_raw_pro">eye.enabled = mouth.enabled = 0，输出为模型值限制到[0, 1]。</string>
+    <string name="start_steps_title">怎么调</string>
+    <string name="start_steps">1. 点“均衡”，再点底部的“保存”和“应用”。应用前先断开Bridge等追踪客户端。\n2. 戴上头显，在VRChat里照镜子，把左边列出的动作挨个做一遍。\n3. 哪个动作看着不对，就打开它，按页面上的提示拖动滑块，绿线会马上变化。\n4. 保存、应用，再照镜子做同一个动作确认。</string>
+    <string name="legend_model">模型给出</string>
+    <string name="legend_avatar">Avatar收到</string>
+    <string name="legend_saved">已保存的设置</string>
+    <string name="scope_example">图中动作是合成的示例，按每秒90次更新计算，用来比较设置；不是头显上测得的数据。时间换算见“说明”。</string>
+    <string name="settings_for">影响这个动作的设置</string>
+    <string name="settings_for_hint">拖动时图会立刻重算。点右侧数值可以输入精确值或单独恢复默认。</string>
+    <string name="also_moves">也影响：{0}</string>
+    <string name="list_separator">、</string>
+    <string name="changed_badge">{0}项未保存</string>
+    <string name="off_eye">“眼睛和眉毛处理”已关闭，这一页的设置暂不起作用。</string>
+    <string name="off_mouth">“嘴和舌头处理”已关闭，这一页的设置暂不起作用。</string>
+    <string name="inactive_stage" formatted="false">“{0}”为0%，这一项暂不起作用。</string>
+    <string name="inactive_follows" formatted="false">“{0}”为0%，这一项随之跳过。</string>
+    <string name="inactive_region">这一部分的处理已关闭。</string>
+    <string name="all_hint">全部44项按处理顺序排列。每组下面的按钮跳到受它影响的动作，在那里能看到效果。</string>
+    <string name="see_effect">看效果：</string>
+    <string name="step_eye_master">眼睛和眉毛处理</string>
+    <string name="step_eye_master_hint">眼睛和眉毛全部处理的总开关。</string>
+    <string name="step_brow_curve">抬眉皱眉二选一</string>
+    <string name="step_brow_curve_hint">模型同时给出抬眉和皱眉时，压下较弱的一方。</string>
+    <string name="step_wide_brow">瞪眼带眉</string>
+    <string name="step_wide_brow_hint">瞪眼时给抬眉额外加一些。</string>
+    <string name="step_blink_brow">闭眼压眉</string>
+    <string name="step_blink_brow_hint">闭眼时给皱眉额外加一些。</string>
+    <string name="step_inner_outer">外眉跟随眉头</string>
+    <string name="step_inner_outer_hint">把眉梢的高度拉向眉头。</string>
+    <string name="step_blink_endpoints">眨眼补齐</string>
+    <string name="step_blink_endpoints_hint">接近全睁、全闭时直接补到头。</string>
+    <string name="step_eye_adaptive">眼睛防抖</string>
+    <string name="step_eye_adaptive_hint">眨眼、眼神、眯眼、瞪眼的防抖：大动作跟得快，小抖动被压住。</string>
+    <string name="step_brow_composite">眉毛防抖</string>
+    <string name="step_brow_composite_hint">抬眉和皱眉的防抖。</string>
+    <string name="step_brow_motion">眨眼时按住眉毛</string>
+    <string name="step_brow_motion_hint">眨眼、转眼的那一下暂时按住眉毛。</string>
+    <string name="step_brow_kalman">眉毛额外稳定</string>
+    <string name="step_brow_kalman_hint">只作用于抬眉，接在眉毛防抖之后；原厂设置下眉毛慢主要因为它。</string>
+    <string name="step_mouth_master">嘴和舌头处理</string>
+    <string name="step_mouth_master_hint">嘴部和舌头全部处理的总开关。</string>
+    <string name="step_baseline">残留扣除</string>
+    <string name="step_baseline_hint">学习放松时还留着的小嘴形，再从输出里减掉。</string>
+    <string name="step_channel7">双唇合拢补偿</string>
+    <string name="step_channel7_hint">一直给双唇合拢（MouthClose）加一点。</string>
+    <string name="step_log_scale">压小弱嘴形</string>
+    <string name="step_log_scale_hint">同一时刻较弱的嘴形按比例缩小。</string>
+    <string name="step_tongue_gate">伸舌触发</string>
+    <string name="step_tongue_gate_hint">低于触发线当作没伸舌，过线后放大。</string>
+    <string name="step_mouth_adaptive">嘴形防抖</string>
+    <string name="step_mouth_adaptive_hint">全部嘴形（伸舌除外）的防抖：大动作跟得快，小抖动被压住。</string>
+    <string name="step_double_pass">张嘴微笑二次防抖</string>
+    <string name="step_double_pass_hint">张嘴、微笑和嘴左右移这五项再防抖一次。</string>
+    <string name="step_tongue_ema">伸舌防抖</string>
+    <string name="step_tongue_ema_hint">伸舌的防抖。</string>
+    <string name="guide_read_title">怎么看动作页的图</string>
+    <string name="guide_read" formatted="false">横轴是时间，纵轴是动作有多大：0%是没做，100%是做到最大。\n灰线：模型给出的值。\n绿线：处理后Avatar收到的值。两条线的差别就是这些设置在做的事。\n蓝色点线：同时发生的相关动作，比如抬眉时的那一次眨眼。\n白色虚线：有未保存的改动时，已保存设置下的结果，方便对比。\n图下方的读数取自绿线上的黄点，后面的“模型”是灰线上的同一读数。Avatar最终动多少，还取决于PC端的映射和模型的形态键。</string>
+    <string name="guide_time_title">图里的时间</string>
+    <string name="guide_time" formatted="false">图中的动作按每秒90次更新计算，用来比较不同设置的快慢，不是在头显上测得的延迟。Avatar上看到的延迟还包括摄像头、模型推理、串流和PC端处理。\n头显运行时按每两次更新之间实际经过的时间换算，所以帧率变化后，同一设置的快慢基本不变。防抖类设置介于0%和100%之间时例外：帧率越高，跟得越快。</string>
+    <string name="guide_time_pro" formatted="false">旧系数以24 Hz为参考刻度（Δt₀ = 1/24 s ≈ 41.7 ms）。每次源更新取相邻源时间戳之差Δt，令r = Δt ÷ Δt₀，把参考占比a₂₄换算为a = 1 − (1 − a₂₄)^r。\n固定权重的平滑（眉部复合平滑在m固定时、零点学习、伸舌EMA）和Kalman稳态增益由此与源频率无关；自适应平滑的占比取决于每次的差值，只是近似无关；混合比例s介于0与1之间时按每次更新线性混合，不做Δt换算。\n例：参考权重60%在24 Hz下每次采用60%，在90 Hz下每次约21.7%，时间常数都约45 ms。动作页的图固定使用Δt = 1/90 s，并在显示前先以起始姿势运行1.5 s，使平滑和零点学习进入稳定状态；Kalman按稳态增益计算。面板不读取设备当前的源频率。</string>
+    <string name="guide_flow_title">草稿、保存和应用</string>
+    <string name="guide_flow">面板里的改动先放在草稿里；底部显示还有几项未保存，左侧对应的动作旁边也有标记。“保存”把草稿写入设置文件。“应用”让正在运行的处理用上保存的设置，它会重启眼追服务，所以要先停止Bridge等追踪客户端。重新读取或载入预设会替换草稿，有未保存的改动时会先询问。点任一设置的数值，可以输入精确值、查看范围和默认值，或单独恢复默认；百分比按0–100输入。</string>
+    <string name="range">范围 {0} – {1}，默认 {2}</string>
+    <string name="range_percent" formatted="false">范围 {0} – {1}，默认 {2}。按百分数输入，例如 25 表示 25%。</string>
+    <string name="direction_less">调小：</string>
+    <string name="direction_more">调大：</string>
+    <string name="reset_value">恢复默认</string>
+    <string name="done">完成</string>
+    <string name="invalid_number">请输入允许范围内的数值。</string>
+    <string name="blink_order">全睁判定线必须低于全闭判定线。</string>
+    <string name="discard_title">替换未保存的修改？</string>
+    <string name="discard_hint">当前调节尚未保存，读取设置或载入预设会替换这些修改。</string>
+    <string name="replace">替换</string>
+    <string name="draft_invalid">未能载入上次草稿，请重新读取已保存设置。</string>
+    <string name="failed">操作失败：</string>
+    <string name="valid">参数有效。</string>
+    <string name="state_connecting">正在连接模块</string>
+    <string name="state_waiting">正在处理……</string>
+    <string name="state_unsaved_count">有{0}项未保存</string>
+    <string name="state_loaded">已读取保存值</string>
+    <string name="state_saved">已保存 · 等待应用</string>
+    <string name="state_applied">本次已应用</string>
+    <string name="hint_connecting">正在读取当前设置，不会启动追踪。</string>
+    <string name="hint_unsaved">运行中的追踪参数还没有变。先点“保存”。</string>
+    <string name="hint_loaded">运行参数尚未核实。如需启用这份保存值，可单独应用。</string>
+    <string name="hint_saved">停止追踪客户端后，点“应用”使保存值生效。</string>
+    <string name="hint_applied">模块已成功应用这份设置，可以重新连接追踪客户端。</string>
+    <string name="waiting">正在等待模块处理，关闭面板不会中断操作。</string>
+</resources>

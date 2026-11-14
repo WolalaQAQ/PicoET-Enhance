@@ -31,12 +31,14 @@ struct MouthState {
 // Source-dt warmup also spans 2*T0. Gated baseline adaptation and effective-time
 // quality are declared approximations, not equality to a differently sampled run.
 float process_mouth_dt(MouthState& state, const float raw35[kMouthRawChannels],
-                       uint64_t source_ns, float expression52[52]);
+                        uint64_t source_ns, float expression52[52],
+                        const PostProcessingConfig& config = {});
 
 // Transcription oracle: force every accepted source to one stock step, including
 // count-equivalent quality and two-call warmup. Not a runtime configuration mode.
 float process_mouth_step(MouthState& state, const float raw35[kMouthRawChannels],
-                         uint64_t source_ns, float expression52[52]);
+                          uint64_t source_ns, float expression52[52],
+                          const PostProcessingConfig& config = {});
 
 // Legacy shared-reference capture clears quality AFTER the current validity was
 // produced. It does not clear baselines, numerical history or the source anchor.

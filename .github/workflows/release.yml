@@ -30,8 +30,11 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
-      - name: Install pinned NDK and CMake
-        run: sdkmanager "ndk;26.1.10909125" "cmake;3.22.1"
+      - name: Install pinned Android tools
+        run: sdkmanager "ndk;26.1.10909125" "cmake;3.22.1" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Check companion permission boundary
+        run: python -B -X utf8 -m unittest discover -s headset/tests -p "test_*.py" -v
 
       - name: Verify version
         run: |
@@ -51,7 +54,21 @@ jobs:
           -CmakeBin "$env:ANDROID_HOME/cmake/3.22.1/bin"
 
       - name: Package Magisk module
-        run: ./build-picoet-enhance.ps1
+        env:
+          PANEL_KEYSTORE_BASE64: ${{ secrets.PICOET_PANEL_KEYSTORE_BASE64 }}
+          PICOET_PANEL_PASSWORD: ${{ secrets.PICOET_PANEL_PASSWORD }}
+          PANEL_KEY_ALIAS: ${{ secrets.PICOET_PANEL_KEY_ALIAS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:PANEL_KEYSTORE_BASE64) {
+            $key = Join-Path $env:RUNNER_TEMP 'picoet-panel-release.jks'
+            [IO.File]::WriteAllBytes($key, [Convert]::FromBase64String($env:PANEL_KEYSTORE_BASE64))
+            $alias = if ($env:PANEL_KEY_ALIAS) { $env:PANEL_KEY_ALIAS } else { 'panel' }
+            ./build-picoet-enhance.ps1 -PanelKeystore $key -PanelKeyAlias $alias
+          } else {
+            if ($env:GITHUB_REF_TYPE -eq 'tag') { throw 'Tag builds require persistent PICOET_PANEL_KEYSTORE_BASE64 and PICOET_PANEL_PASSWORD secrets' }
+            ./build-picoet-enhance.ps1
+          }
 
       - name: Prepare release assets
         run: |

@@ -390,8 +390,8 @@ restart_and_inject() {
 
 MODE=$1
 case "$MODE" in
-    status|boot|ensure|off|dual|on|toggle) ;;
-    *) echo "usage: $0 status | off|dual|on|toggle [--force] | ensure"; exit 2 ;;
+    status|boot|ensure|off|dual|on|toggle|reload-processing) ;;
+    *) echo "usage: $0 status | off|dual|on|toggle [--force] | reload-processing | ensure"; exit 2 ;;
 esac
 # `on` is the companion-property spelling; normalize it to the saved `dual` mode.
 [ "$MODE" = on ] && MODE=dual
@@ -423,8 +423,15 @@ case "$MODE" in
     ensure)
         inject_now
         exit $? ;;
-    off|dual|toggle)
+    off|dual|toggle|reload-processing)
         FORCE=0
+        if [ "$MODE" = reload-processing ]; then
+            [ "$(saved_mode)" = dual ] || die "enhanced mode is off; configuration saved but not applied"
+            "$MODDIR/bin/picoet-config" read >/dev/null || die "invalid postprocessing configuration; no restart"
+            # This command never forces clients off or changes the selected mode.
+            [ "$#" = 1 ] || die "reload-processing does not accept --force"
+            MODE=dual
+        fi
         for a in "$@"; do
             [ "$a" = --force ] && FORCE=1
         done

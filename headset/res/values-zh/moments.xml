@@ -1,0 +1,76 @@
+<resources>
+    <string name="r_model">模型 {0}</string>
+    <string name="r_saved">已保存 {0}</string>
+    <string name="r_not_reached">图中时间内没到</string>
+    <string name="m_blink">眨眼</string>
+    <string name="m_blink_look" formatted="false">普通的一次眨眼：模型最多闭到86%，睁开后还留着3%。\n闭眼闭不严 → 调低“补成全闭的线”。\n睁开后像半眯着 → 调高“补成全睁的线”。\n眨眼慢吞吞 → 调低“眼睛防抖”。</string>
+    <string name="m_blink_pro" formatted="false">Blink逐眼处理。先吸附端点：x &lt; θ_low时x′ = 0，x &gt; θ_high时x′ = 1，其余x′ = x，输出x + s·(x′ − x)；要求θ_low &lt; θ_high，这一步与源频率无关。再做自适应平滑：24 Hz参考占比α₀ = 1 − exp(−k·|x − y₋₁|)，x为本次输入，y₋₁为上次输出；运行时α = 1 − (1 − α₀)^r，r = Δt ÷ (1/24 s)，y_α = y₋₁ + α·(x − y₋₁)，输出y = x + s·(y_α − x)。差值越大占比越大，所以大动作快、小抖动慢。例：k = 9时，差0.01的α₀ ≈ 8.6%，差0.1的α₀ ≈ 59.3%。</string>
+    <string name="r_blink_peak">闭得最深</string>
+    <string name="r_blink_end">睁开后</string>
+    <string name="m_gaze">转眼看向一侧</string>
+    <string name="m_gaze_look">眼睛快速看向一侧并停住，模型的值带着细小抖动。绿线越快到顶，眼神越跟手；停住后越平，越稳。\n眼神慢半拍 → 调大“眼睛小动作跟随”或调低“眼睛防抖”。\n停住时眼神抖 → 反过来调。\n这两项也作用于眨眼、眯眼和瞪眼。</string>
+    <string name="m_gaze_pro" formatted="false">LookDown、LookIn、LookOut、LookUp、Squint、Wide和Blink逐通道使用同一自适应平滑。24 Hz参考占比α₀ = 1 − exp(−k·|x − y₋₁|)，x为本次输入，y₋₁为上次输出；运行时α = 1 − (1 − α₀)^r，r = Δt ÷ (1/24 s)，y_α = y₋₁ + α·(x − y₋₁)，输出y = x + s·(y_α − x)。差值越大占比越大，所以大动作快、小抖动慢。例：k = 9时，差0.01的α₀ ≈ 8.6%，差0.1的α₀ ≈ 59.3%。</string>
+    <string name="r_gaze_rise">转过去用时</string>
+    <string name="r_gaze_jitter">停住后的晃动</string>
+    <string name="m_raise">抬眉再放下</string>
+    <string name="m_raise_look">眉毛抬起，停一秒多再放下。原厂设置下要1秒左右才抬到位，主要慢在“眉毛额外稳定”。\n眉毛跟不上 → 先调低“眉毛额外稳定”；还慢，再调大“眉毛跟随速度”。\n停住时眉毛细碎地抖 → 反过来调。</string>
+    <string name="m_raise_pro" formatted="false">“眉毛防抖”是复合指数平滑，作用于BrowDown、BrowInnerUp、BrowOuterUp：24 Hz参考占比α₀ = w²·(1 − q·m)，w为“眉毛跟随速度”，q为“眨眼时按住眉毛”，m见“边眨眼边抬眉”；运行时α = 1 − (1 − α₀)^r。例：w = 0.6、m = 0时α₀ = 36%，Δt = 1/90 s时每次约11.2%。\n“眉毛额外稳定”对BrowInnerUp、BrowOuterUp做二维Kalman滤波，转移和观测矩阵为单位阵，过程噪声Q（“额外稳定的跟随速度”），观测噪声R（“额外稳定的阻力”）。稳态增益K满足K²/(1 − K) = Q/R；Q = R时K ≈ 61.8%（24 Hz参考），Δt = 1/90 s时每次约22.6%。运行时按Δt调整Q，使稳态时间响应与源频率无关。两步都以上一次最终输出为起点，叠在一起明显更慢。</string>
+    <string name="r_raise_rise">抬到位用时</string>
+    <string name="r_raise_fall">放下用时</string>
+    <string name="m_blink_raise">边眨眼边抬眉</string>
+    <string name="m_blink_raise_look">抬眉的同时眨了一下眼（蓝色点线）。眨眼、转眼的那一下，眉毛会被按住，所以绿线起步更晚。\n说话时眉毛总是动不起来 → 调低“眨眼时按住眉毛”。\n“眉毛额外稳定”较高时这里的差别不明显，可以先把它调低再比较。</string>
+    <string name="m_blink_raise_pro" formatted="false">m ∈ [0, 1]为本眼Blink的变化量加四向眼神变化量之和的一半，相对约83 ms前（运行时取最接近2·Δt₀的历史输出）计算。“眉毛防抖”的参考占比α₀ = w²·(1 − q·m)；q = 100%且m = 1时α₀ = 0，眉毛在这次更新中不动。这一项只作用于“眉毛防抖”；“眉毛额外稳定”（Kalman）不受m影响。</string>
+    <string name="r_blink_raise_rise">抬到位用时</string>
+    <string name="ctx_blink_raise">眨眼</string>
+    <string name="m_mixed">抬眉时带一点皱眉</string>
+    <string name="m_mixed_look" formatted="false">模型同时给出50%的抬眉（蓝色点线）和25%的皱眉。处理会压下较弱的皱眉，让眉毛只往一个方向动。\n担心、委屈这类又抬又皱的眉形出不来 → 调低“抬眉皱眉二选一”或“二选一的严格程度”。</string>
+    <string name="m_mixed_pro">u为BrowInnerUp，d为BrowDown。按幂权重重新分配：W_d = |d|^p ÷ (|u|^p + |d|^p + 10⁻¹⁰)，d′ = W_d·(u + d)；W_u同理，u′ = W_u·(u + d′)，使用已处理的d′。输出u + s·(u′ − u)，d同理。p越大越接近只保留较强一方：u为d的2倍时，p = 4的权重比为16:1，p = 2为4:1。每次更新独立计算，与源频率无关。</string>
+    <string name="r_mixed_hold">皱眉停在</string>
+    <string name="ctx_mixed">抬眉</string>
+    <string name="m_wide">瞪大眼</string>
+    <string name="m_wide_look" formatted="false">只把眼睛瞪大（蓝色点线），眉毛本身只抬了10%。原厂设置会因为瞪眼给眉毛多加一大截，Avatar像在挑眉。\n瞪眼时眉毛抬得太高 → 调低“瞪眼带眉”或“瞪眼带眉的幅度”。\n想让瞪眼更夸张 → 调高这两项。</string>
+    <string name="m_wide_pro">u为取舍后的BrowInnerUp，v为本眼Wide。u &lt; θ时u′ = u + g·v，否则u′ = u；输出u + s·(u′ − u)，平滑前限制到[0, 1]。结果随后也用于外眉联动。每次更新独立计算，与源频率无关。</string>
+    <string name="r_wide_hold">抬眉停在</string>
+    <string name="ctx_wide">睁大眼</string>
+    <string name="m_brow_blink">眨眼时的眉毛</string>
+    <string name="m_brow_blink_look" formatted="false">眉毛放平时眨一次眼（蓝色点线），模型给的皱眉只有5%左右。处理会在闭眼时给皱眉加一截，Avatar每次眨眼都会压一下眉。\n眨眼时眉毛跟着跳 → 调低“闭眼压眉”或“闭眼压眉的幅度”。</string>
+    <string name="m_brow_blink_pro">d为取舍后的BrowDown，b为本眼Blink。d &lt; θ时d′ = d + g·b，否则d′ = d；输出d + s·(d′ − d)，平滑前限制到[0, 1]。g无量纲，θ、b、d为0–1动作系数。每次更新独立计算，与源频率无关。</string>
+    <string name="r_brow_blink_peak">皱眉最多到</string>
+    <string name="ctx_brow_blink">眨眼</string>
+    <string name="m_outer">只抬眉梢</string>
+    <string name="m_outer_look" formatted="false">只抬起眉梢，眉头保持10%（蓝色点线）。处理会把眉梢拉回眉头的高度，所以原厂设置下只抬眉梢几乎看不出来。\n想让眉梢单独动 → 调低“外眉跟随程度”。</string>
+    <string name="m_outer_pro">o为模型的BrowOuterUp，u′为本眼经过取舍和睁大眼带动后的BrowInnerUp。输出o + s·(u′ − o)。左右眼分别计算，与源频率无关。</string>
+    <string name="r_outer_hold">外眉停在</string>
+    <string name="ctx_outer">内眉</string>
+    <string name="m_talk">说话时张嘴</string>
+    <string name="m_talk_look">连说四个字，下巴快速开合。绿线越贴近灰线，口型越准；峰值变矮、变晚，说明防抖太重。\n说话时嘴张不开 → 先调低“张嘴微笑二次防抖”；还不够，再调低“嘴形防抖”或调大“嘴部小动作跟随”。\n嘴唇抖动 → 反过来调。</string>
+    <string name="m_talk_pro" formatted="false">自适应指数平滑作用于除TongueOut外的32项嘴形，公式同眼睛：α₀ = 1 − exp(−k·|x − y₋₁|)，按Δt换算后输出y = x + s·(y_α − x)。\nJawOpen、MouthSmile_L/R、MouthLeft、MouthRight改用两步：α₁ = 1 − exp(−k·|x − y₋₁|)，v = y₋₁ + α₁·(x − y₋₁)，α₂ = 1 − exp(−k·|v − y₋₁|)，复合参考占比α₀ = α₁·[(1 − s₂) + s₂·α₂]，再按Δt换算。两步都以同一个上次输出为基准，越接近目标占比越小。\n例：k = 6、x = 0.3、y₋₁ = 0.2时α₁ ≈ 45.1%，α₂ ≈ 23.7%，复合约10.7%。s为0时两步都跳过。</string>
+    <string name="r_talk_peak">张嘴最大到</string>
+    <string name="r_talk_lag">最大处比模型晚</string>
+    <string name="m_rest">闭上嘴以后</string>
+    <string name="m_rest_look" formatted="false">说完话闭嘴，模型仍留着5%左右的张嘴。“残留扣除”会学到这个值并减掉，绿线最后应回到0附近。\n闭嘴后Avatar还微微张着 → 调高“残留扣除”或“残留范围宽度”。\n嘴要过很久才合上 → 调大“嘴部小动作跟随”或调低“张嘴微笑二次防抖”。</string>
+    <string name="m_rest_pro" formatted="false">对除TongueOut外的32项逐项学习零点β：|x − c| &lt; h时β ← β + α·(x − β)，α由24 Hz参考学习权重w按Δt换算：α = 1 − (1 − w)^r。|β| &lt; L时输出x − s·β。JawOpen（mouth33索引5）使用中心c₅，其余使用c。默认学习区间：一般(0, 0.04)，JawOpen (0.02, 0.06)；w = 50%时时间常数约60 ms，与源频率无关。s = 0时停止扣除但继续学习，学到的MouthClose零点β₇仍供双唇闭合补偿使用。\n之后的两步平滑在差值很小时占比也很小，这就是图中缓慢的尾巴。</string>
+    <string name="r_rest_end">3秒后还张着</string>
+    <string name="m_corners">笑完嘴角回落</string>
+    <string name="m_corners_look" formatted="false">笑完放松，模型仍留着2.5%左右的嘴角上扬。处理和“闭上嘴以后”相同，只是张嘴以外的嘴形用“残留范围中心（其他嘴形）”。\n放松后Avatar还带着笑 → 调高“残留扣除”，或把范围中心移到能盖住这个值的位置。</string>
+    <string name="m_corners_pro">与“闭上嘴以后”相同，张嘴以外的嘴形使用中心c，学习区间默认(0, 0.04)。MouthSmile_L/R也属于两步平滑的五项之一，所以回落同样有慢尾巴。</string>
+    <string name="r_corners_end">3秒后嘴角</string>
+    <string name="m_lips">闭着嘴时的嘴唇</string>
+    <string name="m_lips_look" formatted="false">闭嘴放松时，模型给的双唇合拢（MouthClose）只有1–2%。处理会一直给它加8–9%，让嘴唇看起来合上。张嘴（JawOpen）是另一个动作，不受这里影响。\n嘴唇总像抿着 → 调低“双唇合拢补偿”或“补偿基础量”。\n说话时双唇分得太开 → 调高这两项。</string>
+    <string name="m_lips_pro">Δ = s·min(β₇ ÷ d·a + b, c)，加到MouthClose（mouth33索引7）。β₇是这一通道学到的残留零点，见“闭上嘴以后”；d、a、b、c的单位都是动作系数。默认β₇ = 0时加0.08，β₇ = 0.02时加0.09。这是模型输出的动作系数，Avatar上嘴唇实际闭合多少取决于PC端映射和模型形态键。与源频率无关。</string>
+    <string name="r_lips_end">双唇闭合</string>
+    <string name="m_subtle">微笑时的小嘴形</string>
+    <string name="m_subtle_look" formatted="false">微笑时，模型同时给出很强的嘴角上扬（蓝色点线）和12%的酒窝。处理会按强弱比例把较弱的嘴形压小，让主要嘴形更突出。\n细小的嘴角、酒窝、鼻翼动作看不到 → 调低“压小弱嘴形”或调大“弱嘴形保留量”。\n零碎的小嘴形太多 → 调高“压小弱嘴形”。</string>
+    <string name="m_subtle_pro">本帧33项嘴部系数取最小值L、最大值H，相对强度r = (x − L) ÷ (H − L + 10⁻¹⁰)。乘数m = 1 + k·log₁₀(r + d)，输出x + s·(x·m − x)，最后限制到[0, 1]。r + d &lt; 1时m &lt; 1（压小），大于1时放大。例：k = 0.6、d = 0.1时，r = 0.1乘约0.581，r = 0.5乘约0.867，r = 1乘约1.025。CheekPuff（索引0）参与L、H，自身不缩放。与源频率无关。</string>
+    <string name="r_subtle_hold">酒窝停在</string>
+    <string name="ctx_subtle">嘴角上扬</string>
+    <string name="m_tongue_out">伸舌再收回</string>
+    <string name="m_tongue_out_look">伸舌停一秒再收回。\n伸出、收回慢半拍 → 调低“伸舌防抖”或调大“伸舌跟随速度”。\n舌头闪烁不稳 → 反过来调。</string>
+    <string name="m_tongue_out_pro" formatted="false">指数移动平均（EMA）：y = y₋₁ + α·(x − y₋₁)。跟随速度w是24 Hz参考权重，运行时α = 1 − (1 − w)^r，r = Δt ÷ (1/24 s)。w = 60%时，24 Hz下每次采用60%，Δt = 1/90 s时每次约21.7%，时间常数都约45 ms，与源频率无关。最后按s混合：x + s·(y − x)。输入是经过触发线处理后的TongueOut。</string>
+    <string name="r_tongue_out_rise">伸出用时</string>
+    <string name="r_tongue_out_fall">收回用时</string>
+    <string name="m_tongue_slight">轻轻伸一点舌</string>
+    <string name="m_tongue_slight_look" formatted="false">只伸出一点，模型给出45%。原厂设置把低于60%的都当作没伸，所以Avatar完全不显示。\n轻轻伸舌显示不出来 → 调低“伸舌触发线”。\n没伸舌却偶尔闪出舌头 → 调高“伸舌触发线”。</string>
+    <string name="m_tongue_slight_pro">x为经过“压小弱嘴形”后的TongueOut。x &lt; θ时x′ = 0，x &gt; θ时x′ = g·x，x = θ时保持；输出x + s·(x′ − x)，平滑前限制到[0, 1]。例：θ = 0.6、g = 1.5时，输入0.7得到1.05，限制为1。与源频率无关。</string>
+    <string name="r_tongue_slight_hold">伸舌停在</string>
+</resources>
