@@ -4,7 +4,7 @@ English | [简体中文](README_zh.md)
 
 An eye-tracking enhancement Magisk module for the PICO 4 Pro: it opens the eye-tracking service's per-eye gate for real pupil data, decouples the facial expression model so each eye is processed on its own, and targets 90 Hz for both eye and mouth expressions by default instead of the stock rate of about 24 Hz. Use it with [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) and [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule).
 
-> v2.5.1 · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
+> v2.5.2 · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
 
 ## What it does
 
@@ -68,8 +68,8 @@ The installer verifies the SHA-256 of the device's eye-tracking libraries and st
 2. Flash it in the Magisk app under Install from storage, or from a command line:
 
    ```sh
-    adb push magisk-picoet-enhance-v2.5.1.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.5.1.zip'
+    adb push magisk-picoet-enhance-v2.5.2.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.5.2.zip'
    ```
 
 3. Reboot the headset.
@@ -132,11 +132,11 @@ Rates set in 2.4.0 or later survive reinstalls and upgrades. Only the first migr
 
 PICO's stock firmware postprocesses the expression model's output: brow curves and links, Blink endpoint snapping, adaptive/composite/Kalman filters, mouth baseline removal, log compression, the tongue threshold and smoothing. Its parameters were fixed. Since 2.5.0 this module exposes 44 of them as settings whose defaults are the stock values; the processing algorithms themselves remain PICO's.
 
-The module includes a separate **PicoET-Enhance** settings app. Open it from the headset application library after installation and reboot; uninstalling the module and rebooting removes it together with the module. Start offers four presets. The list on the left names 15 movements to check in a mirror, such as a blink, raising the brows or talking. Each movement page draws what the model outputs and what the avatar receives for that movement, says what usually goes wrong and which slider to move, and shows the settings that shape it; the chart recalculates as you drag. These charts are worked examples at a fixed 90 updates per second, for comparing settings. All settings lists all 44 values in processing order. A switch at the top shows the same settings in Simple wording or Technical wording (variables, formulas and calculation conditions) without changing any setting. Tap a value for precise input or an individual reset; no configuration-text editing is needed. Both the panel and PicoFacialBridge remain rootless: the panel submits fixed requests from its private Android sandbox to the module-owned worker. The VRCFT module manages only PC-side processing.
+The module includes a separate **PicoET-Enhance** settings app. Open it from the headset application library after installation and reboot; uninstalling the module and rebooting removes it together with the module. Start offers four presets. The list on the left names 15 movements to check in a mirror, such as a blink, raising the brows or talking. Each movement page draws what the model outputs and what the avatar receives for that movement, says what usually goes wrong and which slider to move, and shows the settings that shape it; the chart recalculates as you drag. These charts are worked examples at a fixed 90 updates per second, for comparing settings. All settings lists all 44 values in processing order. A switch at the top shows the same settings in Simple wording or Technical wording (variables, formulas and calculation conditions) without changing any setting. Drag a slider for larger changes or tap ◀ / ▶ at either end for one fine step. Tap a value for precise input or an individual reset; no configuration-text editing is needed. Both the panel and PicoFacialBridge remain rootless: the panel submits fixed requests from its private Android sandbox to the module-owned worker. The VRCFT module manages only PC-side processing.
 
 The file is `/data/local/tmp/picoet-postprocessing.conf`: `key=value`, with `#` comments. `version=1` is required; omitted fields keep existing defaults. Each `.strength` accepts 0–1: 0 bypasses the stage, 1 retains its existing amount, and intermediate values mix its input with its result. `eye.enabled` and `mouth.enabled` accept 0/1 to bypass/enable the entire region.
 
-- **Balanced (recommended)**: [`postprocessing-balanced.conf`](magisk-picoet-enhance/postprocessing-balanced.conf) lowers the brow Kalman share and raises its follow speed, so brows settle in about 0.2 s instead of about 1 s. It also weakens the wide-eye and blink brow links and the outer-brow follow, removes the second mouth smoothing pass, halves weak-shape compression and lowers the tongue threshold to 0.35. Held expressions stay about as steady as stock. Unlisted fields use the defaults.
+- **Balanced (recommended)**: [`postprocessing-balanced.conf`](magisk-picoet-enhance/postprocessing-balanced.conf) takes a middle ground between Stock and Responsive, moderately reducing eye, brow, mouth and tongue smoothing so small widening movements, blinks, gaze, brows and mouth shapes follow more closely while retaining more smoothing than Responsive. It weakens brow links and weak-shape compression, removes the second mouth smoothing pass, speeds up rest learning and sets the tongue threshold to 0.35. Blink snapping, rest removal and the lip closure boost stay on. Fine motion remains more visible than under stock settings. Unlisted fields use the defaults.
 - **Responsive**: [`postprocessing-responsive.conf`](magisk-picoet-enhance/postprocessing-responsive.conf) keeps about half of the smoothing and turns the brow links off, so every movement follows the model within about 0.1 s. Small jitter shows while holding still. Blink snapping, rest removal and the MouthClose addition stay on.
 - **No processing**: [`postprocessing-raw.conf`](magisk-picoet-enhance/postprocessing-raw.conf) emits bounded current model values and skips the stock postprocessing above. Per-eye quality, references, source identity, validity and 0–1 output bounds remain enabled. This is not raw camera data or a bypass of processing inside the model.
 - **Stock / individual tuning**: [`postprocessing-default.conf`](magisk-picoet-enhance/postprocessing-default.conf) lists all 44 parameters with PICO's original values. Higher `adaptive.k` or `current_weight` follows current samples more closely. Increasing Kalman process noise or decreasing measurement noise generally reduces smoothing. Bypassing filters exposes more noise and abrupt changes; PC/VRCFT filters remain independent.
@@ -149,7 +149,7 @@ MOD=/data/adb/modules/picoet-enhance
 sh "$MOD/picoet.sh" reload-processing
 ```
 
-Changes load at the next payload startup and survive reinstalls/upgrades. Invalid, duplicate or unknown fields reject a save; malformed or incorrectly owned files at startup report failure rather than silently restoring filters. A missing file keeps existing behavior. Headset native numerical tests, companion boot integration and rootless IPC save/apply/restore pass on PICO 4 Pro / PICO OS 5.13.7 with SELinux enforcing. Worn response and noise still need comparison.
+Changes load at the next payload startup and survive reinstalls/upgrades. To adopt an updated preset, select it again, then save and apply it. Invalid, duplicate or unknown fields reject a save; malformed or incorrectly owned files at startup report failure rather than silently restoring filters. A missing file keeps existing behavior. Headset native numerical tests, companion boot integration and rootless IPC save/apply/restore pass on PICO 4 Pro / PICO OS 5.13.7 with SELinux enforcing. Worn response and noise still need comparison.
 
 ## About the enterprise gate
 

@@ -70,24 +70,28 @@ std::string format_postprocessing(const PostProcessingConfig& config) {
 }
 PostProcessingConfig balanced_postprocessing() {
     PostProcessingConfig config;
-    // Brows settle in about 0.2 s instead of 1 s; brow links, mouth compression and
-    // the tongue threshold are relaxed; rest removal and the lip closure addition stay.
-    config.brow_curve = 0.7;
+    // Partial smoothing gives small movements a direct path as well as a filtered
+    // one. Keep stock blink endpoints, rest removal and the lip closure addition.
+    config.brow_curve = 0.6;
     config.brow_power = 2;
-    config.inner_outer = 0.4;
+    config.inner_outer = 0.35;
     config.wide_brow_gain = 0.15;
     config.blink_brow = 0.2;
-    config.eye_k = 14;
+    config.eye_adaptive = 0.8;
+    config.eye_k = 16;
+    config.brow_composite = 0.85;
     config.brow_current = 0.85;
-    config.brow_motion = 0.3;
-    config.brow_kalman = 0.6;
+    config.brow_motion = 0.2;
+    config.brow_kalman = 0.55;
     config.brow_q = 1;
-    config.log_strength = 0.5;
+    config.baseline_alpha = 0.55;
+    config.log_strength = 0.45;
     config.tongue_threshold = 0.35;
     config.tongue_gain = 1.25;
-    config.mouth_adaptive = 0.8;
-    config.mouth_k = 9;
+    config.mouth_adaptive = 0.75;
+    config.mouth_k = 10;
     config.mouth_double = 0;
+    config.tongue_ema = 0.8;
     config.tongue_current = 0.75;
     return config;
 }

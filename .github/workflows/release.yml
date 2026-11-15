@@ -36,6 +36,18 @@ jobs:
       - name: Check companion permission boundary
         run: python -B -X utf8 -m unittest discover -s headset/tests -p "test_*.py" -v
 
+      - name: Check native presets and response
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake -S hook/tests -B artifacts/host-tests -G "Visual Studio 17 2022" -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'Host configure failed' }
+          cmake --build artifacts/host-tests --config Release
+          if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
+          & artifacts/host-tests/Release/postprocessing_test.exe magisk-picoet-enhance/postprocessing-default.conf magisk-picoet-enhance/postprocessing-balanced.conf magisk-picoet-enhance/postprocessing-responsive.conf magisk-picoet-enhance/postprocessing-raw.conf
+          if ($LASTEXITCODE -ne 0) { throw 'Preset files differ from native presets' }
+          ctest --test-dir artifacts/host-tests -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw 'Host tests failed' }
+
       - name: Verify version
         run: |
           $ErrorActionPreference = 'Stop'

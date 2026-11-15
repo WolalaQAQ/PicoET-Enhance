@@ -38,6 +38,35 @@ public final class ProcessingSettingsTest {
                 previous = value;
             }
         }
+        // Fine arrows use the field step, not one of the slider's 1001 positions.
+        for (ProcessingSettings.Field field : ProcessingSettings.FIELDS) {
+            if (field.toggle) continue;
+            check(field.nudge(field.min, -1) == field.min);
+            check(field.nudge(field.max, 1) == field.max);
+            for (int n = 0; n <= 1000; ++n) {
+                double current = field.value(n);
+                for (int direction : new int[]{-1, 1}) {
+                    double next = field.nudge(current, direction);
+                    check(Double.isFinite(next) && next >= field.min && next <= field.max);
+                    check(direction < 0 ? next <= current : next >= current);
+                    double expected = Math.max(field.min, Math.min(field.max, current + direction * field.step));
+                    check(Math.abs(next - expected) <= (Math.ulp(current) + Math.ulp(field.step)) * 2);
+                }
+            }
+        }
+        ProcessingSettings.Field strength = ProcessingSettings.field("eye.adaptive.strength");
+        check(strength.nudge(.8, 1) == .81 && strength.nudge(.8, -1) == .79);
+        double stepped = 0;
+        for (int n = 0; n < 100; ++n) stepped = strength.nudge(stepped, 1);
+        check(stepped == 1);
+        for (int n = 0; n < 100; ++n) stepped = strength.nudge(stepped, -1);
+        check(stepped == 0);
+        ProcessingSettings.Field currentWeight = ProcessingSettings.field("eye.brow_composite.current_weight");
+        check(currentWeight.nudge(currentWeight.nudge(currentWeight.initial, 1), -1) == currentWeight.initial);
+        check(ProcessingSettings.field("eye.adaptive.k").nudge(16, 1) == 16.1);
+        check(ProcessingSettings.field("eye.brow_kalman.process_noise").nudge(.1, 1) == .101);
+        // A precisely entered value keeps its offset from the slider grid.
+        check(strength.nudge(.123456, 1) == .133456);
         for (String invalid : new String[]{"", "version=2\n", "version=1\nversion=1\n", "version=1\nunknown=1\n",
                 "version=1\neye.enabled=.5\n", "version=1\neye.adaptive.k=NaN\n", "version=1\neye.adaptive.k=Infinity\n",
                 "version=1\neye.blink_endpoints.low=.9\n", "version=1\nmouth.baseline.window=-1\n",
@@ -45,6 +74,18 @@ public final class ProcessingSettingsTest {
         ProcessingSettings bounds = new ProcessingSettings();
         try { bounds.set("eye.blink_endpoints.low", .9); throw new AssertionError(); }
         catch (IllegalArgumentException expected) { check(bounds.same(original)); }
+        for (String key : new String[]{"eye.blink_endpoints.low", "eye.blink_endpoints.high"}) {
+            ProcessingSettings blink = new ProcessingSettings();
+            ProcessingSettings.Field field = ProcessingSettings.field(key);
+            int direction = key.endsWith(".low") ? 1 : -1;
+            blink.set(key, direction > 0 ? .799 : .041);
+            String before = blink.format();
+            try { blink.set(key, field.nudge(blink.get(key), direction)); throw new AssertionError(); }
+            catch (IllegalArgumentException expected) {
+                check(expected.getMessage().equals("blink_order"));
+                check(blink.format().equals(before));
+            }
+        }
         bounds.set("eye.blink_endpoints.high", .95); bounds.set("eye.blink_endpoints.low", .9);
         check(bounds.get("eye.blink_endpoints.low") == .9);
         check(ProcessingSettings.field("eye.adaptive.k").logarithmic);
@@ -55,6 +96,11 @@ public final class ProcessingSettingsTest {
         check(!state.ready() && !state.canSave() && !state.canApply());
         state.loaded(original.format());
         check(state.ready() && state.phase().equals("loaded") && !state.canSave() && state.canApply());
+        state.draft.set(strength.key, strength.nudge(state.draft.get(strength.key), -1));
+        check(state.draft.differences(state.saved) == 1 && state.canSave() && !state.canApply());
+        check(state.saved.same(original) && state.applied == null);
+        state.draft.set(strength.key, strength.nudge(state.draft.get(strength.key), 1));
+        check(state.draft.same(original) && !state.canSave() && state.canApply());
         state.draft.set("eye.adaptive.strength", .25);
         check(state.phase().equals("unsaved") && state.canSave() && !state.canApply());
         check(state.saved.same(original) && state.applied == null);

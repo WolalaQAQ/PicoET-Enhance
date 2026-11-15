@@ -2,6 +2,21 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
+## [2.5.2] - 2026-11-15
+
+### Features
+- Add ◀ / ▶ fine-adjustment buttons beside every numeric slider in the settings app. Each tap changes the draft by the field's fixed step, keeping the value, slider and chart in sync. Precise input remains available.
+
+### Fixed
+- Retune Balanced so small widening movements and eye, brow, mouth and tongue actions follow more readily. Keep more smoothing than Responsive, along with blink snapping, rest removal and the lip closure boost. Update both languages in the panel.
+
+### Design Rationale
+- Fine arrows use the stored value rather than slider positions, making controller clicks precise even on logarithmic ranges. Balanced trades a little steadiness for quicker small movements; release builds check all eye and mouth channels and verify preset files against native definitions.
+
+### Notes & Caveats
+- Stock defaults, Responsive and No processing are unchanged. Saved settings are not replaced automatically; select, save and apply Balanced again to adopt its new values.
+- `versionCode` is 23. The settings app keeps the same signing identity and preserves its preferences on update.
+
 ## [2.5.1] - 2026-11-15
 
 ### Fixed

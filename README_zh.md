@@ -4,7 +4,7 @@
 
 面向 PICO 4 Pro 的眼动增强 Magisk 模块：打开眼动服务的逐眼门控以输出真实瞳孔数据，解除面部表情模型的跨眼耦合让左右眼各自计算，并把眼部与嘴部表情目标频率从原厂约 24 Hz 提高到默认 90/90 Hz。配合 [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) 和 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) 使用。
 
-> v2.5.1 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
+> v2.5.2 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
 
 ## 它做什么
 
@@ -68,8 +68,8 @@ Windows 11 可能会忽略官方宿主申请的 1 ms 定时器精度，这时每
 2. 在 Magisk App 中通过“从本地安装”刷入，或使用命令行：
 
    ```sh
-    adb push magisk-picoet-enhance-v2.5.1.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.5.1.zip'
+    adb push magisk-picoet-enhance-v2.5.2.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.5.2.zip'
    ```
 
 3. 重启头显。
@@ -132,11 +132,11 @@ sh /data/adb/modules/picoet-enhance/picoet.sh status
 
 PICO原厂会在表情模型输出之后做一系列后处理：眉部曲线与联动、Blink端点补齐、自适应／复合／Kalman滤波、嘴部基线扣除、log压缩、伸舌门槛与平滑等。这些处理原本参数固定。从2.5.0起，本模块把其中44个参数开放为配置项，默认值就是原厂值；处理算法本身仍是原厂的。
 
-模块附带独立的 **PicoET-Enhance** 设置应用，安装模块并重启后从头显应用库打开，卸载模块并重启后随模块一起移除。「开始」页提供四个预设；左侧列出15个可以照镜子检查的动作，例如眨眼、抬眉、说话。每个动作页画出模型给出的值和Avatar收到的值，写明这个动作常见的问题和该拖哪个滑杆，旁边是影响它的设置，拖动时图会重新计算。图中动作按每秒90次更新的固定条件计算，用于比较设置。「全部设置」按处理顺序列出全部44项。顶部可在「简单」和「专业」两种说明之间切换，专业说明给出变量、公式和计算条件，切换不改变任何设置。点击数值可精确输入或恢复单项默认，不需要编辑配置文本。面板和PicoFacialBridge均免Root：面板从自己的Android私有目录提交固定请求，由模块后台执行。VRCFT模块只处理PC端数据。
+模块附带独立的 **PicoET-Enhance** 设置应用，安装模块并重启后从头显应用库打开，卸载模块并重启后随模块一起移除。「开始」页提供四个预设；左侧列出15个可以照镜子检查的动作，例如眨眼、抬眉、说话。每个动作页画出模型给出的值和Avatar收到的值，写明这个动作常见的问题和该拖哪个滑杆，旁边是影响它的设置，拖动时图会重新计算。图中动作按每秒90次更新的固定条件计算，用于比较设置。「全部设置」按处理顺序列出全部44项。顶部可在「简单」和「专业」两种说明之间切换，专业说明给出变量、公式和计算条件，切换不改变任何设置。拖动滑块粗调，点击两侧的◀／▶单步微调；点击数值可精确输入或恢复单项默认，不需要编辑配置文本。面板和PicoFacialBridge均免Root：面板从自己的Android私有目录提交固定请求，由模块后台执行。VRCFT模块只处理PC端数据。
 
 配置文件为 `/data/local/tmp/picoet-postprocessing.conf`，采用 `key=value`，支持 `#` 注释。`version=1` 必填，省略其他字段使用原有默认值。所有 `.strength` 均为 0–1：0 关闭该步骤，1 保留原有强度，中间值在当前输入与处理结果之间混合；`eye.enabled`、`mouth.enabled` 用 0／1 旁路／启用整个区域。
 
-- **均衡（推荐）**：[`postprocessing-balanced.conf`](magisk-picoet-enhance/postprocessing-balanced.conf) 降低眉部Kalman比例并提高其跟随速度，眉毛约0.2秒到位（原厂约1秒）；同时减弱瞪眼／闭眼对眉毛的带动和外眉跟随，去掉嘴部二次平滑，log压缩减半，伸舌门槛降到0.35。停住时的稳定程度与原厂相近。未列出的项使用默认值。
+- **均衡（推荐）**：[`postprocessing-balanced.conf`](magisk-picoet-enhance/postprocessing-balanced.conf) 在原厂和灵敏之间折中，适度减轻眼、眉、嘴和舌头的平滑，让轻微瞪眼、眨眼、转眼、眉毛和嘴形更跟手，同时比灵敏保留更多防抖。减弱眉部联动与弱嘴形压缩，取消嘴部二次平滑，加快放松残留的学习，伸舌门槛为0.35。保留眨眼补齐、残留扣除和双唇合拢补偿；细小动作仍比原厂更明显。未列出的项使用默认值。
 - **灵敏**：[`postprocessing-responsive.conf`](magisk-picoet-enhance/postprocessing-responsive.conf) 保留约一半平滑并关闭眉部联动，所有动作约0.1秒内跟上模型；停住时能看到细小抖动。眨眼补齐、残留扣除和MouthClose补偿保留。
 - **不处理**：使用 [`postprocessing-raw.conf`](magisk-picoet-enhance/postprocessing-raw.conf)，输出模型当前值的限幅结果，跳过上述原厂后处理。逐眼质量、参考图、源身份、有效位及 0–1 输出范围仍保留，不代表原始相机图像或停用模型内部处理。
 - **原厂／逐项调整**：[`postprocessing-default.conf`](magisk-picoet-enhance/postprocessing-default.conf) 列出全部 44 个参数的PICO原值。`adaptive.k` 越大越跟手；`current_weight` 越大越偏向当前样本；Kalman 的 process noise 增大或 measurement noise 减小，通常会减弱平滑。关闭后噪声和动作跳变会更明显；PC／VRCFT 自己的滤波仍独立生效。
@@ -149,7 +149,7 @@ MOD=/data/adb/modules/picoet-enhance
 sh "$MOD/picoet.sh" reload-processing
 ```
 
-修改在下一次载荷启动时读取，重装／升级保留配置。非法参数、重复或未知字段拒绝保存；启动时发现文件损坏或权限不符，会报告失败而非默默恢复滤波。无配置文件保持原有行为。头显原生数值、面板开机集成及免Root通信的保存／应用／恢复已在PICO 4 Pro／PICO OS 5.13.7／SELinux Enforcing下验证；佩戴响应与噪声仍待比较。
+修改在下一次载荷启动时读取，重装／升级保留配置。要采用更新后的预设，需重新选择该预设，再保存、应用。非法参数、重复或未知字段拒绝保存；启动时发现文件损坏或权限不符，会报告失败而非默默恢复滤波。无配置文件保持原有行为。头显原生数值、面板开机集成及免Root通信的保存／应用／恢复已在PICO 4 Pro／PICO OS 5.13.7／SELinux Enforcing下验证；佩戴响应与噪声仍待比较。
 
 ## 关于企业版门控
 

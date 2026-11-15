@@ -135,6 +135,29 @@ class RootlessPanelContract(unittest.TestCase):
         self.assertEqual(re.findall(r'request\("(\w+)"\)', source), ['read', 'write', 'apply'])
         self.assertIn('setOnClickListener(v -> replaceDraft(action))', source)
 
+    def test_fine_arrows_change_the_draft_without_slider_quantization(self):
+        source = (SOURCE/'MainActivity.java').read_text()
+        arrows = re.search(r'private Button fineButton\(.*?\) \{(.*?)\n    \}', source, re.S)[1]
+        for required in ('control(button(', '".decrease"', '".increase"', 'setContentDescription(',
+                         '"fine_decrease"', '"fine_increase"', 'field.nudge(current, direction)',
+                         'if (next == current) return', 'state.draft.set(field.key, next)', 'edited()',
+                         'message(s("blink_order"), true)'):
+            self.assertIn(required, arrows)
+        for forbidden in ('request(', '.progress(', '.value(', '.saved', '.applied'):
+            self.assertNotIn(forbidden, arrows)
+        fields = re.search(r'private void fieldControl\(.*?\) \{(.*?)\n    \}', source, re.S)[1]
+        self.assertIn('fineButton(field, -1)', fields)
+        self.assertIn('fineButton(field, 1)', fields)
+        self.assertEqual(fields.count('new LinearLayout.LayoutParams(dp(48), dp(48))'), 2)
+        self.assertIn('adjustments.setAlpha(alpha)', fields)
+        controls = re.search(r'private void refreshControls\(\) \{(.*?)\n    \}', source, re.S)[1]
+        self.assertIn('for (View v : formControls) v.setEnabled(!busy && state.ready())', controls)
+        for directory in ('values', 'values-zh'):
+            resources = self.resources(directory)
+            for name in ('fine_decrease', 'fine_increase'):
+                self.assertIn('{0}', resources[name])
+                self.assertIn('{1}', resources[name])
+
     def test_literal_percentages_are_not_android_format_substitutions(self):
         for path in (ROOT/'headset/res').rglob('*.xml'):
             for item in ET.parse(path).findall('string'):

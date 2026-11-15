@@ -20,8 +20,8 @@
     <string name="start_title">Tune it in front of a mirror</string>
     <string name="start_hint">Pick a preset, save and apply it, then look in a mirror with the headset on. If a movement looks wrong, open it on the left: grey is what the model outputs, green is what the avatar receives, and the settings that change it are right beside the chart.</string>
     <string name="preset_balanced">Balanced (recommended)</string>
-    <string name="preset_balanced_hint">Brows catch up in about 0.2 s instead of 1 s, the jaw opens more fully while talking, the mouth closes fully at rest, a slight tongue shows, and blinks and wide eyes barely move the brows. Held expressions stay as steady as stock.</string>
-    <string name="preset_balanced_pro" formatted="false">Changes from stock: brow Kalman share 60%, Q = 1 (Q/R = 10); composite w = 0.85, eye-motion hold q = 30%; raise/frown p = 2 at 70%; outer follow 40%; Wide link g = 0.15; Blink link share 20%; eye k = 14; mouth smoothing share 80%, k = 9, second pass 0%; log compression 50%; tongue threshold 0.35, gain 1.25, EMA weight 75%. Everything else at the defaults.</string>
+    <string name="preset_balanced_hint">A middle ground between Stock and Responsive: gaze, blinks, wide eyes, brows, mouth shapes and tongue movements follow faster than stock, with more smoothing retained. Keeps blink snapping, rest removal and the lip closure boost, with lighter brow links. Steadier than Responsive while held, with some fine motion still visible.</string>
+    <string name="preset_balanced_pro" formatted="false">Changes from stock: eye smoothing share 80%, k = 16; brow composite share 85%, w = 0.85, eye-motion hold q = 20%; Kalman share 55%, Q = 1 (Q/R = 10); raise/frown p = 2 at 60%; outer follow 35%; Wide link g = 0.15; Blink link share 20%; rest-learning weight 55%; mouth smoothing share 75%, k = 10, second pass 0%; log compression 45%; tongue threshold 0.35, gain 1.25, EMA share 80%, weight 75%. Everything else at the defaults.</string>
     <string name="preset_responsive">Responsive</string>
     <string name="preset_responsive_hint">Every movement catches up within about 0.1 s, close to the model itself; half of the smoothing is kept, so small jitter shows while holding still. Blinks and wide eyes do not move the brows, and the brow tails move on their own.</string>
     <string name="preset_responsive_pro" formatted="false">Changes from stock: eye smoothing share 50%, k = 24; composite w = 1, eye-motion hold 0%; Kalman share 30%, Q = 1, R = 0.05; raise/frown p = 2 at 30%; outer follow, Wide and Blink links 0%; mouth smoothing share 50%, k = 16, second pass 0%; log compression 25%; tongue threshold 0.3, gain 1.2, EMA share 50%, weight 90%. Everything else at the defaults.</string>
@@ -38,7 +38,9 @@
     <string name="legend_saved">Saved settings</string>
     <string name="scope_example">The movement is a synthetic example computed at 90 updates per second, for comparing settings; it is not measured on the headset. See the Guide for how time is handled.</string>
     <string name="settings_for">Settings that shape this movement</string>
-    <string name="settings_for_hint">The chart recalculates while you drag. Tap a value to type an exact number or reset that setting alone.</string>
+    <string name="settings_for_hint">Drag a slider for larger changes or tap ◀ / ▶ at either end for fine steps; the chart recalculates at once. Tap a value to type an exact number or reset that setting alone.</string>
+    <string name="fine_decrease">Decrease {0}, step {1}</string>
+    <string name="fine_increase">Increase {0}, step {1}</string>
     <string name="also_moves">Also affects: {0}</string>
     <string name="list_separator">, </string>
     <string name="changed_badge">{0} unsaved</string>

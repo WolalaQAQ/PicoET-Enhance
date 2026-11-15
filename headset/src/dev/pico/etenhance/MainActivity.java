@@ -364,15 +364,36 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private Button fineButton(ProcessingSettings.Field field, int direction) {
+        Button arrow = control(button(direction < 0 ? "◀" : "▶", false));
+        arrow.setTag(field.key + (direction < 0 ? ".decrease" : ".increase"));
+        arrow.setTextSize(16); arrow.setPadding(0, 0, 0, 0);
+        arrow.setContentDescription(fmt(direction < 0 ? "fine_decrease" : "fine_increase", s(field.resource()), field.display(field.step)));
+        arrow.setOnClickListener(v -> {
+            double current = state.draft.get(field.key), next = field.nudge(current, direction);
+            if (next == current) return;
+            try { state.draft.set(field.key, next); edited(); }
+            catch (IllegalArgumentException error) { message(s("blink_order"), true); }
+        });
+        return arrow;
+    }
+
     private void fieldControl(LinearLayout box, ProcessingSettings.Field field, String moment) {
         gap(box, 16);
         LinearLayout names = row(); TextView name = text(s(field.resource()), 15, TEXT, false);
         names.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
         Button value = control(button("", false)); value.setTag(field.key + ".value"); value.setTextSize(14);
         value.setOnClickListener(v -> exactValue(field)); names.addView(value); box.addView(names);
+        LinearLayout adjustments = row();
+        adjustments.addView(fineButton(field, -1), new LinearLayout.LayoutParams(dp(48), dp(48)));
         SeekBar slider = control(new SeekBar(this)); slider.setTag(field.key); slider.setMax(1000);
         slider.setProgressTintList(ColorStateList.valueOf(ACCENT)); slider.setThumbTintList(ColorStateList.valueOf(ACCENT));
-        slider.setContentDescription(s(field.resource())); box.addView(slider, new LinearLayout.LayoutParams(-1, dp(44)));
+        slider.setContentDescription(s(field.resource()));
+        LinearLayout.LayoutParams sliderParams = new LinearLayout.LayoutParams(0, dp(48), 1);
+        sliderParams.leftMargin = dp(6); sliderParams.rightMargin = dp(6);
+        adjustments.addView(slider, sliderParams);
+        adjustments.addView(fineButton(field, 1), new LinearLayout.LayoutParams(dp(48), dp(48)));
+        box.addView(adjustments, new LinearLayout.LayoutParams(-1, -2));
         LinearLayout ends = row(); ends.setGravity(Gravity.TOP);
         TextView less = text("← " + s(field.resource() + "_less"), 12, MUTED, false);
         TextView more = text(s(field.resource() + "_more") + " →", 12, MUTED, false); more.setGravity(Gravity.END);
@@ -411,7 +432,7 @@ public final class MainActivity extends Activity {
             boolean shown = why != null && !why[0].equals("inactive_region");
             note.setText(shown ? fmt(why[0], s(ProcessingSettings.field(why[1]).resource())) : "");
             note.setVisibility(shown ? View.VISIBLE : View.GONE);
-            float alpha = why == null ? 1 : .5f; name.setAlpha(alpha); slider.setAlpha(alpha); ends.setAlpha(alpha);
+            float alpha = why == null ? 1 : .5f; name.setAlpha(alpha); adjustments.setAlpha(alpha); ends.setAlpha(alpha);
         });
     }
 

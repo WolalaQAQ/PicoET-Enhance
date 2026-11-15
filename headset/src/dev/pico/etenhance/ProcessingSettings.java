@@ -29,6 +29,11 @@ final class ProcessingSettings {
             value = logarithmic ? new BigDecimal(value, new MathContext(3)).doubleValue() : Math.round(value / step) * step;
             return Math.max(min, Math.min(max, value));
         }
+        /** Step from the stored value, independent of the slider's linear/logarithmic scale. */
+        double nudge(double value, int direction) {
+            double next = BigDecimal.valueOf(value).add(BigDecimal.valueOf(step).multiply(BigDecimal.valueOf(direction))).doubleValue();
+            return Math.max(min, Math.min(max, next));
+        }
         String display(double value) {
             return percent ? number(Math.round(value * 10000) / 100.0) + "%" : number(value);
         }

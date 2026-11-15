@@ -20,8 +20,8 @@
     <string name="start_title">照着镜子调</string>
     <string name="start_hint">先选一个预设，保存并应用，然后戴上头显照镜子。哪个动作看着不对，就在左边点开它：图里灰线是模型给出的，绿线是Avatar收到的，旁边就是能改善它的设置。</string>
     <string name="preset_balanced">均衡（推荐）</string>
-    <string name="preset_balanced_hint">眉毛约0.2秒跟上（原厂要1秒），说话时张嘴更完整，闭嘴后不留缝，轻轻伸舌也能显示，眨眼和瞪眼不再明显带动眉毛。停住不动时和原厂一样稳。</string>
-    <string name="preset_balanced_pro" formatted="false">相对原厂：眉部Kalman比例60%、Q = 1（Q/R = 10）；复合平滑w = 0.85，眼动抑制q = 30%；取舍p = 2、比例70%；外眉跟随40%；Wide带动g = 0.15；Blink带动比例20%；眼睛k = 14；嘴部平滑比例80%、k = 9，二次平滑0%；log压缩比例50%；伸舌门槛0.35、倍率1.25、EMA权重75%。其余为默认值。</string>
+    <string name="preset_balanced_hint">在原厂和灵敏之间折中：眼神、眨眼、瞪眼、眉毛、嘴形和伸舌比原厂更跟手，也保留较多防抖。眨眼补齐、放松残留扣除和双唇合拢补偿保留，眉毛联动减弱。停住时比灵敏更稳，仍会显示一些细小动作。</string>
+    <string name="preset_balanced_pro" formatted="false">相对原厂：眼睛平滑比例80%、k = 16；眉部复合平滑比例85%、w = 0.85，眼动抑制q = 20%；Kalman比例55%、Q = 1（Q/R = 10）；取舍p = 2、比例60%；外眉跟随35%；Wide带动g = 0.15；Blink带动比例20%；残留学习权重55%；嘴部平滑比例75%、k = 10，二次平滑0%；log压缩比例45%；伸舌门槛0.35、倍率1.25，EMA比例80%、权重75%。其余为默认值。</string>
     <string name="preset_responsive">灵敏</string>
     <string name="preset_responsive_hint">所有动作约0.1秒内跟上，接近模型原样；防抖只留一半，停住时能看到细小抖动。眉毛不受眨眼和瞪眼带动，眉梢可以单独动。</string>
     <string name="preset_responsive_pro" formatted="false">相对原厂：眼睛平滑比例50%、k = 24；复合平滑w = 1，眼动抑制0%；Kalman比例30%、Q = 1、R = 0.05；取舍p = 2、比例30%；外眉跟随、Wide和Blink带动均为0%；嘴部平滑比例50%、k = 16，二次平滑0%；log压缩比例25%；伸舌门槛0.3、倍率1.2，EMA比例50%、权重90%。其余为默认值。</string>
@@ -38,7 +38,9 @@
     <string name="legend_saved">已保存的设置</string>
     <string name="scope_example">图中动作是合成的示例，按每秒90次更新计算，用来比较设置；不是头显上测得的数据。时间换算见“说明”。</string>
     <string name="settings_for">影响这个动作的设置</string>
-    <string name="settings_for_hint">拖动时图会立刻重算。点右侧数值可以输入精确值或单独恢复默认。</string>
+    <string name="settings_for_hint">拖动滑块粗调，点两侧的◀／▶逐步微调，图会立刻重算。点右侧数值可以输入精确值或单独恢复默认。</string>
+    <string name="fine_decrease">减小{0}，每次{1}</string>
+    <string name="fine_increase">增大{0}，每次{1}</string>
     <string name="also_moves">也影响：{0}</string>
     <string name="list_separator">、</string>
     <string name="changed_badge">{0}项未保存</string>
