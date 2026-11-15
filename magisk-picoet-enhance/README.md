@@ -1,4 +1,4 @@
-# PicoET-Enhance 2.4.2
+# PicoET-Enhance 2.5.2
 
 Eye-tracking enhancement for PICO 4 Pro running PICO OS 5.13.7 with Magisk.
 The installer checks the device's eye-tracking library hashes before installing.
@@ -67,6 +67,50 @@ again. Rates set in 2.4.0 or later survive reinstalls and upgrades. Only the fir
 migration from a version before 2.4.0 clears old overrides to start at 90/90.
 Normal mode (`off`) is fully stock.
 
+## Headset postprocessing
+
+PICO's stock firmware postprocesses eye and mouth expressions with fixed parameters.
+This module exposes 44 of those parameters as settings; the defaults are the stock
+values and the algorithms remain PICO's.
+
+The module includes a separate **PicoET-Enhance** settings app in
+`system/app/PicoETEnhance/`. Install the module and reboot to make the panel available
+in the headset application library; uninstalling the module and rebooting removes it. Neither this panel nor Bridge requests root:
+the panel submits fixed requests from its Android sandbox to the module-owned worker.
+Choose a preset, then open the movement that looks wrong in the mirror; each movement
+page shows the settings that shape it. Drag sliders for larger changes or tap the ◀ / ▶
+buttons for fine steps. Tap a value for precise numeric input. All 44
+fields are available without editing configuration text. The bottom bar distinguishes unsaved changes, saved
+settings awaiting application and a successful application this session.
+Save writes `/data/local/tmp/picoet-postprocessing.conf` without restarting tracking.
+Stop tracking clients, then apply the saved file with the separate restart action.
+No Bridge update is required.
+
+The included `postprocessing-default.conf` lists all 44 settings.
+`postprocessing-balanced.conf` moderately reduces smoothing across eyes, brows, mouth and tongue,
+including small movements, while retaining more smoothing than Responsive. It weakens brow links and weak-shape compression, speeds up
+rest learning and keeps blink snapping and the lip closure boost. Some smoothing remains,
+with fine motion more visible than under stock settings. `postprocessing-responsive.conf`
+follows the model within about 0.1 s with half of the smoothing and no brow links.
+`postprocessing-raw.conf` skips the stock numerical postprocessing but keeps inference,
+quality/reference logic, source identity and final output bounds. Use `.strength=0` to bypass a stage, `1` for the existing amount.
+
+Root-shell alternative:
+
+```sh
+MOD=/data/adb/modules/picoet-enhance
+"$MOD/bin/picoet-config" write < "$MOD/postprocessing-balanced.conf"
+sh "$MOD/picoet.sh" reload-processing
+```
+
+The restart action refuses connected clients and never enables an off enhancement.
+The file loads at payload startup; a missing file keeps the existing defaults.
+Saved settings survive upgrades; select, save and apply a preset again to use its updated values.
+Invalid configurations are rejected. No processing settings are sent through UDP
+or the PC module. Headset native numerical tests, companion boot integration and
+rootless IPC save/apply/restore pass on PICO 4 Pro / PICO OS 5.13.7 with SELinux
+enforcing. Worn response and noise still need comparison.
+
 ## Status and troubleshooting
 
 Successful enhancement shows `phase=ready applied_mode=dual applied_gate=on` in
@@ -86,10 +130,12 @@ stops, read the reported reason and logs, resolve it, then run `dual` to retry.
 - Control logs: `/data/adb/picoet-enhance/*.log`
 - Saved mode/gate: `/data/local/tmp/picoet-mode`, `/data/local/tmp/picoet-gate`
 
-To remove the module, uninstall it in Magisk and reboot. Cleanup removes known leaf
+To remove the module, uninstall it in Magisk and reboot. The settings app and the
+postprocessing configuration file are removed too. Cleanup removes known leaf
 files without recursing into unexpected directories or nested mounts; those
 directories may remain.
 
 See the [project README](https://github.com/WolalaQAQ/PicoET-Enhance#compatibility-and-verification)
 for compatibility and validation details. The package contains the module scripts,
-injector and hook payload; device libraries are supplied by the headset firmware.
+injector, hook payload, configuration tools, preset files and the settings app; device
+libraries are supplied by the headset firmware.

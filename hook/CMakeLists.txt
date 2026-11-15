@@ -42,6 +42,8 @@ add_library(picoet_obj OBJECT
     src/expression/integration.cpp
     src/expression/mouth.cpp
     src/expression/numerical.cpp
+    src/expression/postprocessing.cpp
+    src/expression/postprocessing_file.cpp
     src/expression/state.cpp)
 set_target_properties(picoet_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(picoet_obj PRIVATE
@@ -69,3 +71,18 @@ target_link_libraries(picoet-inject PRIVATE dl)
 add_executable(picoet-target src/picoet-target.c)
 target_compile_options(picoet-target PRIVATE -O2 -fPIE -Wall -Wextra)
 target_link_libraries(picoet-target PRIVATE dl)
+
+add_executable(picoet-config src/picoet-config.cpp src/expression/postprocessing.cpp
+    src/expression/postprocessing_file.cpp)
+target_compile_options(picoet-config PRIVATE -std=c++17 -O2 -fPIE -Wall -Wextra)
+target_link_options(picoet-config PRIVATE -static-libstdc++)
+
+add_executable(picoet-panel src/picoet-panel.cpp)
+target_compile_features(picoet-panel PRIVATE cxx_std_17)
+target_compile_options(picoet-panel PRIVATE -O2 -fPIE -Wall -Wextra -Werror)
+target_link_options(picoet-panel PRIVATE -static-libstdc++)
+
+option(PICOET_BUILD_PROCESSING_TESTS "Build isolated postprocessing tests" OFF)
+if(PICOET_BUILD_PROCESSING_TESTS)
+    add_subdirectory(tests)
+endif()

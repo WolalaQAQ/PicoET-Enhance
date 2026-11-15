@@ -17,6 +17,53 @@ English | [简体中文](CHANGELOG_zh.md)
 - Pair with UnifiedPicoModule `feat/tongue-pc`. Normal Magisk packaging, installed versions and default enhancement behavior remain unchanged; tongue components are started explicitly from source.
 - Real sustained worn input, personal-model accuracy and native/VD concurrency still require live testing. The portable controller has fake-device coverage; its integrated deployment has not been run on hardware.
 
+## [2.5.2] - 2026-11-15
+
+### Features
+- Add ◀ / ▶ fine-adjustment buttons beside every numeric slider in the settings app. Each tap changes the draft by the field's fixed step, keeping the value, slider and chart in sync. Precise input remains available.
+
+### Fixed
+- Retune Balanced so small widening movements and eye, brow, mouth and tongue actions follow more readily. Keep more smoothing than Responsive, along with blink snapping, rest removal and the lip closure boost. Update both languages in the panel.
+
+### Design Rationale
+- Fine arrows use the stored value rather than slider positions, making controller clicks precise even on logarithmic ranges. Balanced trades a little steadiness for quicker small movements; release builds check all eye and mouth channels and verify preset files against native definitions.
+
+### Notes & Caveats
+- Stock defaults, Responsive and No processing are unchanged. Saved settings are not replaced automatically; select, save and apply Balanced again to adopt its new values.
+- `versionCode` is 23. The settings app keeps the same signing identity and preserves its preferences on update.
+
+## [2.5.1] - 2026-11-15
+
+### Fixed
+- After a module upgrade, the system kept showing the settings app's previous version (for example 2.4.2 after installing 2.5.0) and would have ignored any new app components. Android caches the parsed app and judges that cache by the app directory's modification time, which stays fixed under the Magisk mount. Installing the module now deletes the app's entry from `/data/system/package_cache`, so the next boot reads the new APK.
+
+### Notes & Caveats
+- `versionCode` is 22. Only the installer changed; the native files, settings app, presets and saved settings behave as in 2.5.0.
+- Verified on PICO 4 Pro / PICO OS 5.13.7 with SELinux enforcing: after installing over 2.5.0 and one reboot, the system reported the settings app's current version.
+
+## [2.5.0] - 2026-11-15
+
+### Features
+- PICO's stock firmware already postprocesses eye and mouth expressions (stage strengths, brow response and links, Blink endpoints, adaptive/composite/Kalman filters, mouth baseline adaptation, weak-shape compression, the tongue threshold and smoothing), with fixed parameters that could not be changed. 2.5.0 exposes 44 of these parameters as settings whose defaults are the stock values. Settings are stored in `/data/local/tmp/picoet-postprocessing.conf`; without that file, processing is identical to stock.
+- Bundle a separate, rootless **PicoET-Enhance** settings app with the module. It appears in the headset application library after installation and reboot, and is removed together with the module after uninstalling and rebooting. The app sends fixed requests from its Android sandbox; the module-owned `picoet-panel` worker carries them out through `picoet-config` and `picoet.sh reload-processing`. Bridge and the PC module need no update and do not manage headset settings.
+- Organize the app around 15 movements to check in a mirror, such as blinking, raising the brows, talking and a slight tongue. Each movement page draws the model value against what the avatar receives, lists common symptoms with the slider to move, and shows the settings that shape that movement; the chart recalculates as you drag. All settings lists the 44 values in processing order. Controls are named after their visible effect, accept precise input and can be reset one at a time.
+- Offer Simple and Technical wording. Simple describes visible movement, direction and trade-off; Technical adds variables, formulas and the source-interval conversion. Switching changes only the text.
+- Provide four presets: **Balanced** (recommended), **Responsive**, **Stock** and **No processing**. Stock uses PICO's original parameters. Balanced lets the brows settle in about 0.2 s instead of about 1 s, keeps fuller jaw movement while talking, shows a slight tongue and weakens the blink/wide-eye brow links, while held expressions stay about as steady as stock. Responsive follows the model within about 0.1 s with half of the smoothing and no brow links. No processing skips this stock postprocessing and outputs bounded model values.
+- Separate saving from applying. Saving replaces the file atomically without restarting tracking. Applying restarts the eye service only when no tracking client is connected and enhancement is on. The bottom bar shows whether there are unsaved changes, saved settings waiting to be applied, or settings applied in this session.
+- Add the root-shell commands `bin/picoet-config write` and `picoet.sh reload-processing`.
+
+### Design Rationale
+- The postprocessing algorithms remain PICO's; this release only makes their parameters configurable. Settings and processing stay on the headset. Source identities, per-eye state, quality/reference logic and final output bounds are unchanged, and default values follow the existing numerical path.
+- Privilege stays inside the existing Magisk module rather than the GUI or the forwarding app. The mailbox accepts only fixed action names, checks the caller's UID and uses directory-relative access; closing the app does not interrupt a module transaction.
+- People tune by what they see on the avatar, so the app starts from a movement and its symptoms instead of 44 implementation stages. Charts use the same formulas as the native code at a fixed example interval of 1/90 s; at runtime the module converts coefficients with the measured interval between source timestamps.
+- Preset descriptions are checked against their stated results: host tests run every movement through the app's simulation of the native chain and assert the quoted brow times, jaw peak, rest leftovers, slight tongue and brow links. Balanced keeps blink snapping, rest removal and the MouthClose addition; without them the eyes do not fully open or close and the mouth stays slightly open.
+
+### Notes & Caveats
+- `versionCode` is 21. Existing mode, gate and rate files are kept. After uninstalling the module and rebooting, the settings app and the postprocessing configuration file are removed.
+- The settings app is signed with the project's release key; future updates use the same key.
+- Configurations load once when the payload starts, so changes take effect after Apply or the next service start.
+- Verified on PICO 4 Pro / PICO OS 5.13.7 with SELinux enforcing: native numerical tests, boot integration of the app and worker, and rootless save/apply/restore covering all four presets and 44 fields. Preset values come from synthetic movements; worn response and noise have not been compared yet.
+
 ## [2.4.2] - 2026-10-24
 
 ### Fixed

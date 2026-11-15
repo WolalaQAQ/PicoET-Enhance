@@ -4,7 +4,7 @@
 
 面向 PICO 4 Pro 的眼动增强 Magisk 模块：打开眼动服务的逐眼门控以输出真实瞳孔数据，解除面部表情模型的跨眼耦合让左右眼各自计算，并把眼部与嘴部表情目标频率从原厂约 24 Hz 提高到默认 90/90 Hz。配合 [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) 和 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) 使用。
 
-> v2.4.2 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
+> v2.5.2 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
 
 **PC舌头开发：**`feat/tongue-pc`增加按需启动的JPEG相机源及PC推理／个人流程，配套UnifiedPicoModule同名分支。按[源码构建与测试说明](TONGUE_zh.md)使用；下方正常Magisk包保持不变。
 
@@ -18,7 +18,7 @@ PICO 4 Pro 的固件会对左右眼分别追踪，但面部表情模型在输出
 
 平滑、嘴部基线适应和质量窗口都按各自来源的时间戳推进：长时间缺帧会让质量窗口暂停，重复或倒退的来源不推进任何状态。
 
-推理模型和融合视线保持原厂行为。每眼保留 Blink 端点、滤波及眼内 inner→outer 眉部联动，嘴部后处理保留原厂规则。暗图接纳、参考保护和模型量化仍启用。PC 端眼球方向与眼睑开合使用 EyeLook 和 `1−Blink`，原生眼数据仅提供实测瞳孔直径。
+推理模型和融合视线保持原厂行为。Blink 端点、眼内眉部联动和眼嘴后处理默认保留，可通过[头显端后处理配置](#头显端后处理配置)分别关闭或调整。暗图接纳、参考保护和模型量化仍启用。PC 端眼球方向与眼睑开合使用 EyeLook 和 `1−Blink`，原生眼数据仅提供实测瞳孔直径。
 
 增强通过运行期 hook 作用于眼动服务，随服务重启而卸载。
 
@@ -70,8 +70,8 @@ Windows 11 可能会忽略官方宿主申请的 1 ms 定时器精度，这时每
 2. 在 Magisk App 中通过“从本地安装”刷入，或使用命令行：
 
    ```sh
-    adb push magisk-picoet-enhance-v2.4.2.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.4.2.zip'
+    adb push magisk-picoet-enhance-v2.5.2.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.5.2.zip'
    ```
 
 3. 重启头显。
@@ -130,15 +130,38 @@ sh /data/adb/modules/picoet-enhance/picoet.sh status
 
 在 2.4.0 及之后版本设置的频率会在重装或升级时保留。只有首次从 2.4.0 之前的版本迁入时，才清除旧覆盖并以 90/90 起步。普通模式 `off` 完全是原厂行为，不受这些文件影响。
 
+### 头显端后处理配置
+
+PICO原厂会在表情模型输出之后做一系列后处理：眉部曲线与联动、Blink端点补齐、自适应／复合／Kalman滤波、嘴部基线扣除、log压缩、伸舌门槛与平滑等。这些处理原本参数固定。从2.5.0起，本模块把其中44个参数开放为配置项，默认值就是原厂值；处理算法本身仍是原厂的。
+
+模块附带独立的 **PicoET-Enhance** 设置应用，安装模块并重启后从头显应用库打开，卸载模块并重启后随模块一起移除。「开始」页提供四个预设；左侧列出15个可以照镜子检查的动作，例如眨眼、抬眉、说话。每个动作页画出模型给出的值和Avatar收到的值，写明这个动作常见的问题和该拖哪个滑杆，旁边是影响它的设置，拖动时图会重新计算。图中动作按每秒90次更新的固定条件计算，用于比较设置。「全部设置」按处理顺序列出全部44项。顶部可在「简单」和「专业」两种说明之间切换，专业说明给出变量、公式和计算条件，切换不改变任何设置。拖动滑块粗调，点击两侧的◀／▶单步微调；点击数值可精确输入或恢复单项默认，不需要编辑配置文本。面板和PicoFacialBridge均免Root：面板从自己的Android私有目录提交固定请求，由模块后台执行。VRCFT模块只处理PC端数据。
+
+配置文件为 `/data/local/tmp/picoet-postprocessing.conf`，采用 `key=value`，支持 `#` 注释。`version=1` 必填，省略其他字段使用原有默认值。所有 `.strength` 均为 0–1：0 关闭该步骤，1 保留原有强度，中间值在当前输入与处理结果之间混合；`eye.enabled`、`mouth.enabled` 用 0／1 旁路／启用整个区域。
+
+- **均衡（推荐）**：[`postprocessing-balanced.conf`](magisk-picoet-enhance/postprocessing-balanced.conf) 在原厂和灵敏之间折中，适度减轻眼、眉、嘴和舌头的平滑，让轻微瞪眼、眨眼、转眼、眉毛和嘴形更跟手，同时比灵敏保留更多防抖。减弱眉部联动与弱嘴形压缩，取消嘴部二次平滑，加快放松残留的学习，伸舌门槛为0.35。保留眨眼补齐、残留扣除和双唇合拢补偿；细小动作仍比原厂更明显。未列出的项使用默认值。
+- **灵敏**：[`postprocessing-responsive.conf`](magisk-picoet-enhance/postprocessing-responsive.conf) 保留约一半平滑并关闭眉部联动，所有动作约0.1秒内跟上模型；停住时能看到细小抖动。眨眼补齐、残留扣除和MouthClose补偿保留。
+- **不处理**：使用 [`postprocessing-raw.conf`](magisk-picoet-enhance/postprocessing-raw.conf)，输出模型当前值的限幅结果，跳过上述原厂后处理。逐眼质量、参考图、源身份、有效位及 0–1 输出范围仍保留，不代表原始相机图像或停用模型内部处理。
+- **原厂／逐项调整**：[`postprocessing-default.conf`](magisk-picoet-enhance/postprocessing-default.conf) 列出全部 44 个参数的PICO原值。`adaptive.k` 越大越跟手；`current_weight` 越大越偏向当前样本；Kalman 的 process noise 增大或 measurement noise 减小，通常会减弱平滑。关闭后噪声和动作跳变会更明显；PC／VRCFT 自己的滤波仍独立生效。
+
+底栏区分未保存、已保存待应用和本次已应用；修改未保存时不能直接应用。重新读取保存值本身不代表运行配置已经核实。保存不重启追踪；先停止 Bridge 及其他眼追／面捕客户端，再点击「应用」，无客户端占用且增强已开启时才重启眼追服务。也可在头显 Root shell 中运行：
+
+```sh
+MOD=/data/adb/modules/picoet-enhance
+"$MOD/bin/picoet-config" write < "$MOD/postprocessing-balanced.conf"
+sh "$MOD/picoet.sh" reload-processing
+```
+
+修改在下一次载荷启动时读取，重装／升级保留配置。要采用更新后的预设，需重新选择该预设，再保存、应用。非法参数、重复或未知字段拒绝保存；启动时发现文件损坏或权限不符，会报告失败而非默默恢复滤波。无配置文件保持原有行为。头显原生数值、面板开机集成及免Root通信的保存／应用／恢复已在PICO 4 Pro／PICO OS 5.13.7／SELinux Enforcing下验证；佩戴响应与噪声仍待比较。
+
 ## 关于企业版门控
 
 固件通过 `PXR::EyeUtil::isBusinessDev()` 控制逐眼输出，包括真实瞳孔直径。本模块在眼动服务内将该函数的返回值设为真；整机企业模式属性 `ro.pxr.externalfunc` 保持原值。
 
 ## 兼容性与验证情况
 
-启动安全改动使用 NDK 26.1.10909125 的本地构建，在 PICO 4 Pro / PICO OS 5.13.7 / SELinux permissive 上完成验收，正常开机、升级、模式切换、重复控制命令及定点失败分支均通过。一次 45 秒真人佩戴验证确认了持续眼嘴更新、眨眼与张闭嘴响应、profile 0 初始化无重试，以及正常停止追踪，期间服务未重启。原厂库未修改。SELinux enforcing 尚未实测。2.4.2 的 CI 构建显式选用 NDK 26.1.10909125 与 CMake 3.22.1。
+启动安全改动使用 NDK 26.1.10909125 的本地构建，在 PICO 4 Pro / PICO OS 5.13.7 / SELinux permissive 上完成验收，正常开机、升级、模式切换、重复控制命令及定点失败分支均通过。一次 45 秒真人佩戴验证确认了持续眼嘴更新、眨眼与张闭嘴响应、profile 0 初始化无重试，以及正常停止追踪，期间服务未重启。原厂库未修改。2.5.0的设置应用、配置工具和预设文件也已在 SELinux Enforcing 下通过开机与面板通信检查。发布工作流显式选用 NDK 26.1.10909125 与 CMake 3.22.1。
 
-以下 90/90 数据来自此前的 2.4.0 验证，并非 2.4.2 重新测得的吞吐。设备为 PICO 4 Pro（PICO OS 5.13.7），保持唤醒、追踪就绪，未佩戴。测试用一套测试驱动程序复用模块的表情处理算法，回放 2,700 组录制的相机输入（约 30 秒），搭配 PicoFacialBridge 0.5.0、UnifiedPicoModule 0.4.0、VRCFT-Enhance 和桌面 VRChat：
+以下 90/90 数据来自此前的 2.4.0 验证，并非之后版本重新测得的吞吐。设备为 PICO 4 Pro（PICO OS 5.13.7），保持唤醒、追踪就绪，未佩戴。测试用一套测试驱动程序复用模块的表情处理算法，回放 2,700 组录制的相机输入（约 30 秒），搭配 PicoFacialBridge 0.5.0、UnifiedPicoModule 0.4.0、VRCFT-Enhance 和桌面 VRChat：
 
 | 环节 | 频率 |
 |---|---:|
@@ -154,25 +177,27 @@ sh /data/adb/modules/picoet-enhance/picoet.sh status
 
 ## 关闭与卸载
 
-运行 `picoet.sh off` 可关闭增强并恢复原厂眼动服务。要移除模块，在 Magisk 中卸载后重启头显。清理只删除已知状态文件，不递归进入意外目录或子挂载，因此这些目录可能保留。
+运行 `picoet.sh off` 可关闭增强并恢复原厂眼动服务。要移除模块，在 Magisk 中卸载后重启头显；设置应用随模块一起移除，后处理配置文件也会删除。清理只删除已知状态文件，不递归进入意外目录或子挂载，因此这些目录可能保留。
 
 ## 从源码构建
 
-构建需要 Android NDK 与 CMake/Ninja。脚本会从 `-Ndk` / `-CmakeBin` 参数、`PICOET_NDK` / `PICOET_CMAKE_BIN` 环境变量，或 `ANDROID_HOME` 下的标准目录中查找工具链。
+构建需要Python 3、JDK 17及以上（`JAVA_HOME`）、Android platform 35与build-tools 35.0.0（`ANDROID_HOME`），以及NDK 26.1.10909125、CMake 3.22.1/Ninja。原生脚本支持`-Ndk` / `-CmakeBin`参数、`PICOET_NDK` / `PICOET_CMAKE_BIN`环境变量，或`ANDROID_HOME`下的标准目录。
 
 ```powershell
 pwsh -File hook\build-hook.ps1                 # 构建 injector 与 payload
-pwsh -File build-picoet-enhance.ps1            # 打包成 Magisk zip
+pwsh -File build-picoet-enhance.ps1 -Python python # 构建面板并打包 Magisk zip
 ```
 
-产物为 `artifacts/magisk-picoet-enhance-v<版本>.zip`，包含模块脚本、注入器和 hook 载荷。打包时会检查 ELF 文件清单和原厂库哈希。
+产物为`artifacts/magisk-picoet-enhance-v<版本>.zip`，包含模块脚本、原生工具、hook载荷及`system/app/PicoETEnhance/PicoETEnhance.apk`。打包检查ELF文件清单和原厂库哈希；面板直接用SDK构建，不需要Gradle或额外Android依赖库。
+
+未提供签名时，本地构建会生成并复用开发专用签名。正式分发应通过`-PanelKeystore`（或`PICOET_PANEL_KEYSTORE`）提供持久签名，可选`-PanelKeyAlias`，密码放在`PICOET_PANEL_PASSWORD`环境变量中；升级必须沿用相同面板签名。标签构建需要仓库Secrets `PICOET_PANEL_KEYSTORE_BASE64`和`PICOET_PANEL_PASSWORD`，可选的`PICOET_PANEL_KEY_ALIAS`缺省为`panel`。
 
 推送 `v<版本>` 标签后，GitHub Actions 会在 Windows 运行器上构建并发布带校验和的 zip。
 
 ## 待做
 
 - [ ] **舌头方向增强**：PICO 目前只对外提供伸舌量 `TongueOut` 一个标量，而 VRCFaceTracking 已定义了 `TongueLeft/Right/Up/Down` 等方向通道。计划先取下脸相机的原始帧，用视觉分割基模自动打标，再训练一个小模型，并允许用户采集自己的数据在本地做在线微调。
-- [ ] **面捕不滤波输出**：把端侧 FaceTrackor 的时间平滑做成可选关闭，让模块直接转发逐帧原始面部数据。时间滤波改由 PC 端按需处理，端侧只负责发原始值。
+- [ ] **后处理佩戴比较**：比较均衡、灵敏与不处理三个预设的实际响应、静止噪声及Avatar表现。
 
 ## 反馈
 

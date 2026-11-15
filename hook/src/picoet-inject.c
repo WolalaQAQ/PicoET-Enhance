@@ -160,7 +160,7 @@ static int prepare_runtime(int reset)
         const char *p = entry->d_name;
         while (*p >= '0' && *p <= '9') ++p;
         if (strcmp(entry->d_name, "unsafe") &&
-            (p == entry->d_name || (strcmp(p, ".state") && strcmp(p, ".tmp")))) continue;
+            (p == entry->d_name || (strcmp(p, ".state") && strcmp(p, ".tmp") && strcmp(p, ".processing")))) continue;
         if (unlinkat(fd, entry->d_name, 0) != 0 && errno != ENOENT) rc = 2;
     }
     if (closedir(dir) != 0) rc = 2;

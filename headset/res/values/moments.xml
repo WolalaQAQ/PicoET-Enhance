@@ -1,0 +1,76 @@
+<resources>
+    <string name="r_model">model {0}</string>
+    <string name="r_saved">saved {0}</string>
+    <string name="r_not_reached">not within the chart</string>
+    <string name="m_blink">Blink</string>
+    <string name="m_blink_look" formatted="false">An ordinary blink: the model closes to 86% at most and leaves 3% after opening.\nEyes do not close fully → lower “Snap-shut line”.\nEyes look half-shut when open → raise “Snap-open line”.\nBlinks feel sluggish → lower “Eye smoothing”.</string>
+    <string name="m_blink_pro" formatted="false">Blink is processed per eye. First the ends snap: x′ = 0 when x &lt; θ_low, x′ = 1 when x &gt; θ_high, otherwise x′ = x; output x + s·(x′ − x), with θ_low &lt; θ_high; this step does not depend on the source rate. Then adaptive smoothing: Reference share at 24 Hz α₀ = 1 − exp(−k·|x − y₋₁|), with x this input and y₋₁ the previous output; at runtime α = 1 − (1 − α₀)^r, r = Δt ÷ (1/24 s), y_α = y₋₁ + α·(x − y₋₁), output y = x + s·(y_α − x). A larger difference gives a larger share, so large movements follow fast and small jitter slowly. Example: with k = 9 a difference of 0.01 gives α₀ ≈ 8.6%, 0.1 gives α₀ ≈ 59.3%.</string>
+    <string name="r_blink_peak">Deepest closure</string>
+    <string name="r_blink_end">After opening</string>
+    <string name="m_gaze">Look to one side</string>
+    <string name="m_gaze_look">The eyes turn quickly to one side and stay, with small jitter in the model\'s value. The sooner green reaches the top, the more responsive the gaze; the flatter it stays, the steadier.\nGaze lags → raise “Eye small-movement speed” or lower “Eye smoothing”.\nGaze shakes while held → do the opposite.\nBoth settings also apply to blinks, squints and wide eyes.</string>
+    <string name="m_gaze_pro" formatted="false">LookDown, LookIn, LookOut, LookUp, Squint, Wide and Blink each use the same adaptive smoothing. Reference share at 24 Hz α₀ = 1 − exp(−k·|x − y₋₁|), with x this input and y₋₁ the previous output; at runtime α = 1 − (1 − α₀)^r, r = Δt ÷ (1/24 s), y_α = y₋₁ + α·(x − y₋₁), output y = x + s·(y_α − x). A larger difference gives a larger share, so large movements follow fast and small jitter slowly. Example: with k = 9 a difference of 0.01 gives α₀ ≈ 8.6%, 0.1 gives α₀ ≈ 59.3%.</string>
+    <string name="r_gaze_rise">Time to turn</string>
+    <string name="r_gaze_jitter">Shake while held</string>
+    <string name="m_raise">Raise the brows, then lower</string>
+    <string name="m_raise_look">The brows go up, stay for over a second, then come down. With stock settings they take about a second to get there, mostly because of “Extra brow steadying”.\nBrows lag behind → lower “Extra brow steadying” first; if still slow, raise “Brow speed”.\nBrows shake while held → do the opposite.</string>
+    <string name="m_raise_pro" formatted="false">“Brow smoothing” is composite exponential smoothing on BrowDown, BrowInnerUp and BrowOuterUp: reference share at 24 Hz α₀ = w²·(1 − q·m), with w = “Brow speed”, q = “Hold brows during blinks” and m as on “Raise while blinking”; at runtime α = 1 − (1 − α₀)^r. Example: w = 0.6, m = 0 gives α₀ = 36%, about 11.2% per update at Δt = 1/90 s.\n“Extra brow steadying” is a 2-D Kalman filter on BrowInnerUp and BrowOuterUp with identity transition and observation, process noise Q (“Steadying speed”) and measurement noise R (“Steadying resistance”). Its steady-state gain K satisfies K²/(1 − K) = Q/R; Q = R gives K ≈ 61.8% at the 24 Hz reference, about 22.6% per update at Δt = 1/90 s. At runtime Q is adjusted by Δt so the steady-state response does not depend on the source rate. Both steps start from the previous final output, so together they are much slower.</string>
+    <string name="r_raise_rise">Time to rise</string>
+    <string name="r_raise_fall">Time to lower</string>
+    <string name="m_blink_raise">Raise while blinking</string>
+    <string name="m_blink_raise_look">The brows rise while the eyes blink once (blue dotted line). At the moment of a blink or eye turn the brows are held, so green starts later.\nBrows hardly move while you talk → lower “Hold brows during blinks”.\nWith a high “Extra brow steadying” the difference is small; lower it first to compare.</string>
+    <string name="m_blink_raise_pro" formatted="false">m ∈ [0, 1] is this eye\'s Blink change plus half the summed change of the four gaze directions, taken against the output about 83 ms earlier (at runtime the stored output nearest 2·Δt₀). “Brow smoothing” reference share α₀ = w²·(1 − q·m); with q = 100% and m = 1, α₀ = 0 and the brows do not move in that update. This only affects “Brow smoothing”; the Kalman filter of “Extra brow steadying” ignores m.</string>
+    <string name="r_blink_raise_rise">Time to rise</string>
+    <string name="ctx_blink_raise">Blink</string>
+    <string name="m_mixed">Raise with a slight frown</string>
+    <string name="m_mixed_look" formatted="false">The model outputs a 50% raise (blue dotted line) and a 25% frown at once. Processing pushes the weaker frown down so the brows move one way.\nWorried looks that raise and frown together do not show → lower “Raise or frown, not both” or “Strictness”.</string>
+    <string name="m_mixed_pro">u is BrowInnerUp, d is BrowDown. They are redistributed by power weights: W_d = |d|^p ÷ (|u|^p + |d|^p + 10⁻¹⁰), d′ = W_d·(u + d); W_u likewise, u′ = W_u·(u + d′), using the processed d′. Output u + s·(u′ − u), and likewise for d. A larger p keeps only the stronger side: with u twice d, p = 4 gives weights 16:1, p = 2 gives 4:1. Computed independently each update, independent of the source rate.</string>
+    <string name="r_mixed_hold">Frown settles at</string>
+    <string name="ctx_mixed">Brow raise</string>
+    <string name="m_wide">Open the eyes wide</string>
+    <string name="m_wide_look" formatted="false">Only the eyes open wide (blue dotted line); the brows themselves rise 10%. Stock settings add a large brow raise for wide eyes, so the avatar seems to lift its brows.\nWide eyes raise the brows too much → lower “Wide eyes lift brows” or “Wide-eye lift amount”.\nFor a more dramatic stare → raise them.</string>
+    <string name="m_wide_pro">u is BrowInnerUp after the raise/frown step, v is this eye\'s Wide. u′ = u + g·v when u &lt; θ, otherwise u′ = u; output u + s·(u′ − u), limited to [0, 1] before smoothing. The result also feeds the outer-brow link. Computed independently each update, independent of the source rate.</string>
+    <string name="r_wide_hold">Brow raise settles at</string>
+    <string name="ctx_wide">Wide eyes</string>
+    <string name="m_brow_blink">Brows during a blink</string>
+    <string name="m_brow_blink_look" formatted="false">One blink (blue dotted line) with the brows at rest; the model\'s frown is only about 5%. Processing adds a frown while the eyes close, so the avatar lowers its brows on every blink.\nBrows twitch with blinks → lower “Closed eyes lower brows” or “Blink frown amount”.</string>
+    <string name="m_brow_blink_pro">d is BrowDown after the raise/frown step, b is this eye\'s Blink. d′ = d + g·b when d &lt; θ, otherwise d′ = d; output d + s·(d′ − d), limited to [0, 1] before smoothing. g is dimensionless; θ, b and d are 0–1 action values. Computed independently each update, independent of the source rate.</string>
+    <string name="r_brow_blink_peak">Frown peaks at</string>
+    <string name="ctx_brow_blink">Blink</string>
+    <string name="m_outer">Raise only the outer brows</string>
+    <string name="m_outer_look" formatted="false">Only the brow tails rise; the inner brows stay at 10% (blue dotted line). Processing pulls the tails back to the inner height, so with stock settings raising just the tails barely shows.\nFor brow tails that move on their own → lower “Outer brow follow”.</string>
+    <string name="m_outer_pro">o is the model\'s BrowOuterUp, u′ is this eye\'s BrowInnerUp after the raise/frown step and the wide-eye link. Output o + s·(u′ − o). Each eye separately, independent of the source rate.</string>
+    <string name="r_outer_hold">Outer brow settles at</string>
+    <string name="ctx_outer">Inner brow</string>
+    <string name="m_talk">Jaw while talking</string>
+    <string name="m_talk_look">Four quick syllables open and close the jaw. The closer green follows grey, the more accurate the mouth; lower, later peaks mean too much smoothing.\nThe mouth barely opens while talking → lower “Jaw and smile extra smoothing” first; if not enough, lower “Mouth smoothing” or raise “Mouth small-movement speed”.\nLips jitter → do the opposite.</string>
+    <string name="m_talk_pro" formatted="false">Adaptive exponential smoothing on the 32 mouth shapes other than TongueOut, as for the eyes: α₀ = 1 − exp(−k·|x − y₋₁|), converted by Δt, output y = x + s·(y_α − x).\nJawOpen, MouthSmile_L/R, MouthLeft and MouthRight use two passes: α₁ = 1 − exp(−k·|x − y₋₁|), v = y₋₁ + α₁·(x − y₋₁), α₂ = 1 − exp(−k·|v − y₋₁|), composite reference share α₀ = α₁·[(1 − s₂) + s₂·α₂], then converted by Δt. Both passes use the same previous output, so the share shrinks near the target.\nExample: k = 6, x = 0.3, y₋₁ = 0.2 gives α₁ ≈ 45.1%, α₂ ≈ 23.7%, composite about 10.7%. With s = 0 both passes are skipped.</string>
+    <string name="r_talk_peak">Jaw peaks at</string>
+    <string name="r_talk_lag">Peak later than the model by</string>
+    <string name="m_rest">After closing the mouth</string>
+    <string name="m_rest_look" formatted="false">After talking the mouth closes, but the model still shows about 5% jaw opening. “Leftover removal” learns this value and subtracts it, so green should end near 0.\nThe avatar\'s mouth stays slightly open → raise “Leftover removal” or “Leftover range width”.\nThe mouth takes long to close → raise “Mouth small-movement speed” or lower “Jaw and smile extra smoothing”.</string>
+    <string name="m_rest_pro" formatted="false">Each of the 32 shapes other than TongueOut learns an offset β: while |x − c| &lt; h, β ← β + α·(x − β), with α converted from the 24 Hz reference learning weight w by Δt: α = 1 − (1 − w)^r. While |β| &lt; L the output is x − s·β. JawOpen (mouth33 index 5) uses centre c₅, the others c. Default learning intervals: general (0, 0.04), JawOpen (0.02, 0.06); w = 50% gives a time constant of about 60 ms, independent of the source rate. With s = 0 subtraction stops but learning continues, and the learned MouthClose offset β₇ still feeds the lip closure addition.\nThe two-pass smoothing that follows takes a very small share when the difference is small, which is the slow tail in the chart.</string>
+    <string name="r_rest_end">Still open after 3 s</string>
+    <string name="m_corners">Mouth corners after a smile</string>
+    <string name="m_corners_look" formatted="false">After a smile the face relaxes, but the model still shows about 2.5% smile. This works as in “After closing the mouth”, except that shapes other than the jaw use “Leftover range centre (other shapes)”.\nThe avatar keeps smiling after you relax → raise “Leftover removal” or move the range centre to cover this value.</string>
+    <string name="m_corners_pro">As in “After closing the mouth”, with general channels using centre c. MouthSmile_L/R are among the five two-pass shapes, so their return also has a slow tail.</string>
+    <string name="r_corners_end">Corners after 3 s</string>
+    <string name="m_lips">Lips with the mouth closed</string>
+    <string name="m_lips_look" formatted="false">With the mouth closed and relaxed, the model\'s lip closure (MouthClose) is only 1–2%. Processing always adds 8–9% so the lips look closed. Jaw opening (JawOpen) is a separate movement and is not affected.\nLips look pressed together → lower “Lip closure boost” or “Base boost”.\nLips part too far while talking → raise them.</string>
+    <string name="m_lips_pro">Δ = s·min(β₇ ÷ d·a + b, c), added to MouthClose (mouth33 index 7). β₇ is the offset learned for this channel, see “After closing the mouth”; d, a, b and c are in action values. By default β₇ = 0 adds 0.08 and β₇ = 0.02 adds 0.09. These are model action values; how far the avatar\'s lips actually close depends on the PC-side mapping and the blendshapes. Independent of the source rate.</string>
+    <string name="r_lips_end">Lip closure</string>
+    <string name="m_subtle">Small shapes during a smile</string>
+    <string name="m_subtle_look" formatted="false">During a smile the model outputs a strong smile (blue dotted line) and a 12% dimple. Processing shrinks weaker shapes in proportion so the main shape stands out.\nSmall corner, dimple or nose movements disappear → lower “Shrink weak shapes” or raise “Keep weak shapes”.\nToo many small stray shapes → raise “Shrink weak shapes”.</string>
+    <string name="m_subtle_pro">Over the 33 mouth values of this update take the minimum L and maximum H; relative strength r = (x − L) ÷ (H − L + 10⁻¹⁰). Multiplier m = 1 + k·log₁₀(r + d), output x + s·(x·m − x), then limited to [0, 1]. m &lt; 1 (shrink) when r + d &lt; 1, enlarging above. Example: k = 0.6, d = 0.1 gives r = 0.1 × about 0.581, r = 0.5 × about 0.867, r = 1 × about 1.025. CheekPuff (index 0) counts for L and H but is not scaled itself. Independent of the source rate.</string>
+    <string name="r_subtle_hold">Dimple settles at</string>
+    <string name="ctx_subtle">Smile</string>
+    <string name="m_tongue_out">Stick the tongue out, then back</string>
+    <string name="m_tongue_out_look">The tongue comes out, stays for a second, then goes back.\nThe tongue appears or retracts late → lower “Tongue smoothing” or raise “Tongue speed”.\nThe tongue flickers → do the opposite.</string>
+    <string name="m_tongue_out_pro" formatted="false">Exponential moving average (EMA): y = y₋₁ + α·(x − y₋₁). Follow speed w is the weight at the 24 Hz reference; at runtime α = 1 − (1 − w)^r, r = Δt ÷ (1/24 s). With w = 60%, 60% is taken per update at 24 Hz and about 21.7% at Δt = 1/90 s, both with a time constant of about 45 ms, independent of the source rate. Finally mixed by s: x + s·(y − x). The input is TongueOut after the threshold step.</string>
+    <string name="r_tongue_out_rise">Time to come out</string>
+    <string name="r_tongue_out_fall">Time to go back</string>
+    <string name="m_tongue_slight">Tongue slightly out</string>
+    <string name="m_tongue_slight_look" formatted="false">The tongue comes out only a little, 45% from the model. Stock settings treat anything under 60% as no tongue, so the avatar shows nothing.\nA slight tongue does not show → lower “Tongue trigger line”.\nThe tongue flashes when you are not sticking it out → raise “Tongue trigger line”.</string>
+    <string name="m_tongue_slight_pro">x is TongueOut after “Shrink weak shapes”. x′ = 0 when x &lt; θ, x′ = g·x when x &gt; θ, unchanged at x = θ; output x + s·(x′ − x), limited to [0, 1] before smoothing. Example: θ = 0.6, g = 1.5 turns 0.7 into 1.05, limited to 1. Independent of the source rate.</string>
+    <string name="r_tongue_slight_hold">Tongue settles at</string>
+</resources>

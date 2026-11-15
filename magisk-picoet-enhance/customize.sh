@@ -18,8 +18,17 @@ set_perm "$MODPATH/picoet.sh" 0 0 0755
 set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm "$MODPATH/uninstall.sh" 0 0 0755
 set_perm "$MODPATH/bin/picoet-inject" 0 0 0755
+set_perm "$MODPATH/bin/picoet-config" 0 0 0755
+set_perm "$MODPATH/bin/picoet-panel" 0 0 0755
+set_perm_recursive "$MODPATH/system/app/PicoETEnhance" 0 0 0755 0644
 set_perm "$MODPATH/lib/libpicoet_hook.so" 0 0 0644
 set_perm "$MODPATH/hashes.sh" 0 0 0644
+
+# PackageManager decides whether its parse cache is stale from the package directory mtime,
+# which the Magisk mount pins to the system partition's. Drop the panel's entry so the next
+# boot parses the new APK instead of reporting the previous version and components.
+rm -f /data/system/package_cache/*/PicoETEnhance-*
+ui_print "- Settings app parse cache cleared; the next boot reads the new APK."
 
 # An upgrade is staged until reboot. Keep the running instance's actual state;
 # service.sh clears stale reports and republishes the replacement after boot.
@@ -39,6 +48,7 @@ fi
 ui_print "- PicoET-Enhance (runtime ptrace injection; no PICO bytes, no system writes)"
 ui_print "- Fresh-install default: dual/on; upgrades keep off as off/off, otherwise use dual/on."
 ui_print "- Enhanced eye/mouth defaults: 90/90 Hz."
+ui_print "- Includes the rootless PicoET-Enhance settings app; Bridge needs no root grant."
 ui_print "- Saved state: mode=$mode"
 ui_print "- ro.pxr.externalfunc is never touched."
 ui_print "- Switch (root, restarts eye/face tracking):"

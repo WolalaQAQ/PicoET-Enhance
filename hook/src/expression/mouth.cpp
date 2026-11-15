@@ -22,29 +22,31 @@ float alpha_dt(double stock_alpha, double ratio) {
     return static_cast<float>(-std::expm1(std::log1p(-stock_alpha) * ratio));
 }
 
-float baseline_step(float previous, float current, double ratio) {
-    if (ratio == 1.0) return (current + previous) * 0.5f;
-    const float alpha = alpha_dt(0.5f, ratio);
+float baseline_step(float previous, float current, double ratio, double weight) {
+    if (ratio == 1.0 && weight == 0.5) return (current + previous) * 0.5f;
+    const float alpha = alpha_dt(weight, ratio);
     const float current_part = current * alpha;
     const float previous_part = previous * (1.0f - alpha);
     return current_part + previous_part;
 }
 
 void postprocess(MouthState& state, const float raw35[kMouthRawChannels],
-                 double ratio, float mouth[kMouthChannels]) {
+                  double ratio, float mouth[kMouthChannels], const PostProcessingConfig& config) {
     std::memcpy(mouth, raw35, sizeof(float) * kMouthChannels);
+    if (!config.mouth_enabled) return;
     // 0x62108..0x62244: comparisons and arithmetic are float, not double.
     for (unsigned i = 0; i < 32; ++i) {
-        const float center = i == 5 ? -0.04f : -0.02f;
-        if (std::fabs(mouth[i] + center) < 0.02f)
-            state.baseline[i] = baseline_step(state.baseline[i], mouth[i], ratio);
-        if (std::fabs(state.baseline[i]) < 0.1f) mouth[i] = mouth[i] - state.baseline[i];
+        const float center = -static_cast<float>(i == 5 ? config.baseline_special_center : config.baseline_center);
+        if (std::fabs(mouth[i] + center) < static_cast<float>(config.baseline_window))
+            state.baseline[i] = baseline_step(state.baseline[i], mouth[i], ratio, config.baseline_alpha);
+        if (std::fabs(state.baseline[i]) < static_cast<float>(config.baseline_limit))
+            mouth[i] = processing_mix(mouth[i], mouth[i] - state.baseline[i], config.baseline);
         if (i == 7) {
-            float correction = state.baseline[i] / 0.04f;
-            correction = correction * 0.02f;
-            correction = correction + 0.08f;
-            correction = std::fmin(correction, 0.1f);
-            mouth[i] = mouth[i] + correction;
+            float correction = state.baseline[i] / static_cast<float>(config.channel7_divisor);
+            correction = correction * static_cast<float>(config.channel7_scale);
+            correction = correction + static_cast<float>(config.channel7_bias);
+            correction = std::fmin(correction, static_cast<float>(config.channel7_ceiling));
+            mouth[i] = processing_mix(mouth[i], mouth[i] + correction, config.channel7);
         }
     }
     float low = 100000.0f, high = -100000.0f;
@@ -57,18 +59,20 @@ void postprocess(MouthState& state, const float raw35[kMouthRawChannels],
     for (unsigned i = 1; i < kMouthChannels; ++i) {
         float scale = mouth[i] - low;
         scale = scale / denominator;
-        scale = scale + 0.1f;
+        scale = scale + static_cast<float>(config.log_offset);
         scale = ::log10f(scale);
-        scale = scale * 0.6f;
+        scale = scale * static_cast<float>(config.log_coefficient);
         scale = scale + 1.0f;
-        mouth[i] = mouth[i] * scale;
+        mouth[i] = processing_mix(mouth[i], mouth[i] * scale, config.log_strength);
     }
-    if (mouth[32] < 0.6f) mouth[32] = 0.0f;
-    else if (mouth[32] > 0.6f) mouth[32] = mouth[32] * 1.5f;
+    float gated = mouth[32];
+    if (gated < static_cast<float>(config.tongue_threshold)) gated = 0.0f;
+    else if (gated > static_cast<float>(config.tongue_threshold)) gated *= static_cast<float>(config.tongue_gain);
+    mouth[32] = processing_mix(mouth[32], gated, config.tongue_gate);
 }
 
-float adaptive(float previous, float current, double ratio) {
-    const float weight = ::expf(std::fabs(previous - current) * -6.0f);
+float adaptive(float previous, float current, double ratio, double k) {
+    const float weight = ::expf(std::fabs(previous - current) * -static_cast<float>(k));
     const float stock_alpha = 1.0f - weight;
     const float alpha = ratio == 1.0 ? stock_alpha : alpha_dt(stock_alpha, ratio);
     const float previous_part = previous * (ratio == 1.0 ? weight : 1.0f - alpha);
@@ -76,34 +80,36 @@ float adaptive(float previous, float current, double ratio) {
     return previous_part + current_part;
 }
 
-float adaptive_double(float previous, float current, double ratio) {
+float adaptive_double(float previous, float current, double ratio, const PostProcessingConfig& config) {
     // Both stock passes use the SAME previous final output. The second pole is
     // recomputed from the first result, not a separately stored cascade state.
-    const float weight1 = ::expf(std::fabs(previous - current) * -6.0f);
+    const float weight1 = ::expf(std::fabs(previous - current) * -static_cast<float>(config.mouth_k));
     const float alpha1 = 1.0f - weight1;
     const float old1 = previous * weight1;
     const float new1 = current * alpha1;
     const float middle = old1 + new1;
-    const float weight2 = ::expf(std::fabs(middle - previous) * -6.0f);
+    const float weight2 = ::expf(std::fabs(middle - previous) * -static_cast<float>(config.mouth_k));
     const float alpha2 = 1.0f - weight2;
     if (ratio == 1.0) {
         const float new2 = middle * alpha2;
         const float old2 = previous * weight2;
-        return old2 + new2;
+        return processing_mix(middle, old2 + new2, config.mouth_double);
     }
     // Normalize this actual composite step once. Scaling both passes first
     // would make the small-step response proportional to ratio squared.
-    const float alpha = alpha_dt(static_cast<double>(alpha1) * alpha2, ratio);
+    const double composite_alpha = config.mouth_double == 1 ? static_cast<double>(alpha1) * alpha2 :
+        static_cast<double>(alpha1) * (1.0 - config.mouth_double + config.mouth_double * alpha2);
+    const float alpha = alpha_dt(composite_alpha, ratio);
     const float old_part = previous * (1.0f - alpha);
     const float new_part = current * alpha;
     return old_part + new_part;
 }
 
-float tongue(float previous, float current, double ratio) {
-    const float alpha = ratio == 1.0 ? 0.6f : alpha_dt(0.6f, ratio);
+float tongue(float previous, float current, double ratio, double weight) {
+    const float alpha = ratio == 1.0 ? static_cast<float>(weight) : alpha_dt(static_cast<float>(weight), ratio);
     const float current_part = current * alpha;
     // 0x35e44c=0x3ecccccd, NOT the eye composite's 0x3ecccccc.
-    const float previous_part = previous * (ratio == 1.0 ? 0.4f : 1.0f - alpha);
+    const float previous_part = previous * (ratio == 1.0 && weight == 0.6 ? 0.4f : 1.0f - alpha);
     return current_part + previous_part;
 }
 
@@ -151,7 +157,7 @@ float quality(MouthState& state, float probability, uint64_t source_ns, bool sto
 }
 
 float process(MouthState& state, const float raw35[kMouthRawChannels],
-              uint64_t source_ns, float expression52[52], bool stock_step) {
+               uint64_t source_ns, float expression52[52], bool stock_step, const PostProcessingConfig& config) {
     auto& diagnostics = state.diagnostics;
     if (diagnostics.updates && source_ns <= state.last_source_ns) {
         diagnostics.update = source_ns == state.last_source_ns ? SourceUpdate::Repeated : SourceUpdate::Backward;
@@ -165,15 +171,20 @@ float process(MouthState& state, const float raw35[kMouthRawChannels],
         (!stock_step && source_ns - state.first_source_ns < 2 * kSourceDtBaseNs);
     const float valid = quality(state, raw35[33], source_ns, stock_step);
     float mouth[kMouthChannels];
-    postprocess(state, raw35, diagnostics.ratio, mouth);
+    postprocess(state, raw35, diagnostics.ratio, mouth, config);
     for (unsigned i = 0; i < kMouthChannels; ++i) {
         float value = clamp01(mouth[i]);
         const unsigned slot = slots[i];
-        if (!diagnostics.warmup) {
-            if (slot == 51) value = tongue(state.previous[i], value, diagnostics.ratio);
-            else if (slot == 7 || slot == 19 || slot == 21 || slot == 24 || slot == 48)
-                value = adaptive_double(state.previous[i], value, diagnostics.ratio);
-            else value = adaptive(state.previous[i], value, diagnostics.ratio);
+        if (!diagnostics.warmup && config.mouth_enabled) {
+            if (slot == 51 && config.tongue_ema)
+                value = processing_mix(value, tongue(state.previous[i], value, diagnostics.ratio,
+                                                     config.tongue_current), config.tongue_ema);
+            else if (slot != 51 && config.mouth_adaptive) {
+                const float filtered = slot == 7 || slot == 19 || slot == 21 || slot == 24 || slot == 48
+                    ? adaptive_double(state.previous[i], value, diagnostics.ratio, config)
+                    : adaptive(state.previous[i], value, diagnostics.ratio, config.mouth_k);
+                value = processing_mix(value, filtered, config.mouth_adaptive);
+            }
         }
         state.previous[i] = clamp01(value);
         expression52[slot] = state.previous[i];
@@ -187,13 +198,13 @@ float process(MouthState& state, const float raw35[kMouthRawChannels],
 } // namespace
 
 float process_mouth_dt(MouthState& state, const float raw35[kMouthRawChannels],
-                       uint64_t source_ns, float expression52[52]) {
-    return process(state, raw35, source_ns, expression52, false);
+                        uint64_t source_ns, float expression52[52], const PostProcessingConfig& config) {
+    return process(state, raw35, source_ns, expression52, false, config);
 }
 
 float process_mouth_step(MouthState& state, const float raw35[kMouthRawChannels],
-                         uint64_t source_ns, float expression52[52]) {
-    return process(state, raw35, source_ns, expression52, true);
+                          uint64_t source_ns, float expression52[52], const PostProcessingConfig& config) {
+    return process(state, raw35, source_ns, expression52, true, config);
 }
 
 void reset_mouth_quality(MouthState& state) {

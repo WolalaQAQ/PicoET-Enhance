@@ -1,0 +1,189 @@
+<resources>
+    <string name="p_eye_enabled">眼睛和眉毛处理</string>
+    <string name="p_eye_enabled_hint">关闭后，眼睛和眉毛直接使用模型结果，眼睛和眉毛的设置暂不起作用。眼追和模型照常运行。</string>
+    <string name="p_eye_enabled_tech">0时整段眼眉后处理和时间平滑被旁路，输出为模型值限制到[0, 1]。</string>
+    <string name="p_mouth_enabled">嘴和舌头处理</string>
+    <string name="p_mouth_enabled_hint">关闭后，嘴形和伸舌直接使用模型结果，嘴和舌头的设置暂不起作用。面捕照常运行。</string>
+    <string name="p_mouth_enabled_tech">0时整段嘴部后处理和时间平滑被旁路，输出为模型值限制到[0, 1]。</string>
+
+    <string name="p_eye_adaptive_strength">眼睛防抖</string>
+    <string name="p_eye_adaptive_strength_less">跟得紧，细小抖动也会显示</string>
+    <string name="p_eye_adaptive_strength_more">更稳，但动作会拖一点</string>
+    <string name="p_eye_adaptive_strength_tech" formatted="false">s：混合比例。0%跳过这一层，100%完全采用平滑结果。</string>
+    <string name="p_eye_adaptive_k">眼睛小动作跟随</string>
+    <string name="p_eye_adaptive_k_less">细小眼动被压住，眼神更稳</string>
+    <string name="p_eye_adaptive_k_more">细小眼动也很快跟上，也更容易抖</string>
+    <string name="p_eye_adaptive_k_tech">k：自适应灵敏度，无量纲。α₀ = 1 − exp(−k·|x − y₋₁|)。</string>
+
+    <string name="p_eye_blink_endpoints_strength">眨眼补齐</string>
+    <string name="p_eye_blink_endpoints_strength_less">照模型给的开合显示</string>
+    <string name="p_eye_blink_endpoints_strength_more">接近全睁、全闭时直接补到头</string>
+    <string name="p_eye_blink_endpoints_strength_tech">s：混合比例。</string>
+    <string name="p_eye_blink_endpoints_low">补成全睁的线</string>
+    <string name="p_eye_blink_endpoints_low_less">只有几乎全睁才补，轻微眯眼能显示出来</string>
+    <string name="p_eye_blink_endpoints_low_more">眼皮稍微下垂也补成全睁</string>
+    <string name="p_eye_blink_endpoints_low_tech">θ_low：Blink下阈值，动作系数0–1。</string>
+    <string name="p_eye_blink_endpoints_high">补成全闭的线</string>
+    <string name="p_eye_blink_endpoints_high_less">闭得浅一些也补成全闭，更容易闭严</string>
+    <string name="p_eye_blink_endpoints_high_more">要闭得更深才补成全闭</string>
+    <string name="p_eye_blink_endpoints_high_tech">θ_high：Blink上阈值，动作系数0–1，须大于θ_low。</string>
+
+    <string name="p_eye_brow_composite_strength">眉毛防抖</string>
+    <string name="p_eye_brow_composite_strength_less">眉毛跟得紧，细碎抖动会显示</string>
+    <string name="p_eye_brow_composite_strength_more">更稳，抬眉、放眉更慢</string>
+    <string name="p_eye_brow_composite_strength_tech">s₁：复合平滑的混合比例。</string>
+    <string name="p_eye_brow_composite_current_weight">眉毛跟随速度</string>
+    <string name="p_eye_brow_composite_current_weight_less">更慢、更稳</string>
+    <string name="p_eye_brow_composite_current_weight_more">更快</string>
+    <string name="p_eye_brow_composite_current_weight_tech">w：更新系数，24 Hz参考占比α₀ = w²·(1 − q·m)。</string>
+    <string name="p_eye_brow_motion_strength">眨眼时按住眉毛</string>
+    <string name="p_eye_brow_motion_strength_less">眨眼、转眼时眉毛照常动</string>
+    <string name="p_eye_brow_motion_strength_more">眨眼、转眼的那一下眉毛停住不动</string>
+    <string name="p_eye_brow_motion_strength_tech" formatted="false">q：眼动抑制比例。q = 100%且m = 1时α₀ = 0。</string>
+    <string name="p_eye_brow_kalman_strength">眉毛额外稳定</string>
+    <string name="p_eye_brow_kalman_strength_less">少用这一步，抬眉更快</string>
+    <string name="p_eye_brow_kalman_strength_more">完全使用，抬眉更稳也更慢</string>
+    <string name="p_eye_brow_kalman_strength_tech">s₂：Kalman结果的混合比例。</string>
+    <string name="p_eye_brow_kalman_process_noise">额外稳定的跟随速度</string>
+    <string name="p_eye_brow_kalman_process_noise_less">抬眉更稳、更慢</string>
+    <string name="p_eye_brow_kalman_process_noise_more">抬眉更快，细小抖动更容易露出</string>
+    <string name="p_eye_brow_kalman_process_noise_tech">Q：过程噪声方差，单位为动作系数的平方。稳态只取决于Q/R。</string>
+    <string name="p_eye_brow_kalman_measurement_noise">额外稳定的阻力</string>
+    <string name="p_eye_brow_kalman_measurement_noise_less">抬眉更快，细小抖动更容易露出</string>
+    <string name="p_eye_brow_kalman_measurement_noise_more">抬眉更稳、更慢</string>
+    <string name="p_eye_brow_kalman_measurement_noise_tech">R：观测噪声方差，单位为动作系数的平方。Q/R越小，稳态增益越低。</string>
+
+    <string name="p_eye_brow_curve_strength">抬眉皱眉二选一</string>
+    <string name="p_eye_brow_curve_strength_less">又抬又皱的眉形照样显示</string>
+    <string name="p_eye_brow_curve_strength_more">较弱的一方被压下去</string>
+    <string name="p_eye_brow_curve_strength_tech">s：混合比例。</string>
+    <string name="p_eye_brow_curve_power">二选一的严格程度</string>
+    <string name="p_eye_brow_curve_power_less">两者差不多时都保留</string>
+    <string name="p_eye_brow_curve_power_more">只弱一点也被压到接近0</string>
+    <string name="p_eye_brow_curve_power_tech">p：幂指数，无量纲。</string>
+
+    <string name="p_eye_wide_brow_strength">瞪眼带眉</string>
+    <string name="p_eye_wide_brow_strength_less">瞪眼时眉毛不动</string>
+    <string name="p_eye_wide_brow_strength_more">瞪眼时眉毛跟着抬</string>
+    <string name="p_eye_wide_brow_strength_tech">s：混合比例。</string>
+    <string name="p_eye_wide_brow_gain">瞪眼带眉的幅度</string>
+    <string name="p_eye_wide_brow_gain_less">瞪到最大也只带一点</string>
+    <string name="p_eye_wide_brow_gain_more">瞪眼时眉毛抬得更多</string>
+    <string name="p_eye_wide_brow_gain_tech">g：每单位Wide添加的BrowInnerUp，无量纲。默认完全睁大时加0.5。</string>
+    <string name="p_eye_wide_brow_threshold">瞪眼带眉的停止高度</string>
+    <string name="p_eye_wide_brow_threshold_less">眉毛稍微抬起就不再加</string>
+    <string name="p_eye_wide_brow_threshold_more">眉毛已经较高也继续加</string>
+    <string name="p_eye_wide_brow_threshold_tech">θ：BrowInnerUp低于此值才添加，动作系数0–1。</string>
+
+    <string name="p_eye_blink_brow_strength">闭眼压眉</string>
+    <string name="p_eye_blink_brow_strength_less">闭眼时眉毛不动</string>
+    <string name="p_eye_blink_brow_strength_more">闭眼时眉毛跟着往下压</string>
+    <string name="p_eye_blink_brow_strength_tech">s：混合比例。</string>
+    <string name="p_eye_blink_brow_gain">闭眼压眉的幅度</string>
+    <string name="p_eye_blink_brow_gain_less">闭眼只带一点皱眉</string>
+    <string name="p_eye_blink_brow_gain_more">闭眼时皱眉更多</string>
+    <string name="p_eye_blink_brow_gain_tech">g：每单位Blink添加的BrowDown，无量纲。默认完全闭眼时加0.5。</string>
+    <string name="p_eye_blink_brow_threshold">闭眼压眉的停止深度</string>
+    <string name="p_eye_blink_brow_threshold_less">眉毛稍有皱眉就不再加</string>
+    <string name="p_eye_blink_brow_threshold_more">眉毛已经皱得较深也继续加</string>
+    <string name="p_eye_blink_brow_threshold_tech">θ：BrowDown低于此值才添加，动作系数0–1。</string>
+
+    <string name="p_eye_inner_outer_strength">外眉跟随程度</string>
+    <string name="p_eye_inner_outer_strength_less">眉梢按模型自己的结果动</string>
+    <string name="p_eye_inner_outer_strength_more">眉梢和眉头一样高</string>
+    <string name="p_eye_inner_outer_strength_tech">s：混合比例。</string>
+
+    <string name="p_mouth_adaptive_strength">嘴形防抖</string>
+    <string name="p_mouth_adaptive_strength_less">跟得紧，细小抖动也会显示</string>
+    <string name="p_mouth_adaptive_strength_more" formatted="false">更稳，但会拖一点；为0%时二次防抖也一起关掉</string>
+    <string name="p_mouth_adaptive_strength_tech">s：混合比例，同时控制两步平滑。</string>
+    <string name="p_mouth_adaptive_k">嘴部小动作跟随</string>
+    <string name="p_mouth_adaptive_k_less">细小嘴形变化被压住，跟得更慢</string>
+    <string name="p_mouth_adaptive_k_more">细小变化也很快跟上，也更容易抖</string>
+    <string name="p_mouth_adaptive_k_tech">k：自适应灵敏度，无量纲，两步平滑共用。</string>
+    <string name="p_mouth_double_pass_strength">张嘴微笑二次防抖</string>
+    <string name="p_mouth_double_pass_strength_less">张嘴、微笑和其他嘴形一样快</string>
+    <string name="p_mouth_double_pass_strength_more">这几项更稳，但明显变慢、峰值变矮</string>
+    <string name="p_mouth_double_pass_strength_tech">s₂：第二步在复合占比中的比例。</string>
+
+    <string name="p_mouth_baseline_strength">残留扣除</string>
+    <string name="p_mouth_baseline_strength_less">放松后的嘴形残留保留</string>
+    <string name="p_mouth_baseline_strength_more">残留扣得更干净，很轻的嘴形也会变小</string>
+    <string name="p_mouth_baseline_strength_tech">s：扣除比例。为0时仍继续学习，供双唇闭合补偿使用。</string>
+    <string name="p_mouth_baseline_current_weight">残留学习速度</string>
+    <string name="p_mouth_baseline_current_weight_less">过一会儿才扣掉，短暂的小动作不受影响</string>
+    <string name="p_mouth_baseline_current_weight_more">很快扣掉，保持着的轻微表情也容易被扣掉</string>
+    <string name="p_mouth_baseline_current_weight_tech" formatted="false">w：24 Hz参考学习权重。50%时时间常数约60 ms。</string>
+    <string name="p_mouth_baseline_window">残留范围宽度</string>
+    <string name="p_mouth_baseline_window_less">只把很接近中心的值当残留；为0时不再学习</string>
+    <string name="p_mouth_baseline_window_more">更大的范围当残留，轻微动作更容易被扣掉</string>
+    <string name="p_mouth_baseline_window_tech">h：学习区间半宽，动作系数。</string>
+    <string name="p_mouth_baseline_center">残留范围中心（其他嘴形）</string>
+    <string name="p_mouth_baseline_center_less">范围下移，只把更小的值当残留</string>
+    <string name="p_mouth_baseline_center_more">范围上移，更大的值也当残留</string>
+    <string name="p_mouth_baseline_center_tech">c：一般通道的学习区间中心，动作系数。</string>
+    <string name="p_mouth_baseline_channel5_center">残留范围中心（张嘴）</string>
+    <string name="p_mouth_baseline_channel5_center_less">张嘴的范围下移</string>
+    <string name="p_mouth_baseline_channel5_center_more">张嘴的范围上移，更大的张嘴也当残留</string>
+    <string name="p_mouth_baseline_channel5_center_tech">c₅：JawOpen（mouth33索引5）的学习区间中心。</string>
+    <string name="p_mouth_baseline_max_abs">最多扣掉多少</string>
+    <string name="p_mouth_baseline_max_abs_less">学到的残留超过这个值就不扣</string>
+    <string name="p_mouth_baseline_max_abs_more">允许扣掉更大的残留</string>
+    <string name="p_mouth_baseline_max_abs_tech">L：|β| &lt; L时才扣除，动作系数。</string>
+
+    <string name="p_mouth_channel7_correction_strength">双唇合拢补偿</string>
+    <string name="p_mouth_channel7_correction_strength_less">不加</string>
+    <string name="p_mouth_channel7_correction_strength_more">按下面几项完整地加</string>
+    <string name="p_mouth_channel7_correction_strength_tech">s：混合比例。</string>
+    <string name="p_mouth_channel7_correction_bias">补偿基础量</string>
+    <string name="p_mouth_channel7_correction_bias_less">加得少</string>
+    <string name="p_mouth_channel7_correction_bias_more">加得多，不超过上限</string>
+    <string name="p_mouth_channel7_correction_bias_tech">b：动作系数。</string>
+    <string name="p_mouth_channel7_correction_ceiling">补偿上限</string>
+    <string name="p_mouth_channel7_correction_ceiling_less">最多只加这么多</string>
+    <string name="p_mouth_channel7_correction_ceiling_more">允许加得更多</string>
+    <string name="p_mouth_channel7_correction_ceiling_tech">c：动作系数。</string>
+    <string name="p_mouth_channel7_correction_scale">按残留追加的量</string>
+    <string name="p_mouth_channel7_correction_scale_less">残留多少都加得差不多</string>
+    <string name="p_mouth_channel7_correction_scale_more">残留越多，加得越多</string>
+    <string name="p_mouth_channel7_correction_scale_tech">a：β₇/d项的倍率，动作系数。</string>
+    <string name="p_mouth_channel7_correction_divisor">每份残留的大小</string>
+    <string name="p_mouth_channel7_correction_divisor_less">少量残留就追加较多</string>
+    <string name="p_mouth_channel7_correction_divisor_more">残留要更多才追加同样的量</string>
+    <string name="p_mouth_channel7_correction_divisor_tech">d：β₇的除数，动作系数。</string>
+
+    <string name="p_mouth_log_scale_strength">压小弱嘴形</string>
+    <string name="p_mouth_log_scale_strength_less">各嘴形按模型的比例显示</string>
+    <string name="p_mouth_log_scale_strength_more">较弱的嘴形被压得更小</string>
+    <string name="p_mouth_log_scale_strength_tech">s：混合比例。</string>
+    <string name="p_mouth_log_scale_coefficient">压小与放大的幅度</string>
+    <string name="p_mouth_log_scale_coefficient_less">强弱之间的差别变化小</string>
+    <string name="p_mouth_log_scale_coefficient_more">弱嘴形压得更小，最强的放大更多</string>
+    <string name="p_mouth_log_scale_coefficient_tech">k：对数系数，无量纲。</string>
+    <string name="p_mouth_log_scale_offset">弱嘴形保留量</string>
+    <string name="p_mouth_log_scale_offset_less">最弱的嘴形几乎被压没</string>
+    <string name="p_mouth_log_scale_offset_more">弱嘴形保留更多，强嘴形也放大更多</string>
+    <string name="p_mouth_log_scale_offset_tech">d：对数偏移，无量纲。</string>
+
+    <string name="p_mouth_tongue_ema_strength">伸舌防抖</string>
+    <string name="p_mouth_tongue_ema_strength_less">伸舌跟得紧</string>
+    <string name="p_mouth_tongue_ema_strength_more">更稳，伸出和收回会拖一点</string>
+    <string name="p_mouth_tongue_ema_strength_tech">s：混合比例。</string>
+    <string name="p_mouth_tongue_ema_current_weight">伸舌跟随速度</string>
+    <string name="p_mouth_tongue_ema_current_weight_less">更稳，伸出和收回更慢</string>
+    <string name="p_mouth_tongue_ema_current_weight_more">伸出和收回更快</string>
+    <string name="p_mouth_tongue_ema_current_weight_tech" formatted="false">w：24 Hz参考权重。60%时时间常数约45 ms。</string>
+
+    <string name="p_mouth_tongue_gate_strength">伸舌触发</string>
+    <string name="p_mouth_tongue_gate_strength_less">不做触发处理，小的伸舌值照常显示</string>
+    <string name="p_mouth_tongue_gate_strength_more">线下当作没伸舌，过线后放大</string>
+    <string name="p_mouth_tongue_gate_strength_tech">s：混合比例。</string>
+    <string name="p_mouth_tongue_gate_threshold">伸舌触发线</string>
+    <string name="p_mouth_tongue_gate_threshold_less">稍微伸舌就显示，也更容易误触发</string>
+    <string name="p_mouth_tongue_gate_threshold_more">要伸得更明显才显示</string>
+    <string name="p_mouth_tongue_gate_threshold_tech">θ：TongueOut阈值，动作系数0–1。</string>
+    <string name="p_mouth_tongue_gate_gain">过线后的放大倍数</string>
+    <string name="p_mouth_tongue_gate_gain_less">过线后伸得较少</string>
+    <string name="p_mouth_tongue_gate_gain_more">过线后很快伸满</string>
+    <string name="p_mouth_tongue_gate_gain_tech">g：无量纲倍率，结果限制到1。</string>
+</resources>
