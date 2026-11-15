@@ -18,6 +18,21 @@ class RootlessPanelContract(unittest.TestCase):
                 with self.subTest(path=path, forbidden=forbidden):
                     self.assertNotIn(forbidden, source)
 
+    def test_release_separates_host_checks_from_android_without_visual_studio(self):
+        workflow = (ROOT/'.github/workflows/release.yml').read_text(encoding='utf-8')
+        native = re.search(r'(?ms)^  test-native:\n(.*?)(?=^  build:)', workflow)[1]
+        build = re.search(r'(?ms)^  build:\n(.*?)(?=^  publish:)', workflow)[1]
+        self.assertIn('runs-on: ubuntu-24.04', native)
+        self.assertIn('-DCMAKE_BUILD_TYPE=Release', native)
+        self.assertIn('./artifacts/host-tests/postprocessing_test ', native)
+        self.assertIn('ctest --test-dir artifacts/host-tests --output-on-failure', native)
+        self.assertIn('needs: test-native', build)
+        self.assertIn('./hook/build-hook.ps1', build)
+        self.assertIn('-Ndk "$env:ANDROID_HOME/ndk/26.1.10909125"', build)
+        self.assertIn('-CmakeBin "$env:ANDROID_HOME/cmake/3.22.1/bin"', build)
+        self.assertNotIn('Visual Studio', workflow)
+        self.assertNotIn('postprocessing_test.exe', workflow)
+
     def test_bilingual_resources_match(self):
         values = []
         for directory in ('values', 'values-zh'):
