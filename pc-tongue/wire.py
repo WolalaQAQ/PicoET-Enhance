@@ -1,13 +1,19 @@
-"""PTJ1 source-preserving JPEG framing and TJR1 loopback results."""
+"""PTJ1 source-preserving JPEG framing and TJR1/TJR2 loopback results."""
 from dataclasses import dataclass
+import math
 import socket
 import struct
 import time
 
+from face_schema import ALL_VALID, CHANNELS
+
 HEADER = struct.Struct('<4sHHII12Q4I')
 RESULT = struct.Struct('<4sHHQQQQffffII')
+EXTENDED_RESULT = struct.Struct('<4sHHQQQQffffIIfffI')
+FACE_RESULT = struct.Struct('<4sHHQQQQQfI50f')
 JPEG, RAW, END, REPLAY = 1, 2, 4, 8
-assert HEADER.size == 128 and RESULT.size == 64
+assert HEADER.size == 128 and RESULT.size == 64 and EXTENDED_RESULT.size == 80
+assert FACE_RESULT.size == 256
 
 
 @dataclass(frozen=True)
@@ -117,7 +123,31 @@ def sync_clock(host, port, count=12):
             'calibrated_pc_ns': best['pc_recv_ns'], 'samples': samples}
 
 
-def result_packet(header, state, left=0., right=0., out=0., source_age_ms=0.):
-    return RESULT.pack(b'TJR1', 1, 64, header.session_id, header.source_seq,
-                       header.mouth_sensor_ns, time.perf_counter_ns(),
-                       left, right, out, source_age_ms, state, 0)
+def result_packet(header, state, left=0., right=0., out=0., source_age_ms=0., *,
+                  extended=False, up=0., down=0., roll=0.):
+    fields = (header.session_id, header.source_seq, header.mouth_sensor_ns, time.perf_counter_ns(),
+              left, right, out, source_age_ms, state, 0)
+    if extended:
+        return EXTENDED_RESULT.pack(b'TJR2', 2, 80, *fields, up, down, roll, 0)
+    return RESULT.pack(b'TJR1', 1, 64, *fields)
+
+
+def face_result_packet(header, values, valid_mask, source_age_ms=0., state=0):
+    """MFR1 whole-mouth controls; absent bits are unknown, not measured zeros."""
+    if len(values) != len(CHANNELS):
+        raise ValueError('MFR1 requires 50 ordered values')
+    if valid_mask < 0 or valid_mask & ~ALL_VALID:
+        raise ValueError('MFR1 valid mask must fit 50 channels')
+    if state not in (0, 1):
+        raise ValueError('MFR1 state must be fresh or invalid')
+    if not math.isfinite(source_age_ms) or source_age_ms < 0:
+        raise ValueError('MFR1 source age must be finite and nonnegative')
+    if state == 1 or not valid_mask:
+        state, valid_mask = 1, 0
+    controls = [float(value) if valid_mask & (1 << index) else 0.
+                for index, value in enumerate(values)]
+    if any(not math.isfinite(value) or not 0 <= value <= 1 for value in controls):
+        raise ValueError('MFR1 supported controls must be finite and in [0,1]')
+    return FACE_RESULT.pack(b'MFR1', 1, FACE_RESULT.size, header.session_id,
+                            header.source_seq, header.mouth_sensor_ns, time.perf_counter_ns(),
+                            valid_mask, source_age_ms, state, *controls)
