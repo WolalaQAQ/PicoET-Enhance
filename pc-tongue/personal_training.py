@@ -56,12 +56,21 @@ def automatic_mask(sample, open_reference):
 
 
 def split_samples(samples):
+    # Prefer a whole wearing session. A one-session guide uses contiguous pose
+    # tails with a gap, not interleaved neighbours from the same 90Hz sequence.
+    sessions = list(dict.fromkeys(s['session_id'] for s in samples))
+    if len(sessions) > 1:
+        return ([s for s in samples if s['session_id'] != sessions[-1]],
+                [s for s in samples if s['session_id'] == sessions[-1]])
     train, held = [], []
-    seen = {label: 0 for label in range(1, 6)}
+    poses = {}
     for sample in samples:
-        label = sample['label']
-        (held if seen[label] % 4 == 3 else train).append(sample)
-        seen[label] += 1
+        poses.setdefault(sample.get('pose', str(sample['label'])), []).append(sample)
+    for rows in poses.values():
+        count = max(3, len(rows)//4)
+        gap = min(5, len(rows)//8)
+        train.extend(rows[:max(0, len(rows)-count-gap)])
+        held.extend(rows[-count:])
     return train, held
 
 
@@ -85,6 +94,7 @@ def evaluate(network, samples, cancelled):
     positive = negative = true_positive = false_positive = 0
     angles = {label: [] for label in (3, 4, 5)}
     rows = []
+    negative_by_pose = {}
     for sample in samples:
         check_cancel(cancelled)
         logits = network(to_input(torch.from_numpy(sample['frame'])[None]))[0, 0]
@@ -94,6 +104,9 @@ def evaluate(network, samples, cancelled):
         if sample['label'] <= 2:
             negative += 1
             false_positive += result['present']
+            counts = negative_by_pose.setdefault(sample.get('pose', str(sample['label'])), [0, 0])
+            counts[0] += int(result['present'])
+            counts[1] += 1
         else:
             positive += 1
             true_positive += result['present']
@@ -105,11 +118,14 @@ def evaluate(network, samples, cancelled):
         center, left, right = (float(np.median(angles[label])) for label in (3, 4, 5))
         separated = abs(left-center) >= .08 and abs(right-center) >= .08 and (left-center)*(right-center) < 0
     return dict(tp=tp, fp=fp, score=tp-2*fp, direction=separated,
-                positive=positive, negative=negative), rows
+                 positive=positive, negative=negative,
+                 negative_by_pose={pose: fp/n for pose, (fp, n) in negative_by_pose.items()}), rows
 
 
 def better_than(before, after):
-    return bool(after['direction'] and after['score'] >= before['score']+.05 and after['fp'] <= before['fp']+.02)
+    poses = after.get('negative_by_pose', {})
+    return bool(after['direction'] and after['score'] >= before['score']+.05 and after['fp'] <= before['fp']+.02 and
+                all(fp <= before.get('negative_by_pose', {}).get(pose, 0.)+.02 for pose, fp in poses.items()))
 
 
 def export_candidate(network, checkpoint, held, cancelled):
@@ -139,14 +155,15 @@ def train_head(samples, standard_checkpoint, current_checkpoint, job, cancelled,
     check_cancel(cancelled)
     np.savez_compressed(job/'recording.npz', frames=np.stack([s['frame'] for s in samples]),
                         masks=np.stack([s['mask'] for s in samples]), labels=np.array([s['label'] for s in samples], np.uint8),
+                        poses=np.array([s.get('pose', str(s['label'])) for s in samples]),
                         session_id=np.array([s['session_id'] for s in samples]),
                         source_seq=np.array([s['source_seq'] for s in samples]),
                         sensor_ns=np.array([s['sensor_ns'] for s in samples]))
-    opened = [s['frame'].astype(np.float32) for s in samples if s['label'] == 2]
+    train, held = split_samples(samples)
+    opened = [s['frame'].astype(np.float32) for s in train if s['label'] == 2]
     if len(opened) < 10:
         raise ValueError('Not enough open-mouth reference samples for training')
     open_reference = np.stack(opened).mean(axis=0)
-    train, held = split_samples(samples)
     usable = []
     for sample in train:
         check_cancel(cancelled)
@@ -162,7 +179,7 @@ def train_head(samples, standard_checkpoint, current_checkpoint, job, cancelled,
     current = load_network(current_checkpoint)
     before, _ = evaluate(current, held, cancelled)
     del current
-    network = load_network(standard_checkpoint)
+    network = load_network(current_checkpoint)
     optimizer = torch.optim.Adam(network.head.parameters(), lr=.001)
     rng = np.random.default_rng(12345)
     last_loss = 0.
@@ -188,7 +205,9 @@ def train_head(samples, standard_checkpoint, current_checkpoint, job, cancelled,
     accepted = better_than(before, after)
     metrics = dict(before=before, after=after, accepted=accepted, steps=steps, training_device='cpu',
                    train_samples=len(usable), held_out_samples=len(held), last_loss=last_loss,
-                   validation_scope='every fourth frame of each recorded pose; not independent-session generalization')
+                    initialization=str(current_checkpoint),
+                    validation_scope=('whole last camera session' if len({s['session_id'] for s in samples}) > 1 else
+                                      'contiguous final quarter per pose; up to 5 samples excluded at boundary; same wearing session'))
     (job/'training.json').write_text(json.dumps(metrics, indent=2, allow_nan=False), encoding='utf-8')
     if not accepted:
         return dict(accepted=False, metrics=metrics)

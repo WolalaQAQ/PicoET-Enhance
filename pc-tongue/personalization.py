@@ -12,7 +12,8 @@ import numpy as np
 
 DEFAULT_CALIBRATION = dict(left=.33, center=.66, right=1.11, min_area=100)
 STEPS = ('fit', 'closed', 'open', 'center', 'left', 'right')
-LABELS = dict(closed=1, open=2, center=3, left=4, right=5)
+TRAINING_STEPS = ('fit', 'closed', 'open', 'wide', 'smile', 'speech', 'center', 'left', 'right')
+LABELS = dict(closed=1, open=2, wide=2, smile=1, speech=1, center=3, left=4, right=5)
 
 
 def valid_calibration(cal):
@@ -63,13 +64,14 @@ class Wizard:
     """Independent <=20Hz guide sampling; the video/inference pipeline stays at 90Hz."""
     def __init__(self, mode):
         self.mode = mode
+        self.steps = TRAINING_STEPS if mode == 'retrain' else STEPS
         self.step = 'fit'
         self.hint = 'fit'
         self.session = None
         self.last_ns = self.entered_ns = None
         self.count = 0
         self.window = deque(maxlen=8)
-        self.rows = {label: [] for label in range(1, 6)}
+        self.rows = {step: [] for step in self.steps[1:]}
         self.current = []
         self.closed_ref = self.open_ref = self.previous_blocks = None
         self.center = self.left = self.side_best = None
@@ -146,7 +148,8 @@ class Wizard:
                             self.hint = 'steady'
                             return None
             self.current.append(dict(frame=frame.copy(), mask=np.asarray(raw.get('mask', np.zeros((56, 56))), dtype=bool).copy(),
-                                     label=LABELS[self.step], raw_angle=raw.get('raw_angle'), area=int(raw.get('mask_area', 0)),
+                                     label=LABELS[self.step], pose=self.step,
+                                     raw_angle=raw.get('raw_angle'), area=int(raw.get('mask_area', 0)),
                                      session_id=str(header.session_id), source_seq=str(header.source_seq), sensor_ns=str(ns)))
             self.count += 1
         self.hint = 'holding'
@@ -156,7 +159,7 @@ class Wizard:
             if self.mode == 'calibrate' and self.step in ('left', 'right'):
                 for sample in self.current:
                     sample['raw_angle'] = self.side_best
-            self.rows[LABELS[self.step]] = self.current
+            self.rows[self.step] = self.current
             if self.step in ('closed', 'open'):
                 reference = np.stack([s['frame'].reshape(50, 4, 50, 4).mean(axis=(1, 3)) for s in self.current]).mean(axis=0)
                 if self.step == 'closed':
@@ -170,7 +173,7 @@ class Wizard:
         if self.step == 'right':
             self.finished = True
             return [sample for rows in self.rows.values() for sample in rows]
-        self.step = STEPS[STEPS.index(self.step)+1]
+        self.step = self.steps[self.steps.index(self.step)+1]
         self.entered_ns = ns
         self.side_best = self.previous_blocks = None
         self.reset_hold(self.step)
@@ -178,7 +181,7 @@ class Wizard:
 
     def status(self):
         return dict(mode=self.mode, step=self.step, hint=self.hint, collected=self.count, target=self.target,
-                    progress=(STEPS.index(self.step)+min(1., self.count/self.target))/len(STEPS))
+                    progress=(self.steps.index(self.step)+min(1., self.count/self.target))/len(self.steps))
 
 
 class Personalization:

@@ -60,11 +60,29 @@ class TrainingTests(unittest.TestCase):
         glare = dict(sample, frame=np.full((200, 200), 255, np.uint8), mask=np.zeros((56, 56), bool))
         self.assertFalse(automatic_mask(glare, np.zeros((200, 200), np.float32)).any())
 
-    def test_every_fourth_frame_per_pose_is_held_out_and_not_trained(self):
+    def test_contiguous_pose_tail_has_a_gap_and_is_not_trained(self):
         train, held = split_samples(training_samples())
-        self.assertEqual((len(train), len(held)), (60, 20))
+        self.assertEqual((len(train), len(held)), (50, 20))
         self.assertTrue(set(s['source_seq'] for s in train).isdisjoint(s['source_seq'] for s in held))
         self.assertEqual([sum(s['label'] == label for s in held) for label in range(1, 6)], [4]*5)
+        for label in range(1, 6):
+            self.assertGreater(min(int(s['source_seq']) for s in held if s['label'] == label)-
+                               max(int(s['source_seq']) for s in train if s['label'] == label), 2)
+
+    def test_last_whole_session_is_held_out(self):
+        first = training_samples()
+        second = [dict(s, session_id='new-fit') for s in first]
+        train, held = split_samples(first+second)
+        self.assertEqual(train, first)
+        self.assertEqual(held, second)
+        self.assertTrue({s['session_id'] for s in train}.isdisjoint(s['session_id'] for s in held))
+
+    def test_hard_negative_poses_are_not_merged_into_one_validation_window(self):
+        rows = [dict(s, pose='closed' if s['label'] == 1 else str(s['label'])) for s in training_samples()]
+        rows += [dict(s, pose='smile') for s in rows if s['label'] == 1]
+        train, held = split_samples(rows)
+        self.assertEqual(sum(s['pose'] == 'smile' for s in held), 4)
+        self.assertEqual(sum(s['pose'] == 'smile' for s in train), 10)
 
     def test_loss_positive_weight_dice_and_finite_gradient(self):
         logits = torch.zeros((1, 1, 2, 2), requires_grad=True)
@@ -95,6 +113,21 @@ class TrainingTests(unittest.TestCase):
         for row in (dict(score=.54, fp=.1, direction=True), dict(score=.6, fp=.121, direction=True),
                     dict(score=.8, fp=.1, direction=False)):
             self.assertFalse(better_than(before, row))
+
+    def test_each_negative_pose_must_not_regress_even_when_total_improves(self):
+        before = dict(score=.5, fp=.1, negative_by_pose={'wide': .1, 'smile': .2})
+        after = dict(score=.8, fp=.05, direction=True, negative_by_pose={'wide': .13, 'smile': 0.})
+        self.assertFalse(better_than(before, after))
+        after['negative_by_pose']['wide'] = .1
+        self.assertTrue(better_than(before, after))
+
+    def test_fine_tuning_starts_from_the_active_personal_head(self):
+        personal = self.root/'active.pt'
+        torch.save(self.network.state_dict(), personal)
+        with patch('personal_training.load_network', wraps=load_network) as load:
+            train_head(training_samples(), self.checkpoint, personal, self.root,
+                       threading.Event(), lambda value: None, steps=1)
+        self.assertEqual([call.args[0] for call in load.call_args_list], [personal, personal])
 
     def test_rejected_training_records_consent_samples_without_export_or_standard_overwrite(self):
         original = self.checkpoint.read_bytes()

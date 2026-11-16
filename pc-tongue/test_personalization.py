@@ -28,7 +28,8 @@ def run_wizard(mode):
     wizard = Wizard(mode)
     for index in range(1200):
         angle = {'center': .66, 'left': .33, 'right': 1.11}.get(wizard.step)
-        shade = {'fit': 100, 'closed': 100, 'open': 110, 'center': 120, 'left': 130, 'right': 140}[wizard.step]
+        shade = {'fit': 100, 'closed': 100, 'open': 110, 'wide': 115, 'smile': 105, 'speech': 108,
+                 'center': 120, 'left': 130, 'right': 140}[wizard.step]
         raw = dict(nose_area=5000, raw_angle=angle, mask_area=200 if angle else 0,
                    mask=np.zeros((56, 56), bool))
         result = wizard.feed(np.full((400, 400), shade, np.uint8), raw,
@@ -66,13 +67,15 @@ class CalibrationTests(unittest.TestCase):
             calibration_from_samples([])
 
     def test_complete_calibration_and_retraining_guides(self):
-        for mode, expected in (('calibrate', [30, 30, 24, 40, 40]), ('retrain', [60]*5)):
+        for mode, expected in (('calibrate', [30, 30, 24, 40, 40]), ('retrain', [180, 120, 60, 60, 60])):
             with self.subTest(mode=mode):
                 wizard, rows = run_wizard(mode)
                 self.assertTrue(wizard.finished)
                 self.assertEqual([sum(s['label'] == i for s in rows) for i in range(1, 6)], expected)
                 self.assertEqual(len({s['source_seq'] for s in rows}), len(rows))
                 self.assertTrue(valid_calibration(calibration_from_samples(rows)))
+                if mode == 'retrain':
+                    self.assertEqual({s['pose'] for s in rows}, {'closed', 'open', 'wide', 'smile', 'speech', 'center', 'left', 'right'})
 
     def test_duplicate_timestamps_and_fast_inference_do_not_advance_guide(self):
         wizard = Wizard('calibrate')
