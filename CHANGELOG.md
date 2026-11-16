@@ -2,20 +2,47 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
-## [Unreleased] - 2026-10-28
+## [Unreleased] - 2026-11-17
 
 ### Features
+- Add a persistent current-step counter/progress bar, four ordered capture presets (12/11/13/73 steps) and an expandable action list to Capture. Guided recording uses the selected preset and locks it for the session.
+- Add reusable exact-pair auditing and derived raw-supervision helpers, preserving signed archives, reviewed-label priority and whole-session grouping.
+- Add optional source-weighted MSE/Huber and mild, non-mirrored IR augmentation for matched training comparisons.
+- Support optional 224×224 student inputs, retaining 160×160 by default and restoring input size when reloading checkpoints.
+- Lower the default teacher-head learning rate to `1e-4` after observing sigmoid saturation and zero gradients on sparse real-image supervision; student defaults remain `1e-3`.
+- Support explicitly selected local DINOv3 ViT-B/16, ViT-L/16 and ViT-H+/16 teachers with full 400×400 inputs, head training, last-two-block fine-tuning and the existing pseudo-label/student-distillation flow.
+- Split the PC app into Tracking, Capture, Train and Settings pages with direct links and browser-history navigation. Keep everyday actions visible and move channel tables, technical parameters and individual training operations into advanced entries.
+- Discover mouth sources on the LAN through UDP45681 and verify their PTC1 identity over TCP; retain a manual address in Advanced settings.
+- Select the local ONNX path through the PC's native file dialog, without uploading or copying the model.
+- Add bilingual Meta-Man face close-ups to pose guidance: 71 illustrated stages covering all 50 named controls, 70 opt-in animations and 25 side views, with practice browsing and recording-step matching. Occlusion and refitting remain text-only operations.
 - Add an opt-in 400×400 grayscale JPEG95 camera source with shared-slot IPC and a separate root transport daemon, targeting fresh 90 Hz inputs.
-- Add a bilingual PC app for FP32 ORT inference, local TJR1 output, calibration, consented recording/head retraining, validated activation and standard-profile restore.
-- Add portable source builds, pinned model acquisition/export, explicit owned source control and offline PC/web/native tests.
+- Make end-to-end whole-mouth regression the development route and define `pico-mouth50-v1`: MouthLink's original 44 fields plus four upper/lower lip horizontal controls and two upper/lower Funnel controls.
+- Add a stock raw/instant/final expression and quality side channel, exact source pairing, separately consented local recording, pose guidance and unknown-label masks.
+- Add local teacher fine-tuning, soft labels, a directly supervised student baseline, student distillation/personal adaptation and ONNX export tools; user data is not uploaded.
+- Send whole-mouth controls through 256-byte MFR1 with per-field validity on local UDP45682 for the matching UnifiedPicoModule to merge, retaining ORT backend selection and the bilingual app.
 
 ### Design Rationale
-- Selectively adapt PR #4's model and personal workflow without importing its research photos/history or on-headset inference. Keep network/encoding outside the camera service and mouth ownership in VRCFT.
+- Derive the guide length and order from the preset's action list; freeze the selected plan in the recording manifest before frames arrive, while reusing the existing demonstration assets.
+- Keep optimization coverage separate from validation and output permission; export without an approval retains provenance but enables no channels.
+- Record distinct DINOv2/DINOv3 checkpoint kinds and input sizes so continuation restores the matching teacher. Both use CLS and mean-patch features with the same 50-channel head and MobileNetV3-small student.
+- Separate tasks rather than using a sidebar to scroll through a long form. Changing pages retains drafts and active sessions; camera preview uses the same image element across Tracking and Capture.
+- Keep device/model selection as a draft; discovery does not subscribe to images, and choosing a model does not start inference or recording.
+- Preserve the HighFidelity character, source mesh and existing morph coordinates. Distinguish 48 original-morph stages from 23 stages with added tongue binding/bending or independent lip-shift controls; demonstrations are visual cues, not measured targets.
+- Keep capture on the headset, configuration/training/inference on the PC, and mouth ownership/SDK merging in VRCFT, without adding ORT or a teacher to the host.
 - Preserve the synchronous camera protection copy, borrow the shared slot for encoding, and keep personal profiles separate from standard weights.
+- Distribute the teacher for local supervision of a user's student, then run only the student during normal use; collecting user images on the developer's side is not a prerequisite.
+- Preserve raw, gated instant and final filtered values separately; a gated TongueOut zero is not an automatic negative label. Split training/validation by person and headset-fit session.
 
 ### Notes & Caveats
-- Pair with UnifiedPicoModule `feat/tongue-pc`. Normal Magisk packaging, installed versions and default enhancement behavior remain unchanged; tongue components are started explicitly from source.
-- Real sustained worn input, personal-model accuracy and native/VD concurrency still require live testing. The portable controller has fake-device coverage; its integrated deployment has not been run on hardware.
+- Preset selection and practice do not begin recording or approve labels. Free recording has no step plan; completing guidance still requires an explicit stop.
+- Model loading and the final runtime merge enforce `validated_channels` and `valid_mask`; legacy training-only manifests no longer enable output.
+- DINOv3 requires its matching local source and authorized weights under the DINOv3 License. DINOv2 remains the CLI default; select v3 B, L or H+ with `--teacher-backbone dinov3`, `dinov3-large` or `dinov3-huge`.
+- Automatic discovery requires this branch's updated headset daemon and a network that allows broadcasts. The native file chooser runs on the PC hosting the local app and needs Python's Tk support.
+- Reference images retain their source and asset-license notices; the pack contains no source FBX or SDK implementation. Added guide controls are labelled separately from original Meta morphs.
+- Pair with UnifiedPicoModule `feat/tongue-pc`. Normal Magisk packaging and installed versions are unchanged; additional components start explicitly from source.
+- Retain segmentation/geometry and personal mask-training code only for history and regression tests, not as the default or a silent fallback for regression-model failures.
+- No validated general-purpose mouth/teacher weights are bundled, and training materials are not downloaded automatically. Synthetic training and ONNX checks do not establish worn accuracy.
+- On-device inference-input/camera identity association, sustained worn sources, personal accuracy and native/VD concurrency still need live acceptance; this work does not install or operate the device.
 
 ## [2.5.2] - 2026-11-15
 

@@ -6,7 +6,7 @@
 
 > v2.5.2 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
 
-**PC舌头开发：**`feat/tongue-pc`增加按需启动的JPEG相机源及PC推理／个人流程，配套UnifiedPicoModule同名分支。按[源码构建与测试说明](TONGUE_zh.md)使用；下方正常Magisk包保持不变。
+**端到端嘴追开发：**`feat/tongue-pc`采用[MouthLink](https://github.com/UndefinedSignal/MouthLink)式整嘴回归：头显取图，PC配置、录制、训练和推理，配套UnifiedPicoModule同名分支合并输出。分割mask后手写几何不再作为主线；个人图像、教师预测与学生权重留在用户PC。按[源码构建与测试说明](TONGUE_zh.md)使用；下方正常Magisk包保持不变，开发工具不附带已验收的通用整嘴权重。
 
 ## 它做什么
 
@@ -196,7 +196,7 @@ pwsh -File build-picoet-enhance.ps1 -Python python # 构建面板并打包 Magis
 
 ## 待做
 
-- [ ] **舌头方向增强**：PICO 目前只对外提供伸舌量 `TongueOut` 一个标量，而 VRCFaceTracking 已定义了 `TongueLeft/Right/Up/Down` 等方向通道。计划先取下脸相机的原始帧，用视觉分割基模自动打标，再训练一个小模型，并允许用户采集自己的数据在本地做在线微调。
+- [ ] **端到端整嘴模型**：以同源嘴图和原厂raw／instant／final表情为基础，补齐独立上下唇、脸颊和舌形的动作采集；微调回归教师，再蒸馏轻量学生。用户可在自己的PC上用教师辅助个人适配，不上传图像或个人权重；逐通道可观测性、真人效果及重新佩戴泛化仍需验证。
 - [ ] **后处理佩戴比较**：比较均衡、灵敏与不处理三个预设的实际响应、静止噪声及Avatar表现。
 
 ## 反馈

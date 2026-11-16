@@ -6,7 +6,7 @@ An eye-tracking enhancement Magisk module for the PICO 4 Pro: it opens the eye-t
 
 > v2.5.2 · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
 
-**PC tongue development:** `feat/tongue-pc` adds an opt-in JPEG camera source and PC inference/personalization app, paired with the same branch of UnifiedPicoModule. Follow the [source-build and testing guide](TONGUE.md); the normal Magisk package below is unchanged.
+**End-to-end mouth tracking development:** `feat/tongue-pc` follows [MouthLink](https://github.com/UndefinedSignal/MouthLink)-style whole-mouth regression: the headset captures images, the PC handles configuration, recording, training and inference, and the matching UnifiedPicoModule branch merges the outputs. Segmentation masks followed by hand-written geometry are no longer the main route. Personal images, teacher predictions and student weights stay on the user's PC. Follow the [source-build and testing guide](TONGUE.md); the normal Magisk package below is unchanged, and the development tools do not include a validated general-purpose mouth model.
 
 ## What it does
 
@@ -196,7 +196,7 @@ Pushing a `v<version>` tag makes GitHub Actions build on a Windows runner and pu
 
 ## TODO
 
-- [ ] Tongue-direction support: PICO currently exposes only the scalar `TongueOut`, while VRCFaceTracking already defines direction channels such as `TongueLeft/Right/Up/Down`. The plan is to capture raw frames from the lower-face camera, auto-label them with visual segmentation foundation models, train a small model, and let users collect their own data for a local online fine-tune.
+- [ ] End-to-end whole-mouth model: pair mouth images with stock raw/instant/final expressions, add guided samples for independent upper/lower lips, cheeks and tongue shapes, then fine-tune a regression teacher and distill a lightweight student. Users can adapt their student locally with the teacher; images and personal weights are not uploaded. Per-channel observability, worn performance and generalization across headset fits still need validation.
 - [ ] Worn comparison of the balanced, responsive and no-processing presets: stationary noise and avatar response.
 
 ## Feedback
