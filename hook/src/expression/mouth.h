@@ -19,6 +19,9 @@ struct MouthDiagnostics {
 struct MouthState {
     float baseline[32] {};
     float previous[kMouthChannels] {};
+    // Action postprocess (including tongue threshold), before/after first clamp.
+    // Neither is raw; these snapshots never feed the numerical recurrence.
+    float instant_preclamp[kMouthChannels] {}, instant[kMouthChannels] {};
     uint64_t first_source_ns = 0, last_source_ns = 0;
     uint32_t window_samples = 30, threshold_samples = 15;
     QualityTimeWindow quality;

@@ -1,7 +1,7 @@
 // Compiled as an object only, for ABI evidence. Not linked into production artifacts.
 #include "channel.h"
 extern "C" const uint64_t ptj_ipc_layout[] = {
-    2, sizeof(ipc::Channel), sizeof(ipc::Slot), sizeof(PTJMeta), sizeof(PTJStats),
+    3, sizeof(ipc::Channel), sizeof(ipc::Slot), sizeof(PTJMeta), sizeof(PTJStats),
     offsetof(ipc::Channel, state), offsetof(ipc::Channel, pending), offsetof(ipc::Channel, daemon_heartbeat),
     offsetof(ipc::Channel, client_pid), offsetof(ipc::Channel, producer), offsetof(ipc::Channel, core),
     offsetof(ipc::Channel, slots), offsetof(ipc::Slot, state), offsetof(ipc::Slot, meta),

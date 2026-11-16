@@ -9,7 +9,7 @@ struct Probe {
     uint64_t dispatch_dropped, stop_ack, capture_ns, dispatch_ns, producer_enqueued;
     uint64_t version, client_ready, attach_ack, error_stage, client_pid, client_birth, request_session;
     uint64_t attach_session, stop_session, root0, root1, nonce0, nonce1, attach0, attach1, attach_root0, attach_root1;
-    uint64_t stop0, stop1;
+    uint64_t stop0, stop1, stock_subscription;
 };
 void stop_ack(Channel& c) {
     c.stop_ack_session = c.session;
@@ -30,7 +30,8 @@ EXPORT int ipc_test_probe(const char* root, Probe* out) {
         c.client_birth.load(), c.request_session.load(), c.attach_ack_session.load(), c.stop_ack_session.load(),
         c.daemon_nonce[0], c.daemon_nonce[1], c.client_nonce[0].load(), c.client_nonce[1].load(),
         c.attach_client_nonce[0].load(), c.attach_client_nonce[1].load(),
-        c.attach_root_nonce[0].load(), c.attach_root_nonce[1].load(), c.stop_client_nonce[0].load(), c.stop_client_nonce[1].load()};
+        c.attach_root_nonce[0].load(), c.attach_root_nonce[1].load(), c.stop_client_nonce[0].load(), c.stop_client_nonce[1].load(),
+        c.stock_subscription.load()};
     unmap_file(m); return 0;
 }
 EXPORT int ipc_test_fixture(const char* root, uint32_t action) {
@@ -38,7 +39,7 @@ EXPORT int ipc_test_fixture(const char* root, uint32_t action) {
     if (error) return error;
     auto* c = action == 0 ? new(m.address) Channel : static_cast<Channel*>(m.address);
     if (action == 0) {
-        std::memcpy(c->magic, "PTJIPC2", 8); c->session = mono_ns();
+        std::memcpy(c->magic, "PTJIPC3", 8); c->session = mono_ns();
         c->daemon_pid = pid(); c->daemon_birth = self_birth(error);
         if (!error) error = random_nonce(c->daemon_nonce);
         c->daemon_heartbeat = mono_ns(); c->state = Ready;
@@ -74,5 +75,9 @@ EXPORT int ipc_test_fixture(const char* root, uint32_t action) {
     } else if (action == 16) c->client_nonce[0] ^= 1;
     else if (action == 17) c->request_session ^= 1;
     else if (action == 18) c->attach_client_nonce[0] ^= 1;
+    else if (action == 23 || action == 24) {
+        c->stock_subscription = 123;
+        for (auto& label : c->labels) label.state.store(action == 23 ? Pending : Free, std::memory_order_release);
+    }
     unmap_file(m); return error;
 }

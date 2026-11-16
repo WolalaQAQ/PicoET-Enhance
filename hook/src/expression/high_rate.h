@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include "source_identity.h"
 
 namespace expression_high_rate {
 struct Mat { alignas(8) unsigned char bytes[0x60]; };
@@ -24,7 +25,8 @@ struct RateConfig {
 RateConfig configure_rates(uint32_t eye_hz, uint32_t mouth_hz);
 void configure(uintptr_t base, Trackor stock, Infer observed_infer, Infer stock_infer, Resize resize);
 Output dispatch(void* owner, const Mat* eye0, const Mat* eye1, const Mat* mouth,
-                const uint64_t sources[3]);
+                const uint64_t sources[3],
+                const expression_independent::MouthInputIdentity* mouth_input = nullptr);
 const FrameInfo& frame_info();
 void forget_owner(void* owner);
 void observe_stock_completion(bool completed);

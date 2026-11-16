@@ -7,9 +7,12 @@ template<class T> T load(const void* p, size_t offset) {
 }
 constexpr uint32_t PREFIX_BYTES = 640000, MAX_BYTES = 2 * 1024 * 1024;
 }
-void CameraBridge::arm(PTJSource* owner, uint64_t owner_session, CameraSubmit function) {
+void CameraBridge::arm(PTJSource* owner, uint64_t owner_session, CameraSubmit function, StockSubmit labels,
+                       uint64_t generation, bool audited) {
     std::lock_guard<std::mutex> lock(gate);
     source = owner; session = owner_session; submit = function;
+    stock_submit = labels; service_generation = generation; audited_camera5 = audited;
+    association.reset_context(session, service_generation);
     counts.last_identity = 0; counts.last_sensor_ns = 0; counts.first_identity = 0;
     fault = false;
     accepting.store(++epoch, std::memory_order_release);
@@ -36,11 +39,16 @@ void CameraBridge::on_frame(uint64_t entry_epoch, const void* listener, const vo
     if (!sensor) { ++counts.missing_sensor; return; }
     const uint64_t previous = counts.last_identity.load(std::memory_order_relaxed);
     const uint64_t previous_sensor = counts.last_sensor_ns.load(std::memory_order_relaxed);
-    if (identity == previous) { ++counts.duplicate; return; }
+    if (identity == previous) {
+        association.invalidate_identity(identity); association.invalidate_sensor(sensor);
+        ++counts.duplicate; return;
+    }
     if (identity < previous) {
         ++counts.backwards; fault = true; accepting.store(0, std::memory_order_release); return;
     }
-    if (previous_sensor && sensor == previous_sensor) { ++counts.sensor_duplicate; return; }
+    if (previous_sensor && sensor == previous_sensor) {
+        association.invalidate_sensor(sensor); ++counts.sensor_duplicate; return;
+    }
     if (previous_sensor && sensor < previous_sensor) {
         ++counts.sensor_backwards; fault = true; accepting.store(0, std::memory_order_release); return;
     }
@@ -54,6 +62,7 @@ void CameraBridge::on_frame(uint64_t entry_epoch, const void* listener, const vo
     meta.sensor_ns = sensor; meta.vendor_ns = vendor;
     // This camera5 composite exposes ONE parent sensor timestamp, not separate eye exposures.
     meta.eye0_sensor_ns = sensor; meta.eye1_sensor_ns = sensor; meta.mouth_sensor_ns = sensor;
+    association.observe(meta);
     PTJSource* target = source;
     CameraSubmit function = submit;
     ++flight;
@@ -74,11 +83,30 @@ void CameraBridge::on_frame(uint64_t entry_epoch, const void* listener, const vo
     // Predicate update under the same mutex prevents lost wakeups in detach_and_drain.
     lock.lock(); --flight; lock.unlock(); drained.notify_all();
 }
+void CameraBridge::on_stock(const PTJStockRecord& input) {
+    std::unique_lock<std::mutex> lock(gate, std::try_to_lock);
+    if (!lock.owns_lock() || !accepting.load(std::memory_order_acquire) || !stock_submit) return;
+    PTJStockRecord label = input;
+    const uint64_t input_vendor = input.vendor_ns, input_identity = input.raw_identity;
+    const bool same_context = (!input.capture_session_id || input.capture_session_id == session) &&
+        (!input.service_generation || input.service_generation == service_generation);
+    const bool captured_input = input.reserved[0] == PTJ_STOCK_INPUT_IDENTITY_V1;
+    label.capture_session_id = session;
+    label.service_generation = service_generation;
+    label.reserved[0] = label.reserved[1] = 0;
+    // Audited OS5.13.7: input+100/108/110 = camera5 vendor/sensor/identity.
+    // Rebased replay timestamps cannot substitute for matching all three values.
+    const auto clock = audited_camera5 && captured_input && same_context
+        ? StockAssociation::InputClock::Camera5ParentSensor : StockAssociation::InputClock::Unproven;
+    association.associate(label, clock, input_vendor, input_identity);
+    stock_submit(source, &label); // Tiny bounded copy; no image slot is touched.
+}
 void CameraBridge::detach_and_drain() {
     accepting.store(0, std::memory_order_release);
     std::unique_lock<std::mutex> lock(gate);
     drained.wait(lock, [&] { return flight.load(std::memory_order_relaxed) == 0; });
     source = nullptr; submit = nullptr; session = 0;
+    stock_submit = nullptr; service_generation = 0; audited_camera5 = false; association.clear();
 }
 CameraStats CameraBridge::snapshot() const {
     CameraStats s{};

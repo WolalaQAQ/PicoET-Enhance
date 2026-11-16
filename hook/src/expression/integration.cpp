@@ -4,7 +4,10 @@
 #include "state.h"
 #include "high_rate.h"
 #include "mouth.h"
+#include "../../../tongue-source/stock_record.h"
+#include "../../../tongue-source/stock_input.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -14,6 +17,32 @@
 
 namespace expression_independent {
 namespace {
+struct LabelSink {
+    std::mutex mutex;
+    PTJStockSink callback = nullptr;
+    void* context = nullptr;
+    uint64_t sequence = 0;
+};
+LabelSink& label_sink() { static LabelSink value; return value; }
+void publish_stock(const MouthState& state, const float raw35[35], const FrameTiming& timing, bool valid) {
+    auto& sink = label_sink();
+    std::unique_lock<std::mutex> lock(sink.mutex, std::try_to_lock);
+    if (!lock.owns_lock() || !sink.callback || state.diagnostics.update != SourceUpdate::Updated) return;
+    PTJStockRecord record;
+    record.stock_input_ns = timing.source_ns[2];
+    prepare_stock_input_record(record, timing.mouth_input);
+    record.label_seq = ++sink.sequence;
+    record.produced_mono_ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    record.flags = (valid ? PTJ_STOCK_VALID : 0) | (state.diagnostics.warmup ? PTJ_STOCK_WARMUP : 0);
+    record.classification = state.diagnostics.classification;
+    std::memcpy(record.raw33, raw35, sizeof(record.raw33));
+    std::memcpy(record.quality2, raw35 + 33, sizeof(record.quality2));
+    std::memcpy(record.instant33, state.instant, sizeof(record.instant33));
+    std::memcpy(record.instant_preclamp33, state.instant_preclamp, sizeof(record.instant_preclamp33));
+    std::memcpy(record.final33, state.previous, sizeof(record.final33));
+    sink.callback(sink.context, &record);
+}
 uintptr_t plugin;
 Merge original_merge;
 struct OwnerState {
@@ -219,6 +248,7 @@ void end_frame(float* output) {
         const bool reset = preserve_mouth_quality_reset_time(frame.state->reference, plugin,
             frame.owner, frame.raw, frame.timing.source_ns[2]);
 #endif
+        publish_stock(frame.state->mouth_filter, frame.mouth_raw, frame.timing, output[53] != 0.f);
         if (reset) reset_mouth_quality(frame.state->mouth_filter);
     } else if (frame.timing.slow) output[53] = 0.0f;
     std::memcpy(frame.final, output, sizeof(frame.final));
@@ -241,3 +271,11 @@ void end_frame(float* output) {
 }
 bool frame_applied() { return frame.applied; }
 }
+
+extern "C" void picoet_set_stock_sink(PTJStockSink callback, void* context) {
+    auto& sink = expression_independent::label_sink();
+    std::lock_guard<std::mutex> lock(sink.mutex);
+    sink.callback = callback;
+    sink.context = context;
+}
+extern "C" uint32_t picoet_stock_input_identity_version() { return 1; }

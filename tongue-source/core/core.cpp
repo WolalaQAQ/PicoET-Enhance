@@ -1,5 +1,7 @@
 #include "ptj_source.h"
 #include "borrow_api.h"
+#include "../stock_record.h"
+#include "../capture_context.h"
 #include <cerrno>
 #include <algorithm>
 #include <array>
@@ -81,8 +83,10 @@ struct Frame {
 };
 struct PTJSource {
     uint64_t session;
+    uint64_t service_generation = 0; // Root-verified immutable owner; never inferred from labels.
     uint32_t timeout_ms;
     Socket listener = bad_socket;
+    Socket discovery = bad_socket;
     std::atomic<bool> running{true};
     mutable std::mutex mutex;
     std::mutex stop_mutex;
@@ -93,6 +97,10 @@ struct PTJSource {
     uint64_t last_seen_seq = 0;
     std::shared_ptr<Client> client;
     Counters stats;
+    std::shared_ptr<Client> stock_client;
+    std::array<PTJStockRecord, 16> stock_records;
+    size_t stock_head = 0, stock_size = 0;
+    uint64_t stock_connection = 0;
     CoreBorrowStats borrow;
     std::thread server, worker;
 #if defined(_WIN32)
@@ -313,7 +321,7 @@ static void encode_loop(PTJSource& s) {
     }
 }
 
-static bool read_command(PTJSource& s, Socket fd, char (&command)[8], uint64_t& received) {
+static bool read_command(PTJSource& s, Socket fd, char (&command)[16], uint64_t& received) {
     const uint64_t deadline = mono_ns() + 1000000000ULL;
     size_t used = 0;
     while (s.running && mono_ns() < deadline && used < sizeof(command) - 1) {
@@ -328,8 +336,57 @@ static bool read_command(PTJSource& s, Socket fd, char (&command)[8], uint64_t& 
     }
     return false;
 }
+static void drop_stock_client(PTJSource& s, const std::shared_ptr<Client>& client) {
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (s.stock_client != client) return;
+    s.stock_client.reset(); s.stock_size = 0;
+}
+static void send_stock(PTJSource& s) {
+    std::shared_ptr<Client> client;
+    PTJStockRecord record;
+    bool present = false;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        client = s.stock_client;
+        if (client && s.stock_size) {
+            record = s.stock_records[s.stock_head];
+            s.stock_head = (s.stock_head + 1) % s.stock_records.size();
+            --s.stock_size; present = true;
+        }
+    }
+    if (!client) return;
+    char byte;
+    const int n = recv(client->fd, &byte, 1, MSG_PEEK);
+    if (n == 0 || n > 0 || (n < 0 && !would_block(socket_error()))) { drop_stock_client(s, client); return; }
+    if (present && write_all(s, client->fd, &record, sizeof(record),
+                            mono_ns() + uint64_t(s.timeout_ms) * 1000000ULL) != IOResult::Ok)
+        drop_stock_client(s, client);
+}
+static void answer_discovery(PTJSource& s) {
+    static constexpr char request[] = "PICO_MOUTH_DISCOVER_V1\n";
+    char bytes[64]{};
+    sockaddr_in peer{};
+#if defined(_WIN32)
+    int peer_bytes = sizeof(peer);
+#else
+    socklen_t peer_bytes = sizeof(peer);
+#endif
+    const int received = int(recvfrom(s.discovery, bytes, sizeof(bytes), 0,
+                                     reinterpret_cast<sockaddr*>(&peer), &peer_bytes));
+    if (received != int(sizeof(request)-1) || std::memcmp(bytes, request, sizeof(request)-1)) return;
+    PTJCaptureContext context;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (!s.running || !s.service_generation) return;
+        context.capture_session_id = s.session;
+        context.service_generation = s.service_generation;
+    }
+    sendto(s.discovery, reinterpret_cast<const char*>(&context), sizeof(context), 0,
+           reinterpret_cast<const sockaddr*>(&peer), peer_bytes);
+}
 static void server_loop(PTJSource& s) {
     while (s.running) {
+        send_stock(s);
         // Detect an idle subscriber disappearing, even when there are no sources.
         std::shared_ptr<Client> current;
         { std::lock_guard<std::mutex> lock(s.mutex); current = s.client; }
@@ -339,25 +396,44 @@ static void server_loop(PTJSource& s) {
             // Stream connections are receive-only after their command.
             else if (n > 0) drop_client(s, current);
         }
-        PollFD p{s.listener, POLLIN, 0};
-        if (poll_sockets(&p, 1, 10) <= 0 || !(p.revents & POLLIN)) continue;
+        PollFD polls[2]{{s.listener, POLLIN, 0}, {s.discovery, POLLIN, 0}};
+        if (poll_sockets(polls, 2, 1) <= 0) continue;
+        if (polls[1].revents & POLLIN) answer_discovery(s);
+        if (!(polls[0].revents & POLLIN)) continue;
         Socket fd = accept(s.listener, nullptr, nullptr);
         if (fd == bad_socket) continue;
         nonblocking(fd);
         int one = 1, buffer = 32768;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&one), sizeof(one));
         setsockopt(fd, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buffer), sizeof(buffer));
-        char command[8]{}; uint64_t received = 0;
+        char command[16]{}; uint64_t received = 0;
         if (!read_command(s, fd, command, received)) { close_socket(fd); continue; }
         if (std::strcmp(command, "PING") == 0) {
             uint64_t response[2]{received, mono_ns()};
             if (write_all(s, fd, response, sizeof(response), mono_ns() + 100000000ULL) == IOResult::Ok)
                 ++s.stats.pings;
             close_socket(fd);
+        } else if (!std::strcmp(command, "CONTEXT")) {
+            PTJCaptureContext context;
+            {
+                std::lock_guard<std::mutex> lock(s.mutex);
+                if (s.running && s.service_generation) {
+                    context.capture_session_id = s.session;
+                    context.service_generation = s.service_generation;
+                }
+            }
+            // No attach/unknown owner: close without a response. Zero is not a generation.
+            if (context.capture_session_id && context.service_generation)
+                write_all(s, fd, &context, sizeof(context), mono_ns() + 100000000ULL);
+            close_socket(fd);
         } else if (!std::strcmp(command, "JPEG") || !std::strcmp(command, "PAIR")) {
             auto client = std::make_shared<Client>(fd, !std::strcmp(command, "PAIR"));
             std::lock_guard<std::mutex> lock(s.mutex);
             if (s.running && !s.client) { s.client = std::move(client); ++s.stats.connections; }
+        } else if (!std::strcmp(command, "LABELS")) {
+            auto client = std::make_shared<Client>(fd, false);
+            std::lock_guard<std::mutex> lock(s.mutex);
+            if (s.running && !s.stock_client) { s.stock_client = std::move(client); ++s.stock_connection; }
         } else close_socket(fd);
     }
 }
@@ -385,6 +461,7 @@ extern "C" int ptj_start(const PTJConfig* config, PTJSource** out) {
     auto start_fail = [&](const char* stage) {
         start_failure_stage = stage; start_failure_code = socket_error();
         if (s->listener != bad_socket) close_socket(s->listener);
+        if (s->discovery != bad_socket) close_socket(s->discovery);
 #if defined(_WIN32)
         WSACleanup();
 #endif
@@ -402,6 +479,11 @@ extern "C" int ptj_start(const PTJConfig* config, PTJSource** out) {
     if (bind(s->listener, reinterpret_cast<sockaddr*>(&address), sizeof(address))) return start_fail("bind");
     if (listen(s->listener, 8)) return start_fail("listen");
     nonblocking(s->listener);
+    s->discovery = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s->discovery == bad_socket) return start_fail("discovery_socket");
+    if (bind(s->discovery, reinterpret_cast<sockaddr*>(&address), sizeof(address)))
+        return start_fail("discovery_bind");
+    nonblocking(s->discovery);
     try {
         s->worker = std::thread(encode_loop, std::ref(*s));
         s->server = std::thread(server_loop, std::ref(*s));
@@ -412,6 +494,31 @@ extern "C" int ptj_start(const PTJConfig* config, PTJSource** out) {
     *out = s.release(); return 0;
 }
 extern "C" uint64_t ptj_session_id(const PTJSource* s) { return s ? s->session : 0; }
+extern "C" PTJ_API int core_ptj_bind_capture_context(PTJSource* s, uint64_t session, uint64_t generation) {
+    if (!s || !generation) return PTJ_INVALID;
+    std::lock_guard<std::mutex> lock(s->mutex);
+    if (!s->running) return PTJ_STOPPED;
+    if (session != s->session) return PTJ_WRONG_SESSION;
+    if (s->service_generation && s->service_generation != generation) return PTJ_INVALID;
+    s->service_generation = generation;
+    return PTJ_ACCEPTED;
+}
+extern "C" PTJ_API uint64_t core_ptj_stock_subscription(const PTJSource* s) {
+    if (!s) return 0;
+    std::lock_guard<std::mutex> lock(s->mutex);
+    return s->running && s->stock_client ? s->stock_connection : 0;
+}
+extern "C" PTJ_API int core_ptj_submit_stock(PTJSource* s, const PTJStockRecord* record, uint64_t subscription) {
+    if (!s || !record) return PTJ_INVALID;
+    std::unique_lock<std::mutex> lock(s->mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return PTJ_BUSY;
+    if (!s->running) return PTJ_STOPPED;
+    if (record->capture_session_id != s->session) return PTJ_WRONG_SESSION;
+    if (!s->stock_client || subscription != s->stock_connection) return PTJ_NO_SUBSCRIBER;
+    if (s->stock_size == s->stock_records.size()) return PTJ_FULL;
+    s->stock_records[(s->stock_head + s->stock_size++) % s->stock_records.size()] = *record;
+    return PTJ_ACCEPTED;
+}
 static int submit_frame(PTJSource* s, const uint8_t* pixels, uint32_t stride, const PTJMeta* meta,
                         uint64_t capture_copy_ns, bool borrowed, uint64_t subscription) {
     if (!s) return PTJ_INVALID;
@@ -498,6 +605,7 @@ extern "C" void ptj_stop(PTJSource* s) {
     {
         std::lock_guard<std::mutex> lock(s->mutex);
         current = std::move(s->client);
+        s->stock_client.reset(); s->stock_size = 0;
     }
     if (current) {
         PTJHeader h{}; std::memcpy(h.magic, "PTJ1", 4);
@@ -507,6 +615,7 @@ extern "C" void ptj_stop(PTJSource* s) {
         current.reset();
     }
     if (s->listener != bad_socket) { close_socket(s->listener); s->listener = bad_socket; }
+    if (s->discovery != bad_socket) { close_socket(s->discovery); s->discovery = bad_socket; }
 #if defined(_WIN32)
     if (s->winsock) { WSACleanup(); s->winsock = false; }
 #endif

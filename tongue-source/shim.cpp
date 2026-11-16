@@ -176,6 +176,32 @@ extern "C" int ptj_start(const PTJConfig* config, PTJSource** out) {
     *out = s.release(); return 0;
 }
 extern "C" uint64_t ptj_session_id(const PTJSource* s) { return s ? s->session : 0; }
+extern "C" int ptj_submit_stock(PTJSource* source, const PTJStockRecord* record) {
+    if (!source || !record) return PTJ_INVALID;
+    if (record->reserved[0] || record->reserved[1]) return PTJ_INVALID;
+    PTJSource& s = *source;
+    Lease lease(s);
+    if (!lease.valid) return PTJ_STOPPED;
+    Channel& c = *s.channel;
+    ++c.stock_calls;
+    if (!peer(s) || c.state.load(std::memory_order_acquire) != Ready || c.stop_request) return PTJ_STOPPED;
+    if (record->capture_session_id != s.session) return PTJ_WRONG_SESSION;
+    const uint64_t subscription = c.stock_subscription.load(std::memory_order_acquire);
+    if (!subscription) { ++c.stock_unsubscribed; return PTJ_NO_SUBSCRIBER; }
+    for (auto& slot : c.labels) {
+        uint32_t free = Free;
+        if (!slot.state.compare_exchange_strong(free, Writing, std::memory_order_acq_rel)) continue;
+        slot.record = *record;
+        slot.record.service_generation = s.own_birth; // Immutable, nonce-validated service owner.
+        slot.subscription = subscription;
+        c.client_heartbeat = mono_ns();
+        ++c.stock_enqueued;
+        slot.state.store(Pending, std::memory_order_release);
+        return PTJ_ACCEPTED;
+    }
+    ++c.stock_full;
+    return PTJ_FULL;
+}
 extern "C" int ptj_submit(PTJSource* source, const uint8_t* pixels, uint32_t stride, const PTJMeta* meta) {
     if (!source) return PTJ_INVALID;
     PTJSource& s = *source;

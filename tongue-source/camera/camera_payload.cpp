@@ -2,6 +2,7 @@
 #include "camera_bridge.h"
 #include "guard_spec.h"
 #include "control_message.h"
+#include "stock_status.h"
 #include "shadowhook.h"
 #include <android/log.h>
 #include <cerrno>
@@ -27,6 +28,7 @@ struct API {
     int (*start)(const PTJConfig*, PTJSource**) = nullptr;
     uint64_t (*session_id)(const PTJSource*) = nullptr;
     CameraSubmit submit = nullptr;
+    StockSubmit stock = nullptr;
     int (*stats)(const PTJSource*, PTJStats*) = nullptr;
     void (*stop)(PTJSource*) = nullptr;
     void (*destroy)(PTJSource*) = nullptr;
@@ -34,6 +36,10 @@ struct API {
 void* video_library = nullptr;
 PTJSource* video = nullptr;
 PTJStats video_stats{};
+void (*set_stock_sink)(PTJStockSink, void*) = nullptr;
+bool stock_sink_registered = false;
+bool stock_input_identity_supported = false;
+void stock_callback(void*, const PTJStockRecord* record) { if (record) bridge().on_stock(*record); }
 uintptr_t service_base = 0;
 void* intercept_handle = nullptr;
 uint8_t owned_window[32]{};
@@ -127,7 +133,16 @@ void status() {
 #define VIDEO_JSON(n) j.add(",\"" #n "\":%llu", U(video_stats.n));
     PTJ_COUNTER_FIELDS(VIDEO_JSON)
 #undef VIDEO_JSON
-    j.add("}}\n");
+    const bool stock_available = video && stock_sink_registered && camera.armed && video_stats.running;
+    const bool association_ready = stock_available && stock_input_identity_supported && hook_status == 1;
+    j.add("},\"stock\":{\"protocol\":\"PSL1\",\"sink_registered\":%s,\"available\":%s,"
+          "\"state\":\"%s\",\"association_ready\":%s,\"device_verified\":false,"
+          "\"input_identity_version\":%u,\"required_main_payload_export\":\"picoet_set_stock_sink\","
+          "\"required_identity_export\":\"picoet_stock_input_identity_version\"}}\n",
+          stock_sink_registered ? "true" : "false", stock_available ? "true" : "false",
+          stock_capability_state(video != nullptr, stock_sink_registered, camera.armed != 0,
+                                 video_stats.running != 0, stock_input_identity_supported),
+          association_ready ? "true" : "false", stock_input_identity_supported ? 1u : 0u);
     if (!publish(j)) ++status_failures;
 }
 uint64_t process_start_ticks() {
@@ -241,14 +256,18 @@ bool load_video() {
 #define RESOLVE(field, symbol) api.field = reinterpret_cast<decltype(api.field)>(dlsym(video_library, symbol));
     RESOLVE(start, "ptj_start") RESOLVE(session_id, "ptj_session_id") RESOLVE(submit, "ptj_submit")
     RESOLVE(stats, "ptj_get_stats") RESOLVE(stop, "ptj_stop") RESOLVE(destroy, "ptj_destroy")
+    RESOLVE(stock, "ptj_submit_stock")
 #undef RESOLVE
-    if (!api.start || !api.session_id || !api.submit || !api.stats || !api.stop || !api.destroy) {
+    if (!api.start || !api.session_id || !api.submit || !api.stats || !api.stop || !api.destroy || !api.stock) {
         set_error(-2, "video C ABI exports missing"); dlclose(video_library); video_library = nullptr; return false;
     }
     return true;
 }
 void stop_video(const char* stopped_state = "stopped") {
     state = "stopping";
+    if (set_stock_sink) set_stock_sink(nullptr, nullptr); // Drains old callback on control thread.
+    stock_sink_registered = false;
+    stock_input_identity_supported = false;
     bridge().detach_and_drain();
     if (video) {
         api.stop(video); api.stats(video, &video_stats); api.destroy(video); video = nullptr;
@@ -264,7 +283,21 @@ void start_video() {
     int rc = api.start(&config, &video);
     if (rc) { set_error(-2, "ptj_start rc=%d", rc); state = "error"; return; }
     video_stats = {}; ++starts;
-    bridge().arm(video, api.session_id(video), api.submit);
+    // Existing main payload owns inference; no second inference/camera tool.
+    void* main_payload = dlopen("libpicoet_hook.so", RTLD_NOW | RTLD_NOLOAD);
+    if (main_payload) {
+        set_stock_sink = reinterpret_cast<decltype(set_stock_sink)>(dlsym(main_payload, "picoet_set_stock_sink"));
+        auto identity_version = reinterpret_cast<uint32_t (*)()>(dlsym(main_payload, "picoet_stock_input_identity_version"));
+        stock_input_identity_supported = identity_version && identity_version() == 1;
+        dlclose(main_payload); // The installed main payload remains resident.
+    }
+    bridge().arm(video, api.session_id(video), api.submit, api.stock, start_ticks,
+                 hook_status == 1 && stock_input_identity_supported);
+    if (set_stock_sink) {
+        set_stock_sink(stock_callback, nullptr);
+        stock_sink_registered = true;
+    }
+    else log("stock labels unavailable: main payload has no stock sink");
     state = "armed";
 }
 void commands() {

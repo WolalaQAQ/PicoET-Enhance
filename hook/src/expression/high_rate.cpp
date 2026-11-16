@@ -237,7 +237,7 @@ void configure(uintptr_t base, Trackor stock, Infer observed, Infer native, Resi
     destroy_mats = reinterpret_cast<DestroyVector>(base + 0x56860);
 }
 Output dispatch(void* owner, const Mat* eye0, const Mat* eye1, const Mat* mouth,
-                const uint64_t sources[3]) {
+                const uint64_t sources[3], const expression_independent::MouthInputIdentity* mouth_input) {
     OwnerState* state;
     {
         std::lock_guard<std::mutex> lock(owners_lock());
@@ -280,6 +280,7 @@ Output dispatch(void* owner, const Mat* eye0, const Mat* eye1, const Mat* mouth,
     if (current.info.slow && configured_rates.mouth_hz != 90)
         consume_slot(eye_slot, period_ns(configured_rates.mouth_hz), state->next_slow);
     expression_independent::FrameTiming timing;
+    if (mouth_input) timing.mouth_input = *mouth_input;
     std::memcpy(timing.source_ns, sources, sizeof(timing.source_ns));
     timing.slow = current.info.slow;
     timing.attempted = attempted;

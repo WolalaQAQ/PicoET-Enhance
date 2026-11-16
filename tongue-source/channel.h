@@ -1,6 +1,7 @@
 #pragma once
 #include "ptj_source.h"
 #include "errno_compat.h"
+#include "stock_record.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -58,9 +59,14 @@ struct alignas(64) Slot {
     uint64_t copy_mono_ns = 0, subscription = 0;
     uint8_t pixels[PTJ_PIXELS]{};
 };
+struct alignas(64) StockSlot {
+    std::atomic<uint32_t> state{Free};
+    uint64_t subscription = 0;
+    PTJStockRecord record;
+};
 struct alignas(64) Channel {
     char magic[8]{};
-    uint32_t version = 2, bytes = sizeof(Channel);
+    uint32_t version = 3, bytes = sizeof(Channel);
     uint64_t session = 0, daemon_pid = 0, daemon_birth = 0;
     uint64_t daemon_nonce[2]{}; // Immutable root challenge, published with READY.
     alignas(64) std::atomic<uint32_t> state{Initializing}, stop_request{0}, stop_ack{0}, producer_lock{0};
@@ -77,10 +83,15 @@ struct alignas(64) Channel {
     std::atomic<uint64_t> peer_rejected{0}, last_capture_copy_ns{0}, last_dispatch_ns{0};
     alignas(64) AtomicStats producer, core;
     Slot slots[2];
+    // Labels have no ownership relationship with either image slot.
+    std::atomic<uint64_t> stock_subscription{0};
+    std::atomic<uint64_t> stock_calls{0}, stock_enqueued{0}, stock_full{0};
+    std::atomic<uint64_t> stock_unsubscribed{0}, stock_cancelled{0}, stock_dispatched{0};
+    StockSlot labels[16];
 };
 static_assert(alignof(Channel) == 64 && alignof(Slot) == 64, "Channel alignment");
 inline bool valid_header(const Channel& c) {
-    return !std::memcmp(c.magic, "PTJIPC2", 8) && c.version == 2 && c.bytes == sizeof(Channel) &&
+    return !std::memcmp(c.magic, "PTJIPC3", 8) && c.version == 3 && c.bytes == sizeof(Channel) &&
            c.session && c.daemon_pid && c.daemon_birth && (c.daemon_nonce[0] || c.daemon_nonce[1]);
 }
 }

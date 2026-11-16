@@ -1,11 +1,13 @@
 #pragma once
 #include "ptj_source.h"
+#include "stock_association.h"
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
 
 using CameraSubmit = int (*)(PTJSource*, const uint8_t*, uint32_t, const PTJMeta*);
+using StockSubmit = int (*)(PTJSource*, const PTJStockRecord*);
 #define CAMERA_COUNTERS(X) \
     X(callbacks) X(disarmed) X(stale_epoch) X(gate_busy) X(other_camera) \
     X(null_header) X(null_pixels) X(bad_length) X(bad_format) X(missing_identity) \
@@ -32,10 +34,16 @@ class CameraBridge {
     std::mutex gate;
     std::condition_variable drained;
     uint64_t epoch = 0, session = 0;
+    uint64_t service_generation = 0;
+    bool audited_camera5 = false;
     PTJSource* source = nullptr;
     CameraSubmit submit = nullptr;
+    StockSubmit stock_submit = nullptr;
+    StockAssociation association;
 public:
-    void arm(PTJSource* owner, uint64_t owner_session, CameraSubmit function);
+    void arm(PTJSource* owner, uint64_t owner_session, CameraSubmit function, StockSubmit labels = nullptr,
+             uint64_t generation = 0, bool audited = false);
+    void on_stock(const PTJStockRecord&);
     uint64_t ticket() const { return accepting.load(std::memory_order_acquire); }
     // All borrowed frame access and the synchronous submit finish before this returns.
     void on_frame(uint64_t entry_epoch, const void* listener, const void* frame);

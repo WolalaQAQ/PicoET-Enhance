@@ -1,10 +1,23 @@
 #include "camera_bridge.h"
 #include "guard_spec.h"
 #include "control_message.h"
+#include "stock_input.h"
 #define EXPORT extern "C" __declspec(dllexport)
 EXPORT CameraBridge* camtest_create() { return new CameraBridge; }
 EXPORT void camtest_destroy(CameraBridge* b) { b->detach_and_drain(); delete b; }
 EXPORT void camtest_arm(CameraBridge* b, PTJSource* s, uint64_t session, CameraSubmit fn) { b->arm(s, session, fn); }
+EXPORT void camtest_arm_stock(CameraBridge* b, PTJSource* s, uint64_t session, uint64_t generation,
+                               CameraSubmit images, StockSubmit labels, int audited) {
+    b->arm(s, session, images, labels, generation, audited != 0);
+}
+EXPORT void camtest_stock(CameraBridge* b, const PTJStockRecord* record) { b->on_stock(*record); }
+EXPORT void camtest_pipeline_stock(CameraBridge* b, const void* execution_input, const PTJStockRecord* record) {
+    PTJStockRecord input = *record;
+    auto identity = expression_independent::capture_mouth_input_identity(execution_input);
+    input.stock_input_ns = identity.sensor_ns;
+    prepare_stock_input_record(input, identity);
+    b->on_stock(input);
+}
 EXPORT uint64_t camtest_ticket(CameraBridge* b) { return b->ticket(); }
 EXPORT void camtest_frame(CameraBridge* b, uint64_t epoch, const void* listener, const void* frame) {
     b->on_frame(epoch, listener, frame);

@@ -17,6 +17,7 @@ void signal_stop(int) { interrupted = 1; }
 void failure(Channel& c, uint32_t stage, int error) {
     c.error_stage = stage; c.error_code = uint32_t(error);
     c.subscription.store(0, std::memory_order_release);
+    c.stock_subscription.store(0, std::memory_order_release);
     c.state.store(Failed, std::memory_order_release);
 }
 void release_slot(Channel& c, int index) {
@@ -55,7 +56,7 @@ void attach_ack(Channel& c, const Request& r) {
 }
 std::string status_json(const Channel& c) {
     std::ostringstream j;
-    j << "{\"schema_version\":2,\"state\":" << c.state.load() << ",\"session\":" << c.session
+    j << "{\"schema_version\":3,\"state\":" << c.state.load() << ",\"session\":" << c.session
       << ",\"daemon_pid\":" << c.daemon_pid << ",\"daemon_birth\":" << c.daemon_birth
       << ",\"heartbeat_ns\":" << c.daemon_heartbeat.load() << ",\"client_pid\":" << c.client_pid.load()
       << ",\"client_birth\":" << c.client_birth.load() << ",\"client_heartbeat_ns\":" << c.client_heartbeat.load()
@@ -87,7 +88,11 @@ std::string status_json(const Channel& c) {
 #define P(n) j << (comma ? "," : "") << "\"" #n "\":" << producer.n; comma = true;
     PTJ_COUNTER_FIELDS(P)
 #undef P
-    j << "},\"core\":{\"queue_in_use\":" << core.queue_in_use << ",\"connected\":" << core.connected;
+    j << "},\"stock\":{\"subscription\":" << c.stock_subscription.load()
+      << ",\"calls\":" << c.stock_calls.load() << ",\"enqueued\":" << c.stock_enqueued.load()
+      << ",\"full\":" << c.stock_full.load() << ",\"unsubscribed\":" << c.stock_unsubscribed.load()
+      << ",\"dispatched\":" << c.stock_dispatched.load() << ",\"cancelled\":" << c.stock_cancelled.load()
+      << "},\"core\":{\"queue_in_use\":" << core.queue_in_use << ",\"connected\":" << core.connected;
 #define P(n) j << ",\"" #n "\":" << core.n;
     PTJ_COUNTER_FIELDS(P)
 #undef P
@@ -117,7 +122,7 @@ int main(int argc, char** argv) {
     error = map_file(mapping, root + "/video-channel.bin", sizeof(Channel), true);
     if (error) { std::fprintf(stderr, "FAIL stage=channel_create errno=%d operation=%s\n", error, map_operation()); return 1; }
     Channel& c = *new(mapping.address) Channel;
-    std::memcpy(c.magic, "PTJIPC2", 8);
+    std::memcpy(c.magic, "PTJIPC3", 8);
     c.daemon_pid = pid(); c.daemon_birth = self_birth(error);
     if (!c.daemon_birth) failure(c, SelfIdentity, error ? error : ESRCH);
     else if ((error = random_nonce(c.daemon_nonce))) failure(c, NonceRandom, error);
@@ -152,12 +157,29 @@ int main(int argc, char** argv) {
             request = Request(c); registered = true;
             if (!validate_request(c, request)) break;
             validated = true; last_identity_check = now;
-            if (!c.stop_request && !interrupted) attach_ack(c, request);
+            if (!c.stop_request && !interrupted) {
+                attach_ack(c, request);
+                // The same verified Request remains immutable for this random session.
+                if (core_ptj_bind_capture_context(core, c.session, request.birth) != PTJ_ACCEPTED) {
+                    failure(c, OwnerEcho, EPROTO); break;
+                }
+            }
         }
         if (registered && !request.matches(c)) { failure(c, OwnerEcho, EPROTO); break; }
         const bool stopping = c.stop_request || interrupted || c.state == Failed;
         c.subscription.store(!stopping && validated && stats.connected ? stats.connections : 0, std::memory_order_release);
+        const uint64_t stock_subscription = !stopping && validated ? core_ptj_stock_subscription(core) : 0;
+        c.stock_subscription.store(stock_subscription, std::memory_order_release);
         if (stopping) break;
+        for (auto& slot : c.labels) {
+            uint32_t pending = Pending;
+            if (!slot.state.compare_exchange_strong(pending, Processing, std::memory_order_acq_rel)) continue;
+            const int result = stock_subscription && stock_subscription == slot.subscription
+                ? core_ptj_submit_stock(core, &slot.record, stock_subscription) : PTJ_NO_SUBSCRIBER;
+            if (result == PTJ_ACCEPTED) ++c.stock_dispatched;
+            else ++c.stock_cancelled;
+            slot.state.store(Free, std::memory_order_release);
+        }
         if (validated && now - last_identity_check >= 100000000ULL) {
             last_identity_check = now;
             int e = 0;
@@ -206,6 +228,7 @@ int main(int argc, char** argv) {
         pause_us(250);
     }
     c.subscription.store(0, std::memory_order_release);
+    c.stock_subscription.store(0, std::memory_order_release);
     const bool failed = c.state == Failed;
     c.state.store(Stopping, std::memory_order_release);
     // Native join precedes freeing the IPC CURRENT slot and every stop ACK.

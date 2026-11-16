@@ -38,7 +38,9 @@ if(WIN32)
   target_compile_definitions(camera_source_test PRIVATE PTJ_BUILDING_LIBRARY)
   target_link_libraries(camera_source_test PRIVATE "${PTJ_JPEG_LIBRARY}" ws2_32)
   add_library(camera_bridge_test SHARED camera/camera_bridge.cpp camera/host_test_api.cpp)
-  list(APPEND PTJ_TARGETS ipc_test_probe ipc_core_test camera_source_test camera_bridge_test)
+  add_library(stock_test SHARED checks/stock_test.cpp ../hook/src/expression/mouth.cpp)
+  target_compile_options(stock_test PRIVATE /fp:strict)
+  list(APPEND PTJ_TARGETS ipc_test_probe ipc_core_test camera_source_test camera_bridge_test stock_test)
 elseif(ANDROID)
   # Compile the reviewed vendored ShadowHook source, never archived object files.
   # Keep its constructor objects before the adapter's constructor, as in hook/.

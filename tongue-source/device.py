@@ -66,8 +66,10 @@ class Session:
 
     def status(self):
         self.verify_service()
-        return {name: self.device.read_json(self.state['stage'], name+'.json') for name in
-                ('camera-status', 'ipc-shim-status', 'ipc-daemon-status')}
+        value = {name: self.device.read_json(self.state['stage'], name+'.json') for name in
+                 ('camera-status', 'ipc-shim-status', 'ipc-daemon-status')}
+        value['capabilities'] = source_capabilities(value)
+        return value
 
     def command(self, verb):
         self.verify_service()
@@ -173,6 +175,26 @@ class Session:
         self.state['stopped'] = True
         self.save()
         return value
+
+
+def source_capabilities(value):
+    """Report transport availability separately from actual accepted label count."""
+    camera = value.get('camera-status') or {}
+    shim = value.get('ipc-shim-status') or {}
+    daemon = value.get('ipc-daemon-status') or {}
+    video = camera.get('video') or {}
+    jpeg_available = bool((camera.get('camera') or {}).get('armed') and video.get('running') and
+                          daemon.get('state') == 1 and shim.get('state') == 'attached' and
+                          video.get('session_id') == daemon.get('session') == shim.get('session'))
+    stock = camera.get('stock') or {}
+    stock_available = jpeg_available and stock.get('sink_registered') is True and stock.get('available') is True
+    enqueued = (daemon.get('stock') or {}).get('enqueued')
+    return dict(jpeg_available=jpeg_available, stock_labels_available=stock_available,
+                stock_state=stock.get('state', 'unknown_adapter_capability'),
+                stock_ipc_enqueued=enqueued,
+                stock_observed_in_ipc=bool(stock_available and enqueued and enqueued > 0),
+                stock_association_ready=bool(stock_available and stock.get('association_ready') is True),
+                stock_device_verified=False)
 
 
 def validate_ipc(value, state, stopped):
