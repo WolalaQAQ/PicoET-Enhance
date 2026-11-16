@@ -1,13 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {createApp, deriveView, requestJson} from "../app.mjs";
-import {errorMessage, messages, initialLanguage, preferredLanguage, LANGUAGE_KEY} from "../i18n.mjs";
+import {createApp, captureProgress, deriveView, channelValue, requestJson, PRIMARY_CHANNELS, PAGES, routePage} from "../app.mjs";
+import {messages, preferredLanguage, initialLanguage, errorMessage, LANGUAGE_KEY} from "../i18n.mjs";
 
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+const channels = [...new Set([...PRIMARY_CHANNELS, ...Array.from({length: 40}, (_, i) => `fixture${i}`)])];
 class Element {
-  value = ""; textContent = ""; hidden = false; disabled = false; attributes = {}; listeners = {};
+  value = ""; textContent = ""; hidden = false; disabled = false; attributes = {}; listeners = {}; children = [];
   checked = false; open = false; valid = true;
+  append(...items) { this.children.push(...items); }
+  replaceChildren(...items) { this.children = items; }
   addEventListener(type, fn) { this.listeners[type] = fn; }
   setAttribute(key, value) { this.attributes[key] = value; }
   removeAttribute(key) { delete this.attributes[key]; if (key === "src") this.src = ""; }
@@ -16,645 +19,595 @@ class Element {
 }
 function setup(t, options = {}) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [id, new Element()]));
-  elements.get("preview-enabled").checked = true;
-  elements.get("voice-enabled").checked = true;
-  const doc = {documentElement: {}, hidden: false, title: "", getElementById: id => {
-    assert.ok(elements.has(id), id); return elements.get(id);
-  }};
-  const config = {headset_host: "headset.example", headset_port: 45681, model_path: "D:/models/shadow-final-v2.pt",
-    device: "auto", smoothing_ms: 20, uncertain_hold_ms: 100, stale_ms: 350, preview_fps: 10,
-    replay_path: "D:/data/reference.npz",
-    enabled: false, output_enabled: false, output_host: "127.0.0.1", output_port: 45682, size_hysteresis: true};
-  const server = {config, calls: [], failStatus: false, failStart: false, before: null, previewStatus: 200,
-    status: {running: false, connected: false, config, source: {session_id: "18446744073709551000"},
-      prediction: {fresh: false, override: false, state: "stopped", out: 1, left: .2, right: 0},
-      metrics: {source_fresh: false}, personalization: {state: "idle", profile: {
-        head: null, calibration: {left: .33, center: .66, right: 1.11, min_area: 100}}}}};
+  elements.get("preview-enabled").checked = true; elements.get("guide-enabled").checked = true; elements.get("label-stage").value = "raw_only"; elements.get("person_id").value = "me";
+  const doc = {documentElement: {}, hidden: false, title: "", createElement: () => new Element(), getElementById: id => { assert.ok(elements.has(id), id); return elements.get(id); }};
+  const config = {headset_host: "headset.example", headset_port: 45681, model_path: "D:/models/student.onnx", model_kind: "face50", device: "auto", stale_ms: 350, preview_fps: 10,
+    replay_path: "D:/data/reference.npz", enabled: false, output_enabled: false, output_host: "127.0.0.1", output_port: 45682};
+  const trained = ["JawOpen", "TongueOut", "TongueLeft"];
+  const server = {config, calls: [], before: null, failStatus: false, failStart: false, previewStatus: 200, status: {
+    running: false, connected: false, config, source: {session_id: "18446744073709551000", source_seq: "9007199254740993"},
+    contract: {schema: "pico-mouth50-v1", channels}, model: {trained_channels: trained}, output_session_id: "test-output",
+    prediction: {fresh: false, state: "stopped", valid_mask: 0, channels: {JawOpen: .3, TongueOut: .1, TongueLeft: .2}},
+    metrics: {source_fresh: false, video_fresh: false}, recording: {state: "idle"}, training: {state: "idle", running: false, operations: {
+      export: [{name: "checkpoint", required: true}, {name: "output", required: true}],
+       "local-adapt": [{name: "dataset", required: true}, {name: "initial", required: false}, {name: "teacher_approval", required: false}]}}}};
+  server.reference = {version: 1, neutral: "neutral.webp", model: {name: "Reference head", copyright: "Reference copyright"}, poses: [
+    {id: "neutral", title: {en: "Relax", zh: "放松"}, instruction: {en: "Relax your mouth", zh: "自然放松嘴部"}, front: "neutral.webp", provenance: []},
+    {id: "JawForward", title: {en: "Jaw forward", zh: "下颌前伸"}, instruction: {en: "Move your jaw forward", zh: "下颌轻轻向前伸"}, front: "JawForward.webp", profile: "JawForward-profile.webp", animation: "JawForward-motion.webp", provenance: ["original_model_morphs_with_original_correctives"]},
+     {id: "LipFunnelUpper", title: {en: "Upper lip funnel", zh: "上唇漏斗"}, instruction: {en: "Funnel your upper lip", zh: "只让上唇做漏斗"}, front: "LipFunnelUpper.webp", animation: "LipFunnelUpper-motion.webp", provenance: ["original_model_morphs_with_original_correctives"]}]};
+  server.presets = [
+    {id:"complete",name:{en:"Complete",zh:"完整"},description:{en:"All fixture actions",zh:"全部测试动作"},steps:server.reference.poses.map(p=>({id:p.id,title:p.title}))},
+    {id:"basics",name:{en:"Basics",zh:"基础"},description:{en:"Two ordered actions",zh:"两个有序动作"},steps:[server.reference.poses[1],server.reference.poses[0]].map(p=>({id:p.id,title:p.title}))}
+  ];
+  function active(mode) {
+    Object.assign(server.status, {running: true, connected: mode !== "replay", source_mode: mode === "capture" ? "live" : mode, capture_only: mode === "capture"});
+    config.enabled = true;
+    Object.assign(server.status.prediction, {fresh: mode !== "capture", state: mode === "capture" ? "untrained" : "valid", valid_mask: mode === "capture" ? 0 : 1+16+32});
+    // PRIMARY_CHANNELS puts JawOpen at0, TongueOut at4, TongueLeft at5.
+    Object.assign(server.status.metrics, {source_fresh: mode !== "capture", video_fresh: true});
+  }
   const fetcher = async (path, opts = {}) => {
-    server.calls.push({path, ...opts});
-    const custom = await server.before?.(path, opts);
-    if (custom) return custom;
-    if (path === "/api/status") {
-      if (server.failStatus) throw new TypeError("Failed to fetch");
-      return Response.json(server.status);
-    }
+    server.calls.push({path, ...opts}); const custom = await server.before?.(path, opts); if (custom) return custom;
+    if (path === "/api/discovery") return Response.json({devices: server.discovered ?? []});
+    if (path === "/api/presets") return Response.json({presets:server.presets,default:"complete"});
+    if (path === "/api/display") return Response.json({accepted:true});
+    if (path === "/api/model/select") return Response.json(server.selectedModel ?? {cancelled: true});
+    if (path === "/static/guide-reference/manifest.json") return server.reference ? Response.json(server.reference) : Response.json({error: "Not found"}, {status: 404});
+    if (path === "/api/status") { if (server.failStatus) throw TypeError("Failed to fetch"); return Response.json(server.status); }
     if (path === "/api/config") {
       if (opts.method === "POST") {
         const changes = JSON.parse(opts.body);
-        if (server.status.running && ["headset_host", "headset_port", "model_path", "device",
-          "output_enabled", "output_host", "output_port"].some(key => changes[key] !== undefined && changes[key] !== config[key])) {
-          Object.assign(server.status, {running: false, connected: false});
-          config.enabled = false;
-        }
+        if (server.status.running && ["headset_host", "model_path", "device", "output_port", "output_enabled"].some(key => changes[key] !== config[key])) Object.assign(server.status, {running: false, connected: false});
         Object.assign(config, changes);
       }
       return Response.json(config);
     }
-    if (path === "/api/start") {
-      if (server.failStart) return Response.json({error: "Model file not found"}, {status: 400});
-      const {mode} = JSON.parse(opts.body);
-      Object.assign(server.status, {running: true, connected: mode === "live", source_mode: mode});
-      config.enabled = true;
-      server.status.replay = {active: mode === "replay", path: mode === "replay" ? config.replay_path : null,
-        position: 0, total: mode === "replay" ? 2700 : null, finished: false};
-      Object.assign(server.status.prediction, {fresh: true, override: true, state: "present"});
-      server.status.metrics.source_fresh = true;
-      return Response.json(server.status);
+    if (path === "/api/start") { if (server.failStart) return Response.json({error: "ONNX model does not exist: fixture"}, {status: 400}); const {mode} = JSON.parse(opts.body); active(mode); return Response.json(server.status); }
+    if (path === "/api/stop") { Object.assign(server.status, {running: false, connected: false}); config.enabled = false; return Response.json(server.status); }
+    if (path === "/api/recording") {
+      const body = JSON.parse(opts.body);
+      if (body.action === "begin") { Object.assign(server.status.recording, {state: "recording", session_id: "local", path: "D:/local/recording", guide: {index: 0, phase: "prepare", progress: 0, preset_id:body.preset_id,total:server.presets.find(p=>p.id===body.preset_id)?.steps.length,
+        step: {id: "neutral", kind: "negative", prepare: {en: "Relax your mouth", zh: "放松嘴部"}, hold: {en: "Hold", zh: "保持"}, confirm: {en: "Confirm", zh: "确认"}}}}); }
+      else if (["ready", "finish", "confirm", "skip"].includes(body.action)) { server.status.recording.guide.phase = body.action === "ready" ? "hold" : "review"; }
+      else { server.status.recording.state = body.action === "cancel" ? "cancelled" : "stopped"; Object.assign(server.status, {running: false, connected: false}); }
+      return Response.json(server.status.recording);
     }
-    if (path === "/api/stop") {
-      Object.assign(server.status, {running: false, connected: false});
-      config.enabled = false;
-      Object.assign(server.status.prediction, {fresh: false, override: false, state: "stopped"});
-      return Response.json(server.status);
-    }
-    if (path === "/api/personalization") {
-      const body = JSON.parse(opts.body), personal = server.status.personalization;
-      if (body.action === "calibrate" || body.action === "retrain") {
-        personal.state = "collecting"; personal.job_id = "test-job";
-        personal.wizard = {step: "fit", hint: "fit", collected: 0, target: 20, progress: 0};
-      } else { personal.state = body.action === "restore" ? "restored" : "cancelled"; personal.wizard = null; }
-      return Response.json(personal);
-    }
-    if (path.startsWith("/api/preview.jpg")) return server.previewStatus === 204 ? new Response(null, {status: 204}) :
-      new Response(new Uint8Array([255, 216, 255, 217]), {status: server.previewStatus});
-    throw new Error(path);
+    if (path === "/api/training") { const {action} = JSON.parse(opts.body); Object.assign(server.status.training, {running: action !== "cancel", state: action === "cancel" ? "cancelled" : "training"}); return Response.json(server.status.training); }
+    if (path.startsWith("/api/recording/review?")) return Response.json({session_id: "local", offset: 0, total: 2, samples: [
+      {sample_id: "f000000000", prompt_candidate: {labels: {TongueOut: .5}}}, {sample_id: "f000000001", prompt_candidate: {labels: {TongueOut: .5}}}]});
+    if (path === "/api/recording/review") return Response.json({samples: 2});
+    if (path.startsWith("/api/preview.jpg")) return server.previewStatus === 204 ? new Response(null, {status: 204}) : new Response(new Uint8Array([255, 216, 255, 217]), {status: server.previewStatus});
+    throw Error(path);
   };
-  const timerCalls = [];
-  const timers = {setInterval: (fn, ms) => { timerCalls.push({fn, ms}); return timerCalls.length; },
-    setTimeout: (fn, ms) => { timerCalls.push({fn, ms}); return timerCalls.length; }, clearInterval() {}, clearTimeout() {}};
-  const urls = {created: [], revoked: [], createObjectURL() {
-    const url = `blob:test-${this.created.length}`; this.created.push(url); return url;
-  }, revokeObjectURL(url) { this.revoked.push(url); }};
-  const saved = new Map();
-  const storage = {getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value)};
-  let time = 10000;
-  const app = createApp(doc, {fetch: fetcher, timers, urlApi: urls, storage, languages: ["en-US"], now: () => time, ...options});
-  t.after(() => app.destroy());
-  return {app, server, doc, el: id => doc.getElementById(id), saved, urls, timers: timerCalls, advance: ms => time += ms};
+  const timerCalls = [], timers = {setInterval: (fn, ms) => { timerCalls.push({fn, ms}); return timerCalls.length; }, setTimeout: (fn, ms) => { timerCalls.push({fn, ms}); return timerCalls.length; }, clearInterval() {}, clearTimeout() {}};
+  const urls = {created: [], revoked: [], createObjectURL() { const url = `blob:${this.created.length}`; this.created.push(url); return url; }, revokeObjectURL(url) { this.revoked.push(url); }};
+  const saved = new Map(), storage = {getItem: k => saved.get(k), setItem: (k, v) => saved.set(k, v)}; let time = 10000;
+  const app = createApp(doc, {fetch: fetcher, timers, urlApi: urls, storage, languages: ["en-US"], now: () => time, ...options}); t.after(() => app.destroy());
+  return {app, server, doc, el: id => doc.getElementById(id), row: name => app.rows.get(`outputs/${name}`), saved, urls, timers: timerCalls, advance: ms => time += ms};
 }
 
-test("advanced settings and diagnostics retain their controls and start collapsed; no mouth-source selector", () => {
-  const advanced = html.match(/<details\b[^>]*id="advanced"[^>]*>([\s\S]*?)<\/details>/);
-  const diagnostics = html.match(/<details\b[^>]*id="diagnostics"[^>]*>([\s\S]*?)<\/details>/);
-  assert.ok(advanced); assert.ok(diagnostics);
+function externalGuide(f) {
+  f.server.status.read_only=true;
+  f.server.status.external_guide={case:"external-fixture-A",role:"A",index:0,frame:"external-frame",running:true,phase:"imitate",
+    steps:[{text:"Keep the current opening",visual:{demo_prompt_ids:["JawForward","LipFunnelUpper"],note:"Opening reference only"}}]};
+}
+test("capture progress is always visible and derives 0/31, 7/31 and 31/31 from the external preset",async t=>{
+  const f=setup(t);externalGuide(f);
+  const external=f.server.status.external_guide;
+  external.steps=Array.from({length:31},(_,i)=>({...external.steps[0],action:`step-${i}`}));
+  external.running=false;external.phase="practice";
+  await f.app.init();
+  assert.equal(f.el("capture-progress-count").textContent,"0 / 31");
+  assert.equal(f.el("capture-progress").max,31);
+  assert.equal(f.el("capture-progress").hidden,false);
+  external.running=true;external.phase="imitate";external.index=6;await f.app.pollStatus();
+  assert.equal(f.el("capture-progress-count").textContent,"7 / 31");
+  assert.equal(f.el("capture-progress").value,7);
+  assert.equal(f.el("capture-preset").disabled,true);
+  f.app.selectPreset("basics");assert.equal(f.app.state.selectedPreset,external.case);
+  external.running=false;external.phase="done";external.index=30;await f.app.pollStatus();
+  assert.equal(f.el("capture-progress-count").textContent,"31 / 31");
+  assert.equal(f.el("capture-progress-phase").textContent,messages.en.visualdone);
+});
+test("preset selection previews its exact action order and count without starting anything",async t=>{
+  const f=setup(t);await f.app.init();const before=f.server.calls.length;
+  f.app.selectPreset("basics");
+  assert.equal(f.el("capture-progress-count").textContent,"0 / 2");
+  assert.equal(f.el("capture-action-list").children[0].textContent,"Jaw forward");
+  assert.equal(f.el("capture-action-list").children[1].textContent,"Relax");
+  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward.webp");
+  assert.equal(f.server.calls.length,before);
+  assert.equal(f.el("record-consent").checked,false);
+  f.app.setLanguage("zh-CN");
+  assert.equal(f.app.state.selectedPreset,"basics");
+  assert.equal(f.el("capture-action-list").children[0].textContent,"下颌前伸");
+  assert.equal(f.el("capture-progress-count").textContent,"0 / 2");
+});
+test("recording submits the selected preset and locks it while the real backend guide advances",async t=>{
+  const f=setup(t);await f.app.init();f.app.selectPreset("basics");
+  await f.app.start("capture");f.el("record-consent").checked=true;f.el("record-consent").emit("change");await f.app.record("begin");
+  const body=JSON.parse(f.server.calls.find(c=>c.path==="/api/recording").body);
+  assert.equal(body.preset_id,"basics");
+  assert.equal(f.el("capture-progress-count").textContent,"1 / 2");
+  assert.equal(f.el("capture-preset").disabled,true);
+  f.app.selectPreset("complete");assert.equal(f.app.state.selectedPreset,"basics");
+  Object.assign(f.server.status.recording.guide,{index:2,phase:"finished"});
+  await f.app.pollStatus();
+  assert.equal(f.el("capture-progress-count").textContent,"2 / 2");
+});
+test("read-only preset previews do not replace the external plan or grant headset readiness",async t=>{
+  const f=setup(t,{viewer:"headset",paint:fn=>fn()});externalGuide(f);
+  f.server.status.external_guide.running=false;f.server.status.external_guide.phase="practice";
+  await f.app.init();f.app.navigate("recording");f.app.selectPreset("basics");
+  for(const id of ["reference-image","reference-neutral-image","reference-profile-image"])
+    Object.assign(f.el(id),{complete:true,naturalWidth:512});
+  await f.app.reportVisual();
+  assert.equal(JSON.parse(f.server.calls.at(-1).body).media_ready,false);
+  assert.equal(f.el("capture-progress-count").textContent,"0 / 2");
+  assert.equal(f.server.status.external_guide.steps.length,1);
+  assert.match(f.el("capture-preset-description").textContent,/Preview only/);
+  assert.ok(f.server.calls.filter(c=>c.method==="POST").every(c=>c.path==="/api/display"));
+});
+test("progress never marks a paused external hold as a finished plan",()=>{
+  const preset={id:"round",steps:Array(5).fill({})};
+  assert.deepEqual(captureProgress({external_guide:{case:"round",steps:preset.steps,index:2,phase:"paused",running:false}},preset),
+    {total:5,current:3,active:false,phaseKey:"visualpaused"});
+});
+test("unguided recording is distinct from a preset that has not started",async t=>{
+  const f=setup(t);await f.app.init();
+  Object.assign(f.server.status.recording,{state:"recording",guide:null});
+  await f.app.pollStatus();
+  assert.equal(f.el("capture-progress-count").textContent,"—");
+  assert.equal(f.el("capture-progress-phase").textContent,messages.en.captureFree);
+  assert.equal(f.el("capture-preset").disabled,true);
+  assert.equal(f.el("capture-action-list").children.length,3);
+});
+test("external 31-step state uses the original reference renderer without a second page or local recording",async t=>{
+  const f=setup(t); externalGuide(f); await f.app.init(); f.app.navigate("recording");
+  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward-motion.webp");
+  assert.equal(f.el("reference-profile-image").src,"/static/guide-reference/JawForward-profile.webp");
+  assert.equal(f.el("reference-neutral-image").src,"/static/guide-reference/LipFunnelUpper.webp");
+  assert.equal(f.el("reference-neutral-caption").textContent,messages.en.referenceOpening);
+  assert.match(f.el("reference-instruction").textContent,/Keep the current opening/);
+  assert.equal(f.el("reference-select").disabled,true);
+  assert.equal(f.server.status.recording.state,"idle");
+  assert.ok(f.server.calls.every(c=>c.method==="GET"));
+});
+test("external hold freezes the existing image and read-only mode blocks all capture and training controls",async t=>{
+  const f=setup(t); externalGuide(f); await f.app.init();
+  f.server.status.external_guide.phase="hold"; await f.app.pollStatus();
+  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward.webp");
+  for(const id of ["start","capture","save","record-start","train-start","model-browse","output_enabled"])
+    assert.equal(f.el(id).disabled,true,id);
+  await f.app.start(); await f.app.record("begin"); await f.app.train();
+  assert.ok(f.server.calls.every(c=>c.method==="GET"));
+});
+test("original reference images must load and paint before a headset display receipt can be ready",async t=>{
+  let paints=0;
+  const f=setup(t,{viewer:"headset",paint:fn=>{paints++;fn();}}); externalGuide(f);
+  await f.app.init(); f.app.navigate("recording"); await f.app.reportVisual();
+  assert.equal(JSON.parse(f.server.calls.at(-1).body).media_ready,false);
+  for(const id of ["reference-image","reference-neutral-image","reference-profile-image"])
+    Object.assign(f.el(id),{complete:true,naturalWidth:512});
+  await f.app.reportVisual();
+  const receipt=JSON.parse(f.server.calls.at(-1).body);
+  assert.equal(receipt.frame,"external-frame"); assert.equal(receipt.viewer,"headset");
+  assert.equal(receipt.visible,true); assert.equal(receipt.media_ready,true); assert.equal(paints,2);
+  f.el("reference-image").getBoundingClientRect=()=>({height:512,top:-600,bottom:-88});
+  await f.app.reportVisual(); assert.equal(JSON.parse(f.server.calls.at(-1).body).media_ready,false);
+  f.doc.hidden=true; await f.app.reportVisual();
+  assert.equal(JSON.parse(f.server.calls.at(-1).body).visible,false);
+});
+test("leaving the original capture page or expiring status cannot grant visual readiness",async t=>{
+  const f=setup(t,{viewer:"headset",paint:fn=>fn()}); externalGuide(f); await f.app.init();
+  await f.app.reportVisual();
+  assert.equal(JSON.parse(f.server.calls.at(-1).body).visible,false);
+  const calls=f.server.calls.length; f.advance(1600); await f.app.reportVisual();
+  assert.equal(f.server.calls.length,calls);
+});
+
+test("task pages keep advanced tools folded and preserve every existing capability", () => {
   for (const opening of html.matchAll(/<details\b[^>]*>/g)) assert.doesNotMatch(opening[0], /\bopen\b/);
-  for (const id of ["headset_port", "device", "smoothing_ms", "uncertain_hold_ms", "stale_ms", "preview_fps",
-    "output_enabled", "output_port", "save", "replay"]) assert.ok(advanced[1].includes(`id="${id}"`), id);
-  for (const id of ["source-info", "result-info", "rates", "queue", "latency"])
-    assert.ok(diagnostics[1].includes(`id="${id}"`), id);
-  assert.doesNotMatch(html, /face_source|Cymple/);
-  const main = html.replace(advanced[0], "").replace(diagnostics[0], "");
-  for (const id of ["headset_host", "model_path", "start", "stop", "preview-enabled", "preview", "out", "left", "right"])
-    assert.ok(main.includes(`id="${id}"`), id);
+  for (const id of ["advanced", "diagnostics", "recording", "training", "capture", "model_path", "start", "stop", "preview"]) assert.ok(html.includes(`id="${id}"`));
+  assert.doesNotMatch(html, /segmentation|size_hysteresis|calibrate|face_source|Cymple|upload|type="file"/);
 });
-test("browser language chooses Chinese only for a Chinese first preference", () => {
-  assert.equal(preferredLanguage(["zh-Hans-CN", "en"]), "zh-CN");
-  assert.equal(preferredLanguage(["en-US", "zh-CN"]), "en");
-  assert.equal(preferredLanguage(["de-DE"]), "en");
-  assert.equal(preferredLanguage([]), "en");
-});
-test("manual preference persists and storage failures do not break language selection", () => {
-  assert.equal(initialLanguage({getItem: () => "en"}, ["zh-CN"]), "en");
-  assert.equal(initialLanguage({getItem: () => "obsolete"}, ["zh-CN"]), "zh-CN");
-  assert.equal(initialLanguage({getItem() { throw Error(); }}, ["en"]), "en");
-});
-test("both language dictionaries cover the same complete set of strings", () => {
+test("both languages are complete and browser defaults respect the first preference", () => {
   assert.deepEqual(Object.keys(messages.en).sort(), Object.keys(messages["zh-CN"]).sort());
-  for (const value of Object.values(messages.en)) assert.ok(value && !/[\p{Script=Han}]/u.test(value), value);
+  for (const text of Object.values(messages.en)) assert.ok(!/[\p{Script=Han}]/u.test(text), text);
+  assert.equal(preferredLanguage(["en-US", "zh-CN"]), "en"); assert.equal(preferredLanguage(["zh-Hans-CN"]), "zh-CN");
+  assert.equal(initialLanguage({getItem: () => "en"}, ["zh-CN"]), "en");
 });
-test("known backend failures have bilingual explanations while retaining raw diagnostics", () => {
-  const raw = "POST /api/start · HTTP 400: CUDA was requested but is not available";
-  assert.equal(errorMessage("en", raw), `Request failed: ${messages.en.cudaUnavailable} · ${raw}`);
-  assert.equal(errorMessage("zh-CN", raw), `${messages["zh-CN"].requestError}: ${messages["zh-CN"].cudaUnavailable} · ${raw}`);
-  for (const language of ["en", "zh-CN"]) {
-    const message = errorMessage(language, "GET /api/status: request timed out (3500 ms)");
-    assert.ok(message.includes(messages[language].requestTimeout));
-    assert.ok(message.includes("request timed out (3500 ms)"));
-    assert.ok(errorMessage(language, "Unknown error <script>").endsWith("Unknown error <script>"));
-  }
+test("opening and translating never starts input, recording, training or speech", async t => {
+  const speech = {calls: [], cancel() {}, speak(x) { this.calls.push(x); }};
+  const {app, server, el, doc} = setup(t, {speech, Utterance: class {}}); await app.init(); app.setLanguage("zh-CN");
+  assert.ok(server.calls.every(c => c.method === "GET")); assert.equal(speech.calls.length, 0); assert.equal(server.config.output_enabled, false);
+  assert.equal(doc.title, messages["zh-CN"].title); assert.equal(el("record-consent").checked, false);
 });
-test("opening the page reads config/status without starting or sending results", async t => {
-  const {app, server, el, doc, timers} = setup(t);
-  await app.init();
-  assert.ok(server.calls.every(c => c.method === "GET"));
-  assert.equal(server.config.output_enabled, false);
-  assert.equal(el("headset_host").value, server.config.headset_host);
-  assert.equal(el("status").textContent, "Stopped");
-  assert.equal(doc.documentElement.lang, "en");
-  assert.equal(doc.title, "PICO Tongue");
-  assert.ok(timers.some(c => c.ms === 500));
+test("language change preserves unsaved values, consent, fields and expanded state", async t => {
+  const {app, server, el, saved} = setup(t); await app.init(); el("model_path").value = "D:/unsaved.onnx"; el("advanced").open = true; el("record-consent").checked = true;
+  app.trainInputs.get("checkpoint").input.value = "D:/candidate.pt"; el("settings").emit("input"); const n = server.calls.length; app.setLanguage("zh-CN");
+  assert.equal(server.calls.length, n); assert.equal(el("model_path").value, "D:/unsaved.onnx"); assert.equal(el("advanced").open, true);
+  assert.equal(el("record-consent").checked, true); assert.equal(app.trainInputs.get("checkpoint").input.value, "D:/candidate.pt"); assert.equal(saved.get(LANGUAGE_KEY), "zh-CN");
 });
-test("changing language preserves unsaved input and makes no backend requests", async t => {
-  const {app, server, el, doc, saved} = setup(t);
-  await app.init();
-  el("model_path").value = "D:/unsaved.pt";
-  el("device").value = "cpu";
-  el("output_port").value = "45690";
-  el("output_enabled").checked = true;
-  el("advanced").open = true;
-  el("settings").emit("input");
-  const count = server.calls.length;
-  el("language").value = "zh-CN";
-  el("language").emit("change");
-  assert.equal(server.calls.length, count);
-  assert.equal(el("model_path").value, "D:/unsaved.pt");
-  assert.equal(el("device").value, "cpu");
-  assert.equal(el("output_port").value, "45690");
-  assert.equal(el("output_enabled").checked, true);
-  assert.equal(el("advanced").open, true);
-  assert.equal(el("diagnostics").open, false);
-  assert.equal(app.state.dirty, true);
-  assert.equal(doc.documentElement.lang, "zh-CN");
-  assert.equal(el("start").textContent, "启动");
-  assert.equal(saved.get(LANGUAGE_KEY), "zh-CN");
-  await app.pollStatus();
-  assert.equal(el("model_path").value, "D:/unsaved.pt");
-});
-test("switching language when storage is blocked still works", async t => {
-  const {app, el} = setup(t, {storage: {getItem() { throw Error(); }, setItem() { throw Error(); }}});
-  await app.init();
-  app.setLanguage("zh-CN");
-  assert.equal(el("status").textContent, "已停止");
-});
-test("Start saves main and advanced settings, respects disabled UDP and never selects a mouth source", async t => {
-  const {app, server, el} = setup(t);
-  await app.init();
-  el("headset_host").value = "headset.example";
-  el("settings").emit("input");
-  await el("settings").emit("submit");
+test("Start is strict inference, preserves UDP off and outputs direct named controls", async t => {
+  const {app, server, row} = setup(t); await app.init(); await app.start();
   const config = JSON.parse(server.calls.find(c => c.path === "/api/config" && c.method === "POST").body);
-  assert.deepEqual(config, {headset_host: "headset.example", model_path: server.config.model_path,
-    headset_port: 45681, device: "auto", smoothing_ms: 20, uncertain_hold_ms: 100, stale_ms: 350,
-    preview_fps: 10, output_enabled: false, output_host: "127.0.0.1", output_port: 45682, size_hysteresis: true});
+  assert.equal(config.model_kind, "face50"); assert.equal(config.output_enabled, false); assert.ok(!("face_source" in config));
   assert.deepEqual(JSON.parse(server.calls.find(c => c.path === "/api/start").body), {mode: "live"});
-  assert.equal(el("status").textContent, "Running");
-  assert.equal(el("out").textContent, "1.000");
-  assert.equal(el("headset_host").disabled, false);
-  assert.equal(server.config.output_enabled, false);
+  assert.equal(row("TongueOut").output.textContent, "0.100"); assert.equal(row("TongueLeft").output.textContent, "0.200"); assert.equal(row("TongueUp").output.textContent, "—");
+  assert.equal(row("TongueUp").bar.hidden, true);
 });
-test("Stop immediately clears outputs and preview, and releases the object URL", async t => {
-  const {app, el, urls} = setup(t);
-  await app.init(); await app.start(); await app.refreshPreview();
-  assert.equal(el("preview").hidden, false);
-  await app.stop();
-  assert.equal(el("out").textContent, "—");
-  assert.equal(el("preview").hidden, true);
-  assert.deepEqual(urls.revoked, urls.created);
-  assert.equal(el("status").textContent, "Stopped");
+test("untrained heads cannot be displayed as valid even with nonzero values and mask", async t => {
+  const {app, server, row} = setup(t); await app.init(); await app.start();
+  server.status.prediction.channels.TongueUp = .95; server.status.prediction.valid_mask = (1n << 50n).toString(); await app.pollStatus();
+  assert.equal(row("TongueUp").output.textContent, "—"); assert.equal(row("TongueOut").output.textContent, "—");
+  server.status.prediction.valid_mask = ((1n << 50n)-1n).toString(); await app.pollStatus();
+  assert.equal(row("TongueUp").output.textContent, "—"); assert.equal(row("TongueOut").output.textContent, "0.100");
 });
-test("PC does not infer ownership from a legacy face_source field", async t => {
-  const {app, server, el} = setup(t);
-  server.config.face_source = "cymple";
-  await app.init(); await app.start();
-  assert.equal(el("out").textContent, "1.000");
-  assert.ok(server.calls.some(c => c.path === "/api/start"));
+test("channel helper requires trained name, valid bit and finite value", () => {
+  const status = {contract: {channels: ["TongueOut"]}, model: {trained_channels: ["TongueOut"]}, prediction: {valid_mask: "1", channels: {TongueOut: 0}}};
+  assert.equal(channelValue(status, "TongueOut", true), 0); assert.equal(channelValue(status, "TongueOut", false), null);
+  status.prediction.channels.TongueOut = NaN; assert.equal(channelValue(status, "TongueOut", true), null);
 });
-test("missing fields and backend errors are readable and translate on language change", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); el("model_path").value = "";
-  await app.start();
-  assert.equal(el("error").textContent, messages.en.required);
-  assert.ok(server.calls.every(c => c.method === "GET"));
-  app.setLanguage("zh-CN");
-  assert.equal(el("error").textContent, messages["zh-CN"].required);
-  el("model_path").value = "D:/missing.pt"; server.failStart = true;
-  await app.start();
-  assert.match(el("error").textContent, /HTTP 400.*Model file not found/);
-  await app.pollStatus();
-  assert.match(el("error").textContent, /Model file not found/);
-  app.setLanguage("en");
-  assert.match(el("error").textContent, /^Request failed:/);
+test("valid_mask bits 32, 43, 44 and 49 never wrap into uint32; unknown high heads stay grey", async t => {
+  const {app, server, row} = setup(t); await app.init(); await app.start();
+  const names = Array.from({length: 50}, (_, i) => `head${i}`), heads = [[32, "TongueOut"], [43, "TongueRoll"], [44, "MouthUpperLeft"], [49, "LipFunnelLower"]];
+  names[0] = "JawOpen"; for (const [index, name] of heads) names[index] = name;
+  server.status.contract.channels = names; server.status.model.trained_channels = ["JawOpen", ...heads.map(([, name]) => name)];
+  server.status.prediction.channels = {JawOpen: .7, TongueOut: 0, TongueRoll: .43, MouthUpperLeft: .44, LipFunnelLower: .49};
+  for (const [index, name] of heads) {
+    server.status.prediction.valid_mask = Number(1n << BigInt(index)); await app.pollStatus();
+    assert.equal(app.rows.get(`channel-table/${name}`).output.textContent, server.status.prediction.channels[name].toFixed(3));
+    assert.equal(row("JawOpen").output.textContent, "—", `high bit ${index} must not wrap to index0`);
+    for (const [otherIndex, otherName] of heads) if (otherIndex !== index) assert.equal(app.rows.get(`channel-table/${otherName}`).output.textContent, "—");
+  }
+  server.status.prediction.valid_mask = heads.reduce((mask, [i]) => mask | (1n << BigInt(i)), 0n).toString();
+  server.status.model.trained_channels = ["TongueOut"]; await app.pollStatus();
+  assert.equal(row("TongueOut").output.textContent, "0.000");
+  for (const [, name] of heads.slice(1)) { const item = app.rows.get(`channel-table/${name}`); assert.equal(item.output.textContent, "—"); assert.equal(item.bar.hidden, true); }
 });
-test("offline status invalidates old output and reconnecting does not auto-start", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); await app.start();
-  server.failStatus = true; await app.pollStatus();
-  assert.equal(el("out").textContent, "—");
-  assert.equal(el("status").textContent, "Local service unavailable");
-  const starts = server.calls.filter(c => c.path === "/api/start").length;
-  server.failStatus = false; await app.pollStatus();
-  assert.equal(server.calls.filter(c => c.path === "/api/start").length, starts);
+test("capture-only can start without any model and preview does not require valid channels", async t => {
+  const {app, server, el, row} = setup(t); server.config.model_path = ""; await app.init(); await app.start("capture"); await app.refreshPreview();
+  assert.deepEqual(JSON.parse(server.calls.find(c => c.path === "/api/start").body), {mode: "capture"});
+  assert.equal(el("preview").hidden, false); assert.equal(row("TongueOut").output.textContent, "—"); assert.equal(el("status").textContent, messages.en.recordingOnly);
 });
-test("initial failure recovers by GET only without overwriting edited config", async t => {
-  const {app, server, el} = setup(t);
-  server.failStatus = true; await app.init();
-  assert.equal(el("start").disabled, true);
-  server.failStatus = false; await app.pollStatus();
-  assert.equal(el("start").disabled, false);
-  assert.ok(server.calls.every(c => c.method === "GET"));
-});
-test("a successful Save clears an earlier polling error immediately", async t => {
-  const {app, server, el} = setup(t);
-  await app.init();
-  server.failStatus = true; await app.pollStatus();
-  assert.equal(el("error").hidden, false);
-  server.failStatus = false;
-  el("settings").emit("input");
-  await app.save();
-  assert.equal(el("error").hidden, true);
-  assert.equal(el("status").textContent, "Stopped");
-});
-test("expired snapshots and explicitly stale predictions never remain valid", async t => {
-  const {app, server, advance} = setup(t);
-  await app.init(); await app.start();
-  assert.equal(deriveView(server.status, true, 1500).valid, false);
-  server.status.prediction.stale = true;
-  assert.equal(deriveView(server.status, true).valid, false);
-  advance(1600);
-  await app.refreshPreview();
-});
-test("late preview response cannot resurrect an image after Stop", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); await app.start();
-  let resolve;
-  server.before = path => path.startsWith("/api/preview.jpg") ? new Promise(done => { resolve = done; }) : null;
-  const pending = app.refreshPreview();
-  await app.stop();
-  resolve(new Response(new Uint8Array([1]))); await pending;
-  assert.equal(el("preview").hidden, true);
-});
-test("new session cancels old pending preview and updates exact source diagnostics", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); await app.start();
-  let resolve;
-  server.before = path => path.startsWith("/api/preview.jpg") ? new Promise(done => { resolve = done; }) : null;
-  const pending = app.refreshPreview();
-  server.status.source.session_id = "18446744073709551001";
-  await app.pollStatus();
-  resolve(new Response(new Uint8Array([1]))); await pending;
-  assert.equal(el("preview").hidden, true);
-  assert.match(el("source-info").textContent, /^18446744073709551001 \/ /);
-});
-
-test("advanced values read back, numeric zero is preserved and Save never starts inference", async t => {
-  const {app, server, el} = setup(t);
-  await app.init();
-  assert.equal(el("headset_port").value, "45681");
-  assert.equal(el("device").value, "auto");
-  el("smoothing_ms").value = "0";
-  el("uncertain_hold_ms").value = "0";
-  el("stale_ms").value = "275";
-  el("preview_fps").value = "5";
-  el("output_enabled").checked = true;
-  el("output_port").value = "45690";
-  el("device").value = "cpu";
-  el("settings").emit("change");
-  assert.equal(el("config-state").textContent, "Unsaved changes");
-  await el("save").emit("click");
-  assert.equal(server.config.smoothing_ms, 0);
-  assert.equal(server.config.uncertain_hold_ms, 0);
-  assert.equal(server.config.stale_ms, 275);
-  assert.equal(server.config.output_port, 45690);
-  assert.equal(server.config.output_enabled, true);
-  assert.equal(el("device").value, "cpu");
-  assert.equal(el("config-state").textContent, "Saved");
-  assert.equal(el("save").disabled, true);
-  assert.equal(server.status.running, false);
-  assert.ok(!server.calls.some(c => c.path === "/api/start"));
-  await app.pollStatus();
-  assert.equal(el("smoothing_ms").value, "0");
-  assert.equal(el("output_enabled").checked, true);
-});
-test("Start retains enabled UDP and the selected port", async t => {
-  const {app, server, el} = setup(t);
-  server.config.output_enabled = true;
-  server.config.output_port = 45691;
-  await app.init(); await app.start();
-  assert.equal(server.config.output_enabled, true);
-  assert.equal(server.config.output_port, 45691);
-  assert.equal(el("output_enabled").checked, true);
-});
-test("saving connection/device/output changes reads back the backend stop without restarting", async t => {
-  const {app, server, el, urls} = setup(t);
-  await app.init(); await app.start(); await app.refreshPreview();
-  el("output_port").value = "45692";
-  el("settings").emit("input");
-  await app.save();
-  assert.equal(app.state.status.running, false);
-  assert.equal(app.state.config.enabled, false);
-  assert.equal(el("status").textContent, "Stopped");
-  assert.equal(el("out").textContent, "—");
-  assert.equal(el("preview").hidden, true);
-  assert.deepEqual(urls.revoked, urls.created);
-  assert.equal(server.calls.filter(c => c.path === "/api/start").length, 1);
-  assert.equal(el("start").disabled, false);
-});
-test("saving smoothing while running leaves the run active", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); await app.start();
-  el("smoothing_ms").value = "30";
-  el("settings").emit("input");
-  await app.save();
-  assert.equal(server.status.running, true);
-  assert.equal(server.config.smoothing_ms, 30);
-  assert.equal(server.calls.filter(c => c.path === "/api/start").length, 1);
-});
-test("replay uses the configured dataset without a headset and preserves result sending preference", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); await el("replay").emit("click");
-  assert.deepEqual(JSON.parse(server.calls.find(c => c.path === "/api/start").body), {mode: "replay"});
-  assert.equal(server.status.connected, false);
-  assert.equal(el("status").textContent, "Replaying data");
-  assert.equal(el("out").textContent, "1.000");
-  assert.equal(server.config.output_enabled, false);
-  assert.match(el("replay-info").textContent, /D:\/data\/reference.npz.*0 \/ 2700 frames/);
-  assert.equal(el("encode-label").textContent, "PC replay JPEG encoding");
-  server.status.replay.finished = true;
-  server.status.replay.position = 2700;
-  await app.pollStatus();
-  assert.match(el("replay-info").textContent, /2700 \/ 2700 frames · Finished/);
-  app.setLanguage("zh-CN");
-  assert.equal(el("status").textContent, messages["zh-CN"].replaying);
-  await app.stop();
-  assert.equal(el("out").textContent, "—");
-});
-test("invalid advanced settings do not send POST or open collapsed details", async t => {
-  const {app, server, el} = setup(t);
-  await app.init();
-  el("settings").valid = false;
-  el("settings").emit("input");
-  await app.start(); await app.save();
-  assert.equal(el("error").textContent, messages.en.invalidSettings);
-  assert.equal(el("advanced").open, false);
-  assert.ok(server.calls.every(c => c.method === "GET"));
-});
-test("preview toggle clears the image, cancels late data and does not submit config or stop inference", async t => {
-  const {app, server, el, urls} = setup(t);
-  await app.init(); await app.start(); await app.refreshPreview();
-  let resolve;
-  server.before = path => path.startsWith("/api/preview.jpg") ? new Promise(done => { resolve = done; }) : null;
-  const pending = app.refreshPreview();
-  const count = server.calls.length;
-  el("preview-enabled").checked = false;
-  el("preview-enabled").emit("change");
-  await app.refreshPreview();
-  assert.equal(server.calls.length, count);
-  resolve(new Response(new Uint8Array([1]))); await pending;
-  assert.equal(el("preview").hidden, true);
-  assert.deepEqual(urls.revoked, urls.created);
-  assert.equal(el("placeholder").textContent, "Preview off");
-  assert.equal(el("out").textContent, "1.000");
-  assert.equal(server.status.running, true);
-  assert.equal(app.state.dirty, false);
-  server.before = null;
-  el("preview-enabled").checked = true;
-  el("preview-enabled").emit("change");
-  await app.refreshPreview();
-  assert.equal(el("preview").hidden, false);
-});
-test("preview scheduling uses the saved frame rate", async t => {
-  const {app, server, timers} = setup(t);
-  server.config.preview_fps = 4;
-  await app.init();
-  assert.ok(timers.some(c => c.ms === 250));
-});
-test("diagnostics preserve uint64 strings and subtract nanoseconds before conversion", async t => {
-  const {app, server, el} = setup(t);
-  Object.assign(server.status, {engine: "ONNX Runtime", device: "CUDA",
-    prediction_source: {session_id: "18446744073709551000", source_seq: "9007199254740993"}});
-  Object.assign(server.status.source, {source_seq: "9007199254740994", raw_identity: "18446744073709551615",
-    sensor_ns: "9007199254740999", vendor_ns: "9007199254741000", eye0_sensor_ns: "9007199254740998",
-    eye1_sensor_ns: "9007199254741001", mouth_sensor_ns: "9007199254740999",
-    encode_begin_ns: "18446744073700000000", encode_end_ns: "18446744073701250000"});
-  Object.assign(server.status.metrics, {source_age_ms: 10.2, receive_age_ms: 1.3, received_hz: 89.9,
-    inference_hz: 89.8, source_gaps: 2, pending_dropped: 1, duplicates: 0, out_of_order: 0,
-    queue_depth: 1, queue_ms: .2, pc_total_ms: 1.8, clock_uncertainty_ms: .4,
-    latency_ms: {decode_ms: {p50: .2, p95: .4}, predict_ms: {p50: 1.2, p95: 2},
-      source_copy_to_result_ms: {p50: 10.8, p95: 13.5}}});
-  await app.init();
-  assert.equal(el("source-info").textContent, "18446744073709551000 / 9007199254740994");
-  assert.equal(el("result-info").textContent, "18446744073709551000 / 9007199254740993");
-  assert.equal(el("raw-identity").textContent, "18446744073709551615");
-  assert.equal(el("time-eye0").textContent, "9007199254740998");
-  assert.equal(el("time-eye1").textContent, "9007199254741001");
-  assert.equal(el("time-mouth").textContent, "9007199254740999");
-  assert.equal(el("encode-time").textContent, "1.3 ms");
-  assert.equal(el("rates").textContent, "89.9 / 89.8 Hz");
-  assert.equal(el("queue").textContent, "1 / 0.2 ms");
-  assert.equal(el("latency").textContent, "10.8 / 13.5 ms");
-  assert.equal(el("engine-info").textContent, "ONNX Runtime / CUDA");
-});
-test("missing diagnostics show dashes, unsafe numeric identities are not presented as exact", async t => {
-  const {app, server, el} = setup(t);
-  server.status.source = {session_id: Number.MAX_SAFE_INTEGER + 2};
-  await app.init();
-  assert.equal(el("source-info").textContent, `${messages.en.unsafeInteger} / —`);
-  assert.equal(el("queue").textContent, "— / — ms");
-  assert.equal(el("latency").textContent, "—");
-  assert.equal(el("encode-time").textContent, "— ms");
-  app.setLanguage("zh-CN");
-  assert.match(el("source-info").textContent, new RegExp(messages["zh-CN"].unsafeInteger));
-});
-test("expired diagnostics clear live metrics but retain the last exact identities", async t => {
-  const {app, server, el, advance} = setup(t);
-  server.status.metrics.received_hz = 90;
-  await app.init(); await app.start();
-  advance(1500);
-  app.setLanguage("en");
-  assert.equal(el("rates").textContent, "— / — Hz");
-  assert.equal(el("snapshot-state").textContent, "Status snapshot expired");
-  assert.match(el("source-info").textContent, /^18446744073709551000/);
-  assert.equal(el("out").textContent, "—");
-});
-test("all restored labels, hints and output bars switch language without changing values or details", async t => {
-  const {app, server, el} = setup(t);
-  await app.init();
-  const values = app.readForm();
-  el("diagnostics").open = true;
-  const count = server.calls.length;
-  for (const language of ["zh-CN", "en"]) {
+test("stock diagnostics distinguish no labels, unassociated labels and exact associations in both languages", async t => {
+  const {app, server, el} = setup(t); await app.init();
+  for (const language of ["en", "zh-CN"]) {
     app.setLanguage(language);
-    for (const [id, key] of [["advanced-title", "advanced"], ["diagnostics-title", "diagnostics"],
-      ["settings-help", "settingsHelp"], ["save", "save"], ["replay", "replay"], ["udp-label", "udp"],
-      ["device-label", "device"], ["queue-label", "queue"], ["latency-label", "latency"]])
-      assert.equal(el(id).textContent, messages[language][key]);
-    assert.equal(el("bar-out").attributes["aria-label"], messages[language].out);
-    assert.deepEqual(app.readForm(), values);
-    assert.equal(el("diagnostics").open, true);
-    assert.equal(el("advanced").open, false);
+    for (const [records, associated, unassociated, key] of [[0, 0, 0, "associationWaiting"], [3, 0, 3, "associationUnverified"], [4, 1, 3, "associationExact"]]) {
+      server.status.stock = {active: records > 0, records, associated, unassociated, error: null};
+      await app.pollStatus();
+      assert.ok(el("stock-info").textContent.startsWith(messages[language][key]));
+      assert.ok(el("stock-info").textContent.includes(`"associated":${associated}`));
+      assert.ok(el("stock-info").textContent.includes(`"unassociated":${unassociated}`));
+    }
   }
-  assert.equal(server.calls.length, count);
 });
-test("diagnostics show actual providers and the fallback reason instead of claiming CUDA", async t => {
-  const {app, server, el} = setup(t);
-  Object.assign(server.status, {engine: "onnx", device: "dml", model: {
-    providers: ["DmlExecutionProvider", "CPUExecutionProvider"],
-    fallbacks: [{engine: "onnxgraph", device: "cuda", error: "CUDA initialization failed"}]
-  }});
-  await app.init();
-  assert.equal(el("engine-info").textContent, "onnx / dml");
-  assert.equal(el("provider-info").textContent, "DmlExecutionProvider → CPUExecutionProvider");
-  assert.equal(el("fallback-info").textContent, "onnxgraph/cuda: CUDA initialization failed");
-  app.setLanguage("zh-CN");
-  assert.equal(el("providers-label").textContent, messages["zh-CN"].providers);
-  assert.equal(el("fallback-label").textContent, messages["zh-CN"].fallback);
-  server.status.model.fallbacks = [];
-  await app.pollStatus();
-  assert.equal(el("fallback-info").textContent, messages["zh-CN"].noFallback);
+test("missing inference model does not POST and errors translate", async t => {
+  const {app, server, el} = setup(t); server.config.model_path = ""; await app.init(); await app.start();
+  assert.ok(server.calls.every(c => c.method === "GET")); assert.equal(el("error").textContent, messages.en.required); app.setLanguage("zh-CN"); assert.equal(el("error").textContent, messages["zh-CN"].required);
 });
-test("slow Save serializes config/start/stop operations and preserves unsaved values on failure", async t => {
-  const {app, server, el} = setup(t);
-  await app.init();
-  el("device").value = "cpu";
-  el("settings").emit("input");
-  let resolve;
-  server.before = (path, opts) => path === "/api/config" && opts.method === "POST" ?
-    new Promise(done => { resolve = done; }) : null;
-  const pending = app.save();
-  assert.equal(el("device").disabled, true);
-  const count = server.calls.length;
-  await app.save(); await app.start(); await app.stop(); await app.pollStatus();
-  assert.equal(server.calls.length, count);
-  resolve(Response.json({error: "save failed"}, {status: 400})); await pending;
-  assert.equal(el("device").value, "cpu");
-  assert.equal(app.state.dirty, true);
-  assert.equal(el("device").disabled, false);
-  assert.match(el("error").textContent, /save failed/);
+test("Save can persist blank model without starting capture or output", async t => {
+  const {app, server, el} = setup(t); await app.init(); el("model_path").value = ""; el("settings").emit("input"); await app.save();
+  assert.equal(server.config.model_path, ""); assert.ok(!server.calls.some(c => c.path === "/api/start"));
 });
-test("a poll started before Save cannot restore an obsolete running snapshot", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); await app.start();
-  const old = structuredClone(server.status);
-  let resolve;
-  server.before = path => path === "/api/status" ? new Promise(done => { resolve = done; }) : null;
-  const pending = app.pollStatus();
-  server.before = null;
-  el("device").value = "cpu";
-  el("settings").emit("input");
-  await app.save();
-  resolve(Response.json(old)); await pending;
-  assert.equal(el("status").textContent, "Stopped");
-  assert.equal(app.state.status.running, false);
+test("record requires separate consent and a person ID, not an existing model", async t => {
+  const {app, server, el} = setup(t); server.config.model_path = ""; await app.init(); await app.record("begin");
+  assert.ok(!server.calls.some(c => c.path === "/api/recording")); await app.start("capture"); el("person_id").value = "local-person"; el("record-consent").checked = true; el("person_id").emit("change"); await app.record("begin");
+  const body = JSON.parse(server.calls.find(c => c.path === "/api/recording").body);
+  assert.deepEqual(body, {action: "begin", person_id: "local-person", confirmed: true, guide: true, stage: "raw_only",preset_id:"complete"});
+  assert.equal(el("record-consent").checked, false); assert.equal(el("guide").hidden, false); assert.equal(el("guide-step").textContent, "Relax your mouth");
 });
-test("preview 204, HTTP error and image decode failure are handled without affecting inference", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); await app.start();
-  server.previewStatus = 204; await app.refreshPreview();
-  assert.equal(el("preview").hidden, true);
-  server.previewStatus = 500; await app.refreshPreview();
-  assert.equal(el("placeholder").textContent, messages.en.previewError);
-  assert.equal(server.status.running, true);
-  el("preview").emit("error");
-  app.setLanguage("zh-CN");
-  assert.equal(el("placeholder").textContent, messages["zh-CN"].previewError);
+test("guide phase controls use real ready/finish/confirm/skip API, never auto-approve labels", async t => {
+  const {app, el, server} = setup(t); await app.init(); await app.start("capture"); el("person_id").value = "local"; el("record-consent").checked = true; el("person_id").emit("change"); await app.record("begin");
+  assert.equal(el("guide-ready").disabled, false); assert.equal(el("guide-confirm").disabled, true); await app.record("ready");
+  assert.equal(el("guide-step").textContent, "Hold"); assert.ok(!server.calls.some(c => c.path.includes("review")));
 });
-test("one preview request at a time; hidden pages do not request preview", async t => {
-  const {app, server, doc} = setup(t);
-  await app.init(); await app.start();
-  let resolve;
+test("optional speech speaks each guide phase once and language switch needs no request", async t => {
+  const speech = {calls: [], cancel() {}, speak(x) { this.calls.push(x); }};
+  const {app, el, server} = setup(t, {speech, Utterance: class { constructor(text) { this.text = text; } }}); await app.init();
+  await app.start("capture");
+  el("person_id").value = "local"; el("record-consent").checked = true; el("voice-enabled").checked = true; el("person_id").emit("change"); await app.record("begin");
+  assert.equal(speech.calls.length, 1); await app.pollStatus(); assert.equal(speech.calls.length, 1); const n = server.calls.length; app.setLanguage("zh-CN");
+  assert.equal(server.calls.length, n); assert.equal(speech.calls.length, 2); assert.equal(speech.calls[1].lang, "zh-CN");
+});
+test("record cancellation clears old output and preview and keeps archives indicated", async t => {
+  const {app, el, row} = setup(t); await app.init(); await app.start(); el("person_id").value = "local"; el("record-consent").checked = true; el("person_id").emit("change");
+  await app.record("begin"); await app.refreshPreview(); await app.record("cancel");
+  assert.equal(el("preview").hidden, true); assert.equal(row("TongueLeft").output.textContent, "—"); assert.equal(el("record-path").textContent, "D:/local/recording");
+});
+test("local training form is supplied by backend CLI spec and uses real operation/args", async t => {
+  const {app, el, server} = setup(t); await app.init(); app.trainInputs.get("checkpoint").input.value = "student.pt"; app.trainInputs.get("output").input.value = "candidate.onnx"; await app.train();
+  const body = JSON.parse(server.calls.find(c => c.path === "/api/training").body);
+  assert.deepEqual(body, {action: "begin", operation: "export", args: {checkpoint: "student.pt", output: "candidate.onnx"}});
+  assert.equal(el("train-cancel").disabled, false); await app.train("cancel"); assert.equal(el("train-state").textContent, messages.en.cancelled);
+});
+test("missing training integration is explicitly disabled, never an empty success", async t => {
+  const {app, server, el} = setup(t); server.status.training.operations = {}; await app.init(); await app.train();
+  assert.equal(el("train-start").disabled, true); assert.equal(el("train-state").textContent, messages.en.trainUnavailable); assert.ok(!server.calls.some(c => c.path === "/api/training"));
+});
+test("Stop releases object URLs and late previews cannot resurrect an image", async t => {
+  const {app, server, el, row, urls} = setup(t); await app.init(); await app.start(); await app.refreshPreview(); let resolve;
   server.before = path => path.startsWith("/api/preview.jpg") ? new Promise(done => { resolve = done; }) : null;
-  const pending = app.refreshPreview();
-  await app.refreshPreview();
-  assert.equal(server.calls.filter(c => c.path.startsWith("/api/preview.jpg")).length, 1);
-  resolve(new Response(null, {status: 204})); await pending;
-  doc.hidden = true; await app.refreshPreview();
-  assert.equal(server.calls.filter(c => c.path.startsWith("/api/preview.jpg")).length, 1);
+  const pending = app.refreshPreview(); await app.stop(); resolve(new Response(new Uint8Array([1]))); await pending;
+  assert.equal(el("preview").hidden, true); assert.equal(row("TongueOut").output.textContent, "—"); assert.deepEqual(urls.revoked, urls.created);
 });
-test("HTTP diagnostics retain route, status and raw error", async () => {
+test("new output epoch invalidates pending preview", async t => {
+  const {app, server, el} = setup(t); await app.init(); await app.start(); let resolve;
+  server.before = path => path.startsWith("/api/preview.jpg") ? new Promise(done => { resolve = done; }) : null;
+  const pending = app.refreshPreview(); server.status.output_session_id = "new"; await app.pollStatus(); resolve(new Response(new Uint8Array([1]))); await pending;
+  assert.equal(el("preview").hidden, true);
+});
+test("offline and expired status clear outputs and do not restart on recovery", async t => {
+  const {app, server, row, advance} = setup(t); await app.init(); await app.start(); server.failStatus = true; await app.pollStatus(); assert.equal(row("TongueOut").output.textContent, "—");
+  server.failStatus = false; await app.pollStatus(); advance(1600); app.setLanguage("en"); assert.equal(row("TongueOut").output.textContent, "—");
+  assert.equal(server.calls.filter(c => c.path === "/api/start").length, 1); assert.equal(deriveView(server.status, true, 1500).valid, false);
+});
+test("save backend reconfiguration clears actual run and does not auto-restart", async t => {
+  const {app, server, el, row} = setup(t); await app.init(); await app.start(); el("output_port").value = "45692"; el("settings").emit("input"); await app.save();
+  assert.equal(server.status.running, false); assert.equal(row("TongueOut").output.textContent, "—"); assert.equal(server.calls.filter(c => c.path === "/api/start").length, 1);
+});
+test("advanced replay works without headset and preserves output preference", async t => {
+  const {app, server, el} = setup(t); server.config.headset_host = ""; server.config.output_enabled = true; await app.init(); await app.start("replay");
+  assert.equal(server.config.output_enabled, true); assert.deepEqual(JSON.parse(server.calls.find(c => c.path === "/api/start").body), {mode: "replay"}); assert.equal(el("status").textContent, messages.en.replaying);
+});
+test("diagnostics preserve uint64 strings and actual backend fallback", async t => {
+  const {app, server, el} = setup(t); Object.assign(server.status.model, {providers: ["DmlExecutionProvider"], fallbacks: [{engine: "onnxgraph", device: "cuda", error: "not available"}]}); await app.init();
+  assert.equal(el("source-info").textContent, "18446744073709551000 / 9007199254740993"); assert.equal(el("provider-info").textContent, "DmlExecutionProvider"); assert.match(el("fallback-info").textContent, /cuda: not available/);
+});
+test("preview toggle is independent, one request at a time and hidden tabs do not fetch", async t => {
+  const {app, el, server, doc, row} = setup(t); await app.init(); await app.start(); await app.refreshPreview(); const n = server.calls.length;
+  el("preview-enabled").checked = false; el("preview-enabled").emit("change"); await app.refreshPreview(); assert.equal(server.calls.length, n); assert.equal(row("TongueOut").output.textContent, "0.100"); assert.equal(app.state.dirty, false);
+  doc.hidden = true; el("preview-enabled").checked = true; await app.refreshPreview(); assert.equal(server.calls.length, n);
+});
+test("raw HTTP errors stay available with bilingual known-error explanations", async () => {
+  const raw = "POST /api/start · HTTP 400: trained_channels missing"; assert.ok(errorMessage("zh-CN", raw).includes(messages["zh-CN"].manifestInvalid));
   await assert.rejects(requestJson(async () => Response.json({error: "model missing"}, {status: 422}), "/api/start", {}), /POST \/api\/start.*HTTP 422.*model missing/);
-  await assert.rejects(requestJson(async () => new Response("not json"), "/api/status"), /GET \/api\/status.*HTTP 200.*not json/);
+  await assert.rejects(requestJson(async () => new Response("not json"), "/api/status"), /HTTP 200.*not json/);
+});
+test("record consent never auto-starts an input connection", async t => {
+  const {app, el, server} = setup(t); await app.init(); el("person_id").value = "local"; el("record-consent").checked = true; el("person_id").emit("change"); await app.record("begin");
+  assert.equal(el("record-start").disabled, true); assert.ok(server.calls.every(c => c.method === "GET"));
+});
+test("review loads local thumbnails, separates proposals from labels and supports explicit batch approval", async t => {
+  const {app, server, el} = setup(t); server.status.recording = {state: "stopped", path: "D:/local", session_id: "local"}; await app.init();
+  el("review-targets").value = "{}"; el("reviewer").value = "local-user"; el("observation").value = "visible";
+  await app.loadReviews(); assert.equal(el("review-grid").children.length, 2);
+  const first = el("review-grid").children[0]; assert.match(first.children[1].src, /^\/api\/recording\/image\?session=local&sample=f/);
+  first.children[1].emit("click"); assert.equal(el("review-targets").value, "{}");
+  el("review-proposal").emit("click"); assert.deepEqual(JSON.parse(el("review-targets").value), {TongueOut: .5});
+  el("review-select-page").emit("click"); await app.applyReview(); assert.ok(!server.calls.some(c => c.path === "/api/recording/review"));
+  el("review-confirmed").checked = true; el("review-confirmed").emit("change"); await app.applyReview();
+  const body = JSON.parse(server.calls.find(c => c.path === "/api/recording/review").body);
+  assert.deepEqual(body.sample_ids, ["f000000000", "f000000001"]); assert.deepEqual(body.targets, {TongueOut: .5}); assert.equal(body.confirmed, true); assert.equal(el("review-confirmed").checked, false);
+});
+test("changing recording session clears review thumbnails and old selections", async t => {
+  const {app, server, el} = setup(t); server.status.recording = {state: "stopped", path: "D:/local", session_id: "local"}; await app.init(); await app.loadReviews();
+  el("review-select-page").emit("click"); server.status.recording.session_id = "new-session"; await app.pollStatus();
+  assert.equal(app.state.reviewSelected.size, 0); assert.equal(el("review-grid").children.length, 0); assert.equal(el("review-image").hidden, true);
 });
 
-test("personalization stays folded; opening or translating never records or speaks", async t => {
-  const speech = {calls: [], cancel() {}, speak(u) { this.calls.push(u); }};
-  const {app, el, server} = setup(t, {speech, Utterance: class { constructor(text) { this.text = text; } }});
+test("reference images are available for practice without a headset, model, consent or recording", async t => {
+  const {app, server, el} = setup(t); server.config.headset_host = ""; server.config.model_path = ""; await app.init();
+  assert.equal(el("reference-views").hidden, false); assert.equal(el("reference-select").disabled, false);
+  assert.equal(el("reference-image").src, "/static/guide-reference/neutral.webp");
+  assert.equal(el("reference-mode").textContent, messages.en.referencePractice);
+  assert.ok(server.calls.every(call => call.method === "GET")); assert.equal(server.status.running, false);
+});
+test("practice selection changes images and optional side view without sending controls or targets", async t => {
+  const {app, server, el} = setup(t); await app.init(); const count = server.calls.length;
+  app.selectReference("JawForward"); assert.equal(el("reference-image").src, "/static/guide-reference/JawForward.webp");
+  assert.equal(el("reference-profile").hidden, false); assert.match(el("reference-profile-image").src, /JawForward-profile/);
+  assert.equal(el("reference-origin").textContent, messages.en.referenceOriginal);
+  assert.equal(server.calls.length, count); assert.equal(el("record-consent").checked, false);
+  app.selectReference("LipFunnelUpper"); assert.equal(el("reference-profile").hidden, true);
+  assert.equal(el("reference-profile-image").src, ""); assert.equal(el("reference-origin").textContent, messages.en.referenceOriginal);
+});
+test("practice previous/next respects boundaries and stays local", async t => {
+  const {app, server, el} = setup(t); await app.init(); assert.equal(el("reference-prev").disabled, true);
+  el("reference-prev").emit("click"); assert.equal(app.state.referenceSelected, "neutral");
+  el("reference-next").emit("click"); assert.equal(app.state.referenceSelected, "JawForward");
+  el("reference-next").emit("click"); assert.equal(el("reference-next").disabled, true);
+  el("reference-prev").emit("click"); assert.equal(app.state.referenceSelected, "JawForward");
+  assert.ok(server.calls.every(call => call.method === "GET"));
+});
+test("added tongue controls are attributed separately from original morphs in both languages", async t => {
+  const {app, server, el} = setup(t);
+  server.reference.poses.push({id: "TongueOut", title: {en: "Tongue out", zh: "伸舌"}, front: "TongueOut.webp",
+    animation: "TongueOut-motion.webp", provenance: ["original_model_morphs_with_original_correctives", "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"]});
+  await app.init(); app.selectReference("TongueOut");
+  assert.equal(el("reference-origin").textContent, messages.en.referenceAuthored);
+  app.setLanguage("zh-CN"); assert.equal(el("reference-origin").textContent, messages["zh-CN"].referenceAuthored);
+  el("reference-play").emit("click"); assert.match(el("reference-image").src, /TongueOut-motion.webp$/);
+  app.selectReference("JawForward"); assert.equal(el("reference-origin").textContent, messages["zh-CN"].referenceOriginal);
+  assert.ok(server.calls.every(call => call.method === "GET"));
+});
+test("independent lip controls carry their authored origin without changing labels or recording", async t => {
+  const {app, server, el} = setup(t);
+  server.reference.poses.push({id: "MouthUpperLeft", title: {en: "Upper lip left", zh: "上唇左移"}, front: "MouthUpperLeft.webp",
+    provenance: ["original_model_morphs_with_original_correctives", "original_mouth_shift_deltas_with_authored_independent_lip_masks"]});
+  await app.init(); app.selectReference("MouthUpperLeft");
+  assert.equal(el("reference-origin").textContent, messages.en.referenceAuthored);
+  assert.equal(server.status.recording.state, "idle"); assert.equal(el("record-consent").checked, false);
+  assert.ok(server.calls.every(call => call.method === "GET"));
+});
+test("language switch preserves reference pose and image while translating instructions, options and alt text", async t => {
+  const {app, server, el} = setup(t); await app.init(); app.selectReference("JawForward"); const count = server.calls.length;
+  app.setLanguage("zh-CN"); assert.equal(el("reference-select").value, "JawForward");
+  assert.equal(el("reference-pose").textContent, "下颌前伸"); assert.equal(el("reference-instruction").textContent, "下颌轻轻向前伸");
+  assert.match(el("reference-image").attributes.alt, /下颌前伸/); assert.equal(server.calls.length, count);
+});
+test("recording guide follows the actual backend pose and cannot be changed by the practice browser", async t => {
+  const {app, server, el} = setup(t); await app.init();
+  server.status.recording = {state: "recording", session_id: "new", guide: {step: {id: "JawForward"}, phase: "hold"}};
+  await app.pollStatus(); assert.equal(el("reference-select").disabled, true); assert.equal(el("reference-next").disabled, true);
+  assert.equal(el("reference-mode").textContent, messages.en.referenceFollowing); assert.match(el("reference-image").src, /JawForward.webp/);
+  app.selectReference("LipFunnelUpper"); assert.match(el("reference-image").src, /JawForward.webp/);
+  server.status.recording.guide.step = {id: "LipFunnelUpper"}; await app.pollStatus();
+  assert.match(el("reference-image").src, /LipFunnelUpper.webp/); assert.ok(!server.calls.some(call => call.path.includes("review")));
+});
+test("expired recording snapshot stops claiming a current pose and returns to labelled practice", async t => {
+  const {app, server, el, advance} = setup(t); await app.init();
+  server.status.recording = {state: "recording", guide: {step: {id: "JawForward"}, phase: "hold"}}; await app.pollStatus();
+  advance(1600); app.setLanguage("en"); assert.equal(el("reference-mode").textContent, messages.en.referencePractice);
+  assert.match(el("reference-image").src, /neutral.webp/);
+});
+test("missing reference bundle is explicit and does not block normal app controls", async t => {
+  const {app, server, el} = setup(t); server.reference = null; await app.init();
+  assert.equal(el("reference-views").hidden, true); assert.equal(el("reference-message").textContent, messages.en.referenceMissing);
+  assert.equal(el("reference-select").disabled, true); assert.equal(el("capture").disabled, false); assert.equal(el("error").hidden, true);
+});
+test("a missing active pose is never substituted with the previous or neutral image", async t => {
+  const {app, server, el} = setup(t); await app.init(); app.selectReference("JawForward");
+  server.status.recording = {state: "recording", guide: {step: {id: "unknown"}, phase: "prepare"}}; await app.pollStatus();
+  assert.equal(el("reference-views").hidden, true); assert.equal(el("reference-image").src, "");
+  assert.equal(el("reference-message").textContent, messages.en.referencePoseMissing);
+});
+test("image load failure hides all reference views and a new selection clears the failure", async t => {
+  const {app, el} = setup(t); await app.init(); app.selectReference("JawForward"); el("reference-image").emit("error");
+  assert.equal(el("reference-views").hidden, true); assert.equal(el("reference-message").textContent, messages.en.referenceImageError);
+  app.selectReference("LipFunnelUpper"); assert.equal(el("reference-views").hidden, false);
+});
+test("movement animation is opt-in and does not start any capture", async t => {
+  const {app, server, el} = setup(t); await app.init(); app.selectReference("JawForward");
+  assert.match(el("reference-image").src, /JawForward.webp$/); el("reference-play").emit("click");
+  assert.match(el("reference-image").src, /JawForward-motion.webp$/); assert.equal(el("reference-play").attributes["aria-pressed"], "true");
+  app.selectReference("LipFunnelUpper"); assert.match(el("reference-image").src, /LipFunnelUpper.webp$/);
+  assert.ok(server.calls.every(call => call.method === "GET"));
+});
+
+function addTextOnlyReference(server) {
+  const item = {id: "TongueOut", title: {en: "Extend tongue", zh: "伸舌"}, instruction: {en: "Extend comfortably", zh: "舒适地伸舌"},
+    unavailable_reason: {en: "No tongue extension morph in the original model.", zh: "原模型没有伸舌形态键。"}};
+  server.reference.poses.push(item); return item;
+}
+test("a text-only original-model gap clears every image and never requests undefined or substitutes neutral", async t => {
+  const {app, server, el} = setup(t); const missing = addTextOnlyReference(server); await app.init(); app.selectReference("JawForward");
+  el("reference-play").emit("click"); const count = server.calls.length; app.selectReference("TongueOut");
+  for (const id of ["reference-image", "reference-neutral-image", "reference-profile-image"]) assert.equal(el(id).src, "");
+  assert.equal(el("reference-views").hidden, true); assert.equal(el("reference-play").hidden, true);
+  assert.equal(el("reference-message").textContent, missing.unavailable_reason.en); assert.equal(el("reference-origin").textContent, "");
+  assert.equal(server.calls.length, count); assert.match(el("reference-select").children[3].textContent, /text only/);
+});
+test("text-only instructions, reason and selector label translate while retaining the pose", async t => {
+  const {app, server, el} = setup(t); const missing = addTextOnlyReference(server); await app.init(); app.selectReference("TongueOut"); app.setLanguage("zh-CN");
+  assert.equal(el("reference-select").value, "TongueOut"); assert.equal(el("reference-instruction").textContent, missing.instruction.zh);
+  assert.equal(el("reference-message").textContent, missing.unavailable_reason.zh); assert.match(el("reference-select").children[3].textContent, /仅文字/);
+  app.selectReference("JawForward"); assert.equal(el("reference-views").hidden, false); assert.match(el("reference-image").src, /JawForward.webp$/);
+});
+test("actual recording can follow a text-only step without skipping, approving or starting another action", async t => {
+  const {app, server, el} = setup(t); const missing = addTextOnlyReference(server); await app.init();
+  server.status.recording = {state: "recording", guide: {step: {id: "TongueOut", kind: "pose"}, phase: "prepare"}}; await app.pollStatus();
+  assert.equal(el("reference-mode").textContent, messages.en.referenceFollowing); assert.equal(el("reference-message").textContent, missing.unavailable_reason.en);
+  assert.equal(el("reference-views").hidden, true); assert.equal(el("reference-select").disabled, true);
+  assert.ok(server.calls.every(call => call.method === "GET")); assert.equal(server.status.recording.guide.step.id, "TongueOut");
+});
+test("reference follows guide.current consistently with the main recording prompt", async t => {
+  const {app, server, el} = setup(t); await app.init();
+  server.status.recording = {state: "recording", guide: {current: {id: "JawForward"}, step: {id: "LipFunnelUpper"}, phase: "hold"}};
+  await app.pollStatus(); assert.match(el("reference-image").src, /JawForward.webp$/);
+});
+
+test("discovery selects a unique verified source as a draft without starting or saving", async t => {
+  const {app, server, el} = setup(t);
+  server.config.headset_host = "";
+  server.discovered = [{host: "198.51.100.8", port: 45681, name: "PICO Mouth", session_id: "44"}];
   await app.init();
-  el("personalization").open = true;
-  el("record-consent").checked = true;
-  app.setLanguage("zh-CN");
-  assert.equal(speech.calls.length, 0);
-  assert.ok(server.calls.every(c => c.method === "GET"));
-  assert.equal(el("personalization").open, true);
-  assert.equal(el("record-consent").checked, true);
-  assert.equal(el("calibrate").disabled, true);
-  assert.equal(el("personal-title").textContent, messages["zh-CN"].personalTitle);
+  assert.equal(el("headset_host").value, "198.51.100.8");
+  assert.equal(el("headset-select").value, "198.51.100.8:45681");
+  assert.equal(app.state.dirty, true); assert.equal(server.config.headset_host, "");
+  assert.ok(server.calls.every(call => call.method === "GET"));
 });
-test("calibration requires saved fresh live video and does not save settings or start input", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); await app.start();
-  const count = server.calls.length;
-  await app.personalize("calibrate");
-  assert.deepEqual(JSON.parse(server.calls[count].body), {action: "calibrate"});
-  assert.equal(server.calls[count].path, "/api/personalization");
-  assert.equal(el("guide").hidden, false);
-  assert.equal(el("calibrate").disabled, true);
-  assert.equal(el("personal-cancel").disabled, false);
-  await app.personalize("cancel");
-  assert.equal(el("guide").hidden, true);
-  el("settings").emit("input");
-  assert.equal(el("calibrate").disabled, true);
-  await app.save();
-  server.status.source_mode = "replay"; await app.pollStatus();
-  assert.equal(el("calibrate").disabled, true);
+test("multiple discoveries require explicit selection, preserving device ports", async t => {
+  const {app, server, el} = setup(t); server.config.headset_host = "";
+  server.discovered = [{host: "198.51.100.8", port: 45681, name: "PICO Mouth"}, {host: "198.51.100.9", port: 45690, name: "PICO Mouth"}];
+  await app.init(); assert.equal(el("headset_host").value, "");
+  el("headset-select").value = "198.51.100.9:45690"; el("headset-select").emit("change");
+  assert.equal(el("headset_host").value, "198.51.100.9"); assert.equal(el("headset_port").value, "45690");
+  assert.ok(server.calls.every(call => call.method === "GET"));
+  el("headset-select").value = ""; el("headset-select").emit("change");
+  assert.equal(el("headset_host").value, "");
 });
-test("retraining requires a separate consent checkbox and clears it after starting", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); await app.start();
-  await app.personalize("retrain");
-  assert.ok(!server.calls.some(c => c.path === "/api/personalization"));
-  el("record-consent").checked = true; el("record-consent").emit("change");
-  await app.personalize("retrain");
-  assert.deepEqual(JSON.parse(server.calls.find(c => c.path === "/api/personalization").body), {action: "retrain", confirmed: true});
-  assert.equal(el("record-consent").checked, false);
-  assert.equal(server.config.output_enabled, false);
+test("refresh does not replace manual or unsaved connection settings", async t => {
+  const {app, server, el} = setup(t); await app.init();
+  el("headset_host").value = "manual.local"; el("page-preferences").emit("input");
+  server.discovered = [{host: "198.51.100.8", port: 45681, name: "PICO Mouth"}];
+  await app.discover(); assert.equal(el("headset_host").value, "manual.local");
+  app.setLanguage("zh-CN"); assert.equal(el("headset_host").value, "manual.local");
 });
-test("speech announces each step once, can be disabled and switches languages without posting", async t => {
-  const speech = {calls: [], cancelled: 0, cancel() { this.cancelled++; }, speak(u) { this.calls.push(u); }};
-  const {app, el, server} = setup(t, {speech, Utterance: class { constructor(text) { this.text = text; } }});
-  await app.init(); await app.start(); await app.personalize("calibrate");
-  assert.equal(speech.calls.length, 1);
-  assert.equal(speech.calls[0].text, messages.en.step_fit);
-  await app.pollStatus(); assert.equal(speech.calls.length, 1);
-  server.status.personalization.wizard.step = "closed"; await app.pollStatus();
-  assert.equal(speech.calls[1].text, messages.en.step_closed);
-  const count = server.calls.length;
-  app.setLanguage("zh-CN");
-  assert.equal(server.calls.length, count);
-  assert.equal(speech.calls[2].lang, "zh-CN");
-  el("voice-enabled").checked = false; el("voice-enabled").emit("change");
-  server.status.personalization.wizard.step = "open"; await app.pollStatus();
-  assert.equal(speech.calls.length, 3);
-  assert.equal(el("voice-info").textContent, messages["zh-CN"].voiceOff);
+test("model picker returns a real local path as an unsaved choice without loading or starting", async t => {
+  const {app, server, el} = setup(t); await app.init();
+  server.selectedModel = {cancelled: false, path: "D:/my models/个人模型.onnx"};
+  await app.chooseModel();
+  assert.equal(el("model_path").value, server.selectedModel.path); assert.equal(el("model-name").textContent, "个人模型.onnx");
+  assert.equal(app.state.dirty, true); assert.equal(server.config.model_path, "D:/models/student.onnx");
+  assert.deepEqual(server.calls.filter(call => call.method === "POST").map(call => call.path), ["/api/model/select"]);
+  app.setLanguage("en"); assert.equal(el("model_path").value, server.selectedModel.path);
 });
-test("personal status, metrics, calibration and errors translate; stale snapshots hide the guide", async t => {
-  const {app, server, el, advance} = setup(t);
-  await app.init(); await app.start();
-  server.status.personalization = {state: "rejected", profile: {head: "test-personal.pt",
-    calibration: {left: 1.11, center: .66, right: .33, min_area: 120}},
-    metrics: {before: {score: .5, fp: .01}, after: {score: .51, fp: .02}}, error: "Camera session changed during calibration"};
-  await app.pollStatus();
-  for (const lang of ["zh-CN", "en"]) {
-    app.setLanguage(lang);
-    assert.equal(el("personal-state").textContent, messages[lang].personal_rejected);
-    assert.ok(el("profile-info").textContent.includes(messages[lang].personalProfile));
-    assert.ok(el("personal-error").textContent.includes(messages[lang].cameraChanged));
-    assert.match(el("training-metrics").textContent, /0.500 \/ 0.010 → 0.510 \/ 0.020/);
+test("cancelling the model picker keeps the current model and settings unchanged", async t => {
+  const {app, server, el} = setup(t); await app.init(); await app.chooseModel();
+  assert.equal(el("model_path").value, server.config.model_path); assert.equal(app.state.dirty, false);
+});
+test("file dialog cannot open twice and late completion cannot update a destroyed page", async t => {
+  const {app, server, el} = setup(t); await app.init(); let resolve;
+  server.before = path => path === "/api/model/select" ? new Promise(done => { resolve = done; }) : null;
+  const pending = app.chooseModel(); await app.chooseModel();
+  assert.equal(server.calls.filter(call => call.path === "/api/model/select").length, 1);
+  app.destroy(); resolve(Response.json({path: "D:/late.onnx", cancelled: false})); await pending;
+  assert.equal(el("model_path").value, server.config.model_path);
+});
+test("navigation displays exactly one task page and never starts or saves anything", async t => {
+  const {app, el, server} = setup(t); await app.init(); const count = server.calls.length;
+  for (const [page, nav] of [["recording", "recording"], ["training", "training"], ["preferences", "advanced"], ["tracking", "workspace"]]) {
+    el(`nav-${nav}`).emit("click");
+    assert.deepEqual(PAGES.filter(id => !el(`page-${id}`).hidden), [page]);
+    assert.equal(el("connection-setup").hidden, !["tracking", "recording"].includes(page));
+    assert.equal(el("model-setup").hidden, page !== "tracking");
+    assert.equal(el(`nav-${nav}`).attributes["aria-current"], "page");
   }
-  advance(1600); app.setLanguage("en");
-  assert.equal(el("personal-state").textContent, messages.en.personalOffline);
-  assert.equal(el("guide").hidden, true);
+  assert.equal(server.calls.length, count); assert.equal(el("record-consent").checked, false);
 });
-test("hysteresis saves as a boolean without changing live input or losing edits on translation", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); await app.start();
-  assert.equal(el("size_hysteresis").checked, true);
-  el("size_hysteresis").checked = false; el("settings").emit("change");
-  app.setLanguage("zh-CN");
-  assert.equal(el("size_hysteresis").checked, false);
-  await app.save();
-  assert.equal(server.config.size_hysteresis, false);
-  assert.equal(server.status.running, true);
+test("HTML contains unique IDs and external advanced fields belong to the settings form", () => {
+  const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const field of ["headset_host", "headset_port", "model_path", "device", "stale_ms", "preview_fps", "output_enabled", "output_port", "replay_path"])
+    assert.match(html, new RegExp(`id="${field}" form="settings"`));
 });
-test("restore changes the preview output epoch and late preview cannot reappear", async t => {
-  const {app, server, el} = setup(t);
-  await app.init(); await app.start();
-  let resolve;
-  server.before = path => path.startsWith("/api/preview.jpg") ? new Promise(done => { resolve = done; }) : null;
-  const pending = app.refreshPreview();
-  server.status.output_session_id = "new-profile-epoch";
-  await app.personalize("restore");
-  resolve(new Response(new Uint8Array([1]))); await pending;
-  assert.equal(el("preview").hidden, true);
-  assert.equal(server.status.personalization.state, "restored");
-  assert.equal(server.calls.filter(c => c.path === "/api/start").length, 1);
+test("direct links and browser history switch pages without recreating the app", async t => {
+  const events = new Map(), navigation = {location: {hash: "#/recording"},
+    addEventListener: (name, fn) => events.set(name, fn), removeEventListener: name => events.delete(name)};
+  const {app, el, server} = setup(t, {navigation}); await app.init();
+  assert.equal(app.state.page, "recording"); assert.equal(el("page-tracking").hidden, true);
+  app.selectReference("JawForward"); el("record-consent").checked = true; el("model_path").value = "D:/draft.onnx"; el("settings").emit("input");
+  el("nav-advanced").emit("click"); assert.equal(navigation.location.hash, "#/preferences");
+  navigation.location.hash = "#/recording"; events.get("hashchange")();
+  assert.equal(app.state.page, "recording"); assert.equal(app.state.referenceSelected, "JawForward");
+  assert.equal(el("model_path").value, "D:/draft.onnx"); assert.equal(el("record-consent").checked, true);
+  assert.ok(server.calls.every(call => call.method === "GET"));
+  app.destroy(); assert.equal(events.size, 0);
+});
+test("invalid and empty routes use tracking, while all four task routes are supported", () => {
+  for (const page of PAGES) assert.equal(routePage(`#/${page}`), page);
+  assert.equal(routePage("#unexpected"), "tracking"); assert.equal(routePage(), "tracking");
+});
+test("page switching keeps active tracking alive but does not fetch hidden previews", async t => {
+  const {app, server} = setup(t); await app.init(); await app.start(); const count = server.calls.length;
+  app.navigate("training"); await app.refreshPreview();
+  assert.equal(server.status.running, true); assert.equal(server.calls.length, count);
+  app.navigate("preferences"); app.navigate("recording"); await app.refreshPreview();
+  assert.equal(server.status.running, true); assert.equal(server.calls.filter(c => c.path === "/api/start").length, 1);
+});
+test("recording and training expose only the relevant primary actions", async t => {
+  const {app, el} = setup(t); await app.init(); app.navigate("recording");
+  assert.equal(el("capture").hidden, false); assert.equal(el("capture-stop").hidden, true);
+  assert.equal(el("record-stop").hidden, true); assert.equal(el("record-cancel").hidden, true);
+  assert.equal(el("record-options").open, false); assert.equal(el("reference-picker").open, false);
+  app.navigate("training"); assert.equal(el("training-tools").open, false); assert.equal(el("training-status").hidden, true);
+});
+test("plain errors are shown in context while raw request details stay in diagnostics", async t => {
+  const {app, el, server} = setup(t); await app.init(); server.failStart = true; await app.start();
+  assert.equal(el("error").textContent, messages.en.modelMissing);
+  assert.doesNotMatch(el("error").textContent, /POST|HTTP|fixture/);
+  assert.match(el("technical-error").textContent, /POST \/api\/start.*fixture/);
 });

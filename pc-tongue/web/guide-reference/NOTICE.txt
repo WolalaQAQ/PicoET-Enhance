@@ -1,0 +1,13 @@
+Expression guidance images
+
+Copyright (c) Meta Platforms, Inc. and affiliates.
+Character: Unity-Movement v71.0.0 / BodyTrackingSamples/HighFidelity.
+Source: https://github.com/oculus-samples/Unity-Movement/tree/v71.0.0/Samples~/BodyTrackingSamples/HighFidelity
+License: https://developers.meta.com/horizon/licenses/oculussdk/
+
+Rendered from the original mesh, morphs and color/normal maps with the original corrective-shape rules.
+The Blender material translation and lighting differ from the Unity scene. Front views are mirrored; side views are not.
+Tongue poses add skin binding and continuous post-skinning controls to the original tongue mesh.
+Independent lip shifts use the original mouth-shift deltas, masked onto the corresponding outer lip.
+These added guide controls are not original Meta tongue or independent-lip morphs. Source vertices and existing morph coordinates are unchanged.
+The pack contains only rendered images and notices, not FBX models, Blender scenes, SDK code or training labels.

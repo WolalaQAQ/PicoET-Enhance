@@ -1,0 +1,1228 @@
+{
+  "version": 1,
+  "orientation": "mirrored-wearer-left-is-image-left",
+  "neutral": "neutral.webp",
+  "model": {
+    "name": "Meta-Man · Unity-Movement HighFidelity v71.0.0",
+    "copyright": "Copyright (c) Meta Platforms, Inc. and affiliates.",
+    "source_url": "https://github.com/oculus-samples/Unity-Movement/tree/v71.0.0/Samples~/BodyTrackingSamples/HighFidelity",
+    "license": "Oculus SDK License Agreement",
+    "license_url": "https://developers.meta.com/horizon/licenses/oculussdk/"
+  },
+  "scope": "Visual guidance only. Original morphs/correctives plus explicitly attributed added tongue and independent-lip controls on the original mesh. Operation steps are text-only. No training labels.",
+  "poses": [
+    {
+      "id": "neutral",
+      "title": {
+        "zh": "自然放松嘴部，舌头收回",
+        "en": "Relax your mouth naturally with your tongue retracted"
+      },
+      "instruction": {
+        "zh": "自然放松嘴部，舌头收回",
+        "en": "Relax your mouth naturally with your tongue retracted"
+      },
+      "front": "neutral.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ]
+    },
+    {
+      "id": "CheekPuff",
+      "title": {
+        "zh": "双侧轻轻鼓腮",
+        "en": "Gently puff both cheeks"
+      },
+      "instruction": {
+        "zh": "双侧轻轻鼓腮",
+        "en": "Gently puff both cheeks"
+      },
+      "front": "CheekPuff.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "CheekPuff-motion.webp"
+    },
+    {
+      "id": "CheekSquintL",
+      "title": {
+        "zh": "抬起左侧面颊，轻轻眯左眼",
+        "en": "Raise your left cheek with a gentle left squint"
+      },
+      "instruction": {
+        "zh": "抬起左侧面颊，轻轻眯左眼",
+        "en": "Raise your left cheek with a gentle left squint"
+      },
+      "front": "CheekSquintL.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "CheekSquintL-motion.webp"
+    },
+    {
+      "id": "CheekSquintR",
+      "title": {
+        "zh": "抬起右侧面颊，轻轻眯右眼",
+        "en": "Raise your right cheek with a gentle right squint"
+      },
+      "instruction": {
+        "zh": "抬起右侧面颊，轻轻眯右眼",
+        "en": "Raise your right cheek with a gentle right squint"
+      },
+      "front": "CheekSquintR.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "CheekSquintR-motion.webp"
+    },
+    {
+      "id": "JawForward",
+      "title": {
+        "zh": "下颌轻轻前伸，不用力咬牙",
+        "en": "Gently move your jaw forward without clenching"
+      },
+      "instruction": {
+        "zh": "下颌轻轻前伸，不用力咬牙",
+        "en": "Gently move your jaw forward without clenching"
+      },
+      "front": "JawForward.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "profile": "JawForward-profile.webp",
+      "animation": "JawForward-motion.webp"
+    },
+    {
+      "id": "JawLeft",
+      "title": {
+        "zh": "下颌向自身左侧移动",
+        "en": "Move your jaw to your own left"
+      },
+      "instruction": {
+        "zh": "下颌向自身左侧移动",
+        "en": "Move your jaw to your own left"
+      },
+      "front": "JawLeft.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "JawLeft-motion.webp"
+    },
+    {
+      "id": "JawOpen",
+      "title": {
+        "zh": "自然张开下颌，不伸舌",
+        "en": "Open your jaw naturally without extending your tongue"
+      },
+      "instruction": {
+        "zh": "自然张开下颌，不伸舌",
+        "en": "Open your jaw naturally without extending your tongue"
+      },
+      "front": "JawOpen.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "JawOpen-motion.webp"
+    },
+    {
+      "id": "JawRight",
+      "title": {
+        "zh": "下颌向自身右侧移动",
+        "en": "Move your jaw to your own right"
+      },
+      "instruction": {
+        "zh": "下颌向自身右侧移动",
+        "en": "Move your jaw to your own right"
+      },
+      "front": "JawRight.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "JawRight-motion.webp"
+    },
+    {
+      "id": "MouthClose",
+      "title": {
+        "zh": "下颌稍张开但双唇保持闭合",
+        "en": "Lower your jaw slightly while keeping your lips together"
+      },
+      "instruction": {
+        "zh": "下颌稍张开但双唇保持闭合",
+        "en": "Lower your jaw slightly while keeping your lips together"
+      },
+      "front": "MouthClose.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthClose-motion.webp"
+    },
+    {
+      "id": "MouthDimpleL",
+      "title": {
+        "zh": "左嘴角向内收紧，做左侧酒窝",
+        "en": "Draw your left mouth corner inward to make a dimple"
+      },
+      "instruction": {
+        "zh": "左嘴角向内收紧，做左侧酒窝",
+        "en": "Draw your left mouth corner inward to make a dimple"
+      },
+      "front": "MouthDimpleL.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthDimpleL-motion.webp"
+    },
+    {
+      "id": "MouthDimpleR",
+      "title": {
+        "zh": "右嘴角向内收紧，做右侧酒窝",
+        "en": "Draw your right mouth corner inward to make a dimple"
+      },
+      "instruction": {
+        "zh": "右嘴角向内收紧，做右侧酒窝",
+        "en": "Draw your right mouth corner inward to make a dimple"
+      },
+      "front": "MouthDimpleR.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthDimpleR-motion.webp"
+    },
+    {
+      "id": "MouthFrownL",
+      "title": {
+        "zh": "左嘴角向下压",
+        "en": "Lower your left mouth corner"
+      },
+      "instruction": {
+        "zh": "左嘴角向下压",
+        "en": "Lower your left mouth corner"
+      },
+      "front": "MouthFrownL.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthFrownL-motion.webp"
+    },
+    {
+      "id": "MouthFrownR",
+      "title": {
+        "zh": "右嘴角向下压",
+        "en": "Lower your right mouth corner"
+      },
+      "instruction": {
+        "zh": "右嘴角向下压",
+        "en": "Lower your right mouth corner"
+      },
+      "front": "MouthFrownR.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthFrownR-motion.webp"
+    },
+    {
+      "id": "MouthFunnel",
+      "title": {
+        "zh": "双唇松开，做圆形漏斗口型",
+        "en": "Part your lips into a rounded funnel shape"
+      },
+      "instruction": {
+        "zh": "双唇松开，做圆形漏斗口型",
+        "en": "Part your lips into a rounded funnel shape"
+      },
+      "front": "MouthFunnel.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "profile": "MouthFunnel-profile.webp",
+      "animation": "MouthFunnel-motion.webp"
+    },
+    {
+      "id": "MouthLeft",
+      "title": {
+        "zh": "整张嘴向自身左侧移",
+        "en": "Move your whole mouth to your own left"
+      },
+      "instruction": {
+        "zh": "整张嘴向自身左侧移",
+        "en": "Move your whole mouth to your own left"
+      },
+      "front": "MouthLeft.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthLeft-motion.webp"
+    },
+    {
+      "id": "MouthLowerDownL",
+      "title": {
+        "zh": "左半下唇向下拉，露出下齿",
+        "en": "Lower the left half of your lower lip to show lower teeth"
+      },
+      "instruction": {
+        "zh": "左半下唇向下拉，露出下齿",
+        "en": "Lower the left half of your lower lip to show lower teeth"
+      },
+      "front": "MouthLowerDownL.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthLowerDownL-motion.webp"
+    },
+    {
+      "id": "MouthLowerDownR",
+      "title": {
+        "zh": "右半下唇向下拉，露出下齿",
+        "en": "Lower the right half of your lower lip to show lower teeth"
+      },
+      "instruction": {
+        "zh": "右半下唇向下拉，露出下齿",
+        "en": "Lower the right half of your lower lip to show lower teeth"
+      },
+      "front": "MouthLowerDownR.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthLowerDownR-motion.webp"
+    },
+    {
+      "id": "MouthPressL",
+      "title": {
+        "zh": "轻压左侧上下唇",
+        "en": "Gently press the left sides of your lips together"
+      },
+      "instruction": {
+        "zh": "轻压左侧上下唇",
+        "en": "Gently press the left sides of your lips together"
+      },
+      "front": "MouthPressL.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthPressL-motion.webp"
+    },
+    {
+      "id": "MouthPressR",
+      "title": {
+        "zh": "轻压右侧上下唇",
+        "en": "Gently press the right sides of your lips together"
+      },
+      "instruction": {
+        "zh": "轻压右侧上下唇",
+        "en": "Gently press the right sides of your lips together"
+      },
+      "front": "MouthPressR.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthPressR-motion.webp"
+    },
+    {
+      "id": "MouthPucker",
+      "title": {
+        "zh": "双唇向前噘起，做亲吻口型",
+        "en": "Pucker both lips forward as for a kiss"
+      },
+      "instruction": {
+        "zh": "双唇向前噘起，做亲吻口型",
+        "en": "Pucker both lips forward as for a kiss"
+      },
+      "front": "MouthPucker.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "profile": "MouthPucker-profile.webp",
+      "animation": "MouthPucker-motion.webp"
+    },
+    {
+      "id": "MouthRight",
+      "title": {
+        "zh": "整张嘴向自身右侧移",
+        "en": "Move your whole mouth to your own right"
+      },
+      "instruction": {
+        "zh": "整张嘴向自身右侧移",
+        "en": "Move your whole mouth to your own right"
+      },
+      "front": "MouthRight.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthRight-motion.webp"
+    },
+    {
+      "id": "MouthRollLower",
+      "title": {
+        "zh": "只把下唇向口内卷",
+        "en": "Roll only your lower lip inward"
+      },
+      "instruction": {
+        "zh": "只把下唇向口内卷",
+        "en": "Roll only your lower lip inward"
+      },
+      "front": "MouthRollLower.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "profile": "MouthRollLower-profile.webp",
+      "animation": "MouthRollLower-motion.webp"
+    },
+    {
+      "id": "MouthRollUpper",
+      "title": {
+        "zh": "只把上唇向口内卷",
+        "en": "Roll only your upper lip inward"
+      },
+      "instruction": {
+        "zh": "只把上唇向口内卷",
+        "en": "Roll only your upper lip inward"
+      },
+      "front": "MouthRollUpper.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "profile": "MouthRollUpper-profile.webp",
+      "animation": "MouthRollUpper-motion.webp"
+    },
+    {
+      "id": "MouthShrugLower",
+      "title": {
+        "zh": "下唇向上推，轻轻覆盖上唇",
+        "en": "Push your lower lip upward toward and slightly over the upper lip"
+      },
+      "instruction": {
+        "zh": "下唇向上推，轻轻覆盖上唇",
+        "en": "Push your lower lip upward toward and slightly over the upper lip"
+      },
+      "front": "MouthShrugLower.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthShrugLower-motion.webp"
+    },
+    {
+      "id": "MouthShrugUpper",
+      "title": {
+        "zh": "只把上唇向上耸起，不内卷",
+        "en": "Raise your upper lip without rolling it inward"
+      },
+      "instruction": {
+        "zh": "只把上唇向上耸起，不内卷",
+        "en": "Raise your upper lip without rolling it inward"
+      },
+      "front": "MouthShrugUpper.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthShrugUpper-motion.webp"
+    },
+    {
+      "id": "MouthSmileL",
+      "title": {
+        "zh": "仅左嘴角轻轻微笑",
+        "en": "Smile gently with only your left mouth corner"
+      },
+      "instruction": {
+        "zh": "仅左嘴角轻轻微笑",
+        "en": "Smile gently with only your left mouth corner"
+      },
+      "front": "MouthSmileL.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthSmileL-motion.webp"
+    },
+    {
+      "id": "MouthSmileR",
+      "title": {
+        "zh": "仅右嘴角轻轻微笑",
+        "en": "Smile gently with only your right mouth corner"
+      },
+      "instruction": {
+        "zh": "仅右嘴角轻轻微笑",
+        "en": "Smile gently with only your right mouth corner"
+      },
+      "front": "MouthSmileR.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthSmileR-motion.webp"
+    },
+    {
+      "id": "MouthStretchL",
+      "title": {
+        "zh": "左嘴角水平向外拉，不向上笑",
+        "en": "Stretch your left mouth corner outward without raising it"
+      },
+      "instruction": {
+        "zh": "左嘴角水平向外拉，不向上笑",
+        "en": "Stretch your left mouth corner outward without raising it"
+      },
+      "front": "MouthStretchL.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthStretchL-motion.webp"
+    },
+    {
+      "id": "MouthStretchR",
+      "title": {
+        "zh": "右嘴角水平向外拉，不向上笑",
+        "en": "Stretch your right mouth corner outward without raising it"
+      },
+      "instruction": {
+        "zh": "右嘴角水平向外拉，不向上笑",
+        "en": "Stretch your right mouth corner outward without raising it"
+      },
+      "front": "MouthStretchR.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthStretchR-motion.webp"
+    },
+    {
+      "id": "MouthUpperUpL",
+      "title": {
+        "zh": "只抬起左半上唇，露出上齿",
+        "en": "Raise only the left half of your upper lip to show upper teeth"
+      },
+      "instruction": {
+        "zh": "只抬起左半上唇，露出上齿",
+        "en": "Raise only the left half of your upper lip to show upper teeth"
+      },
+      "front": "MouthUpperUpL.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthUpperUpL-motion.webp"
+    },
+    {
+      "id": "MouthUpperUpR",
+      "title": {
+        "zh": "只抬起右半上唇，露出上齿",
+        "en": "Raise only the right half of your upper lip to show upper teeth"
+      },
+      "instruction": {
+        "zh": "只抬起右半上唇，露出上齿",
+        "en": "Raise only the right half of your upper lip to show upper teeth"
+      },
+      "front": "MouthUpperUpR.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthUpperUpR-motion.webp"
+    },
+    {
+      "id": "NoseSneerL",
+      "title": {
+        "zh": "轻皱左鼻翼",
+        "en": "Gently wrinkle the left side of your nose"
+      },
+      "instruction": {
+        "zh": "轻皱左鼻翼",
+        "en": "Gently wrinkle the left side of your nose"
+      },
+      "front": "NoseSneerL.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "NoseSneerL-motion.webp"
+    },
+    {
+      "id": "NoseSneerR",
+      "title": {
+        "zh": "轻皱右鼻翼",
+        "en": "Gently wrinkle the right side of your nose"
+      },
+      "instruction": {
+        "zh": "轻皱右鼻翼",
+        "en": "Gently wrinkle the right side of your nose"
+      },
+      "front": "NoseSneerR.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "NoseSneerR-motion.webp"
+    },
+    {
+      "id": "TongueOut",
+      "title": {
+        "zh": "舌头直向前伸到舒适长度",
+        "en": "Extend your tongue straight forward to a comfortable length"
+      },
+      "instruction": {
+        "zh": "舌头直向前伸到舒适长度",
+        "en": "Extend your tongue straight forward to a comfortable length"
+      },
+      "front": "TongueOut.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "TongueOut-profile.webp",
+      "animation": "TongueOut-motion.webp"
+    },
+    {
+      "id": "TongueLeft",
+      "title": {
+        "zh": "舌头向自身左侧伸出",
+        "en": "Extend your tongue to your own left"
+      },
+      "instruction": {
+        "zh": "舌头向自身左侧伸出",
+        "en": "Extend your tongue to your own left"
+      },
+      "front": "TongueLeft.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "TongueLeft-profile.webp",
+      "animation": "TongueLeft-motion.webp"
+    },
+    {
+      "id": "TongueRight",
+      "title": {
+        "zh": "舌头向自身右侧伸出",
+        "en": "Extend your tongue to your own right"
+      },
+      "instruction": {
+        "zh": "舌头向自身右侧伸出",
+        "en": "Extend your tongue to your own right"
+      },
+      "front": "TongueRight.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "TongueRight-profile.webp",
+      "animation": "TongueRight-motion.webp"
+    },
+    {
+      "id": "TongueUp",
+      "title": {
+        "zh": "舌体朝上伸，不只是弯起舌尖",
+        "en": "Extend your tongue upward, not just curl the tip"
+      },
+      "instruction": {
+        "zh": "舌体朝上伸，不只是弯起舌尖",
+        "en": "Extend your tongue upward, not just curl the tip"
+      },
+      "front": "TongueUp.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "TongueUp-profile.webp",
+      "animation": "TongueUp-motion.webp"
+    },
+    {
+      "id": "TongueDown",
+      "title": {
+        "zh": "舌体朝下伸",
+        "en": "Extend your tongue downward"
+      },
+      "instruction": {
+        "zh": "舌体朝下伸",
+        "en": "Extend your tongue downward"
+      },
+      "front": "TongueDown.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "TongueDown-profile.webp",
+      "animation": "TongueDown-motion.webp"
+    },
+    {
+      "id": "CheekPuffLeft",
+      "title": {
+        "zh": "只鼓左腮，右侧尽量放松",
+        "en": "Puff only your left cheek and relax the right"
+      },
+      "instruction": {
+        "zh": "只鼓左腮，右侧尽量放松",
+        "en": "Puff only your left cheek and relax the right"
+      },
+      "front": "CheekPuffLeft.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "CheekPuffLeft-motion.webp"
+    },
+    {
+      "id": "CheekPuffRight",
+      "title": {
+        "zh": "只鼓右腮，左侧尽量放松",
+        "en": "Puff only your right cheek and relax the left"
+      },
+      "instruction": {
+        "zh": "只鼓右腮，左侧尽量放松",
+        "en": "Puff only your right cheek and relax the left"
+      },
+      "front": "CheekPuffRight.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "CheekPuffRight-motion.webp"
+    },
+    {
+      "id": "CheekSuckLeft",
+      "title": {
+        "zh": "只轻吸左腮，不内卷嘴唇",
+        "en": "Gently suck in only your left cheek without rolling your lips"
+      },
+      "instruction": {
+        "zh": "只轻吸左腮，不内卷嘴唇",
+        "en": "Gently suck in only your left cheek without rolling your lips"
+      },
+      "front": "CheekSuckLeft.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "CheekSuckLeft-motion.webp"
+    },
+    {
+      "id": "CheekSuckRight",
+      "title": {
+        "zh": "只轻吸右腮，不内卷嘴唇",
+        "en": "Gently suck in only your right cheek without rolling your lips"
+      },
+      "instruction": {
+        "zh": "只轻吸右腮，不内卷嘴唇",
+        "en": "Gently suck in only your right cheek without rolling your lips"
+      },
+      "front": "CheekSuckRight.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "CheekSuckRight-motion.webp"
+    },
+    {
+      "id": "MouthTightenerLeft",
+      "title": {
+        "zh": "左嘴角水平收紧，区别于压唇或微笑",
+        "en": "Tighten your left mouth corner horizontally, distinct from pressing or smiling"
+      },
+      "instruction": {
+        "zh": "左嘴角水平收紧，区别于压唇或微笑",
+        "en": "Tighten your left mouth corner horizontally, distinct from pressing or smiling"
+      },
+      "front": "MouthTightenerLeft.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthTightenerLeft-motion.webp"
+    },
+    {
+      "id": "MouthTightenerRight",
+      "title": {
+        "zh": "右嘴角水平收紧，区别于压唇或微笑",
+        "en": "Tighten your right mouth corner horizontally, distinct from pressing or smiling"
+      },
+      "instruction": {
+        "zh": "右嘴角水平收紧，区别于压唇或微笑",
+        "en": "Tighten your right mouth corner horizontally, distinct from pressing or smiling"
+      },
+      "front": "MouthTightenerRight.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "MouthTightenerRight-motion.webp"
+    },
+    {
+      "id": "TongueRoll",
+      "title": {
+        "zh": "舌头两侧向上卷成筒形，不只是舌尖上弯；做不到就跳过",
+        "en": "Roll the sides of your tongue into a tube, not just curl the tip; skip if unable"
+      },
+      "instruction": {
+        "zh": "舌头两侧向上卷成筒形，不只是舌尖上弯；做不到就跳过",
+        "en": "Roll the sides of your tongue into a tube, not just curl the tip; skip if unable"
+      },
+      "front": "TongueRoll.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "TongueRoll-profile.webp",
+      "animation": "TongueRoll-motion.webp"
+    },
+    {
+      "id": "MouthUpperLeft",
+      "title": {
+        "zh": "只让上唇向自身左侧横移，下唇放松",
+        "en": "Move only your upper lip to your own left; relax the lower lip"
+      },
+      "instruction": {
+        "zh": "只让上唇向自身左侧横移，下唇放松",
+        "en": "Move only your upper lip to your own left; relax the lower lip"
+      },
+      "front": "MouthUpperLeft.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_mouth_shift_deltas_with_authored_independent_lip_masks"
+      ],
+      "animation": "MouthUpperLeft-motion.webp"
+    },
+    {
+      "id": "MouthUpperRight",
+      "title": {
+        "zh": "只让上唇向自身右侧横移，下唇放松",
+        "en": "Move only your upper lip to your own right; relax the lower lip"
+      },
+      "instruction": {
+        "zh": "只让上唇向自身右侧横移，下唇放松",
+        "en": "Move only your upper lip to your own right; relax the lower lip"
+      },
+      "front": "MouthUpperRight.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_mouth_shift_deltas_with_authored_independent_lip_masks"
+      ],
+      "animation": "MouthUpperRight-motion.webp"
+    },
+    {
+      "id": "MouthLowerLeft",
+      "title": {
+        "zh": "只让下唇向自身左侧横移，尽量不移动下颌",
+        "en": "Move only your lower lip to your own left without moving your jaw"
+      },
+      "instruction": {
+        "zh": "只让下唇向自身左侧横移，尽量不移动下颌",
+        "en": "Move only your lower lip to your own left without moving your jaw"
+      },
+      "front": "MouthLowerLeft.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_mouth_shift_deltas_with_authored_independent_lip_masks"
+      ],
+      "animation": "MouthLowerLeft-motion.webp"
+    },
+    {
+      "id": "MouthLowerRight",
+      "title": {
+        "zh": "只让下唇向自身右侧横移，尽量不移动下颌",
+        "en": "Move only your lower lip to your own right without moving your jaw"
+      },
+      "instruction": {
+        "zh": "只让下唇向自身右侧横移，尽量不移动下颌",
+        "en": "Move only your lower lip to your own right without moving your jaw"
+      },
+      "front": "MouthLowerRight.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_mouth_shift_deltas_with_authored_independent_lip_masks"
+      ],
+      "animation": "MouthLowerRight-motion.webp"
+    },
+    {
+      "id": "LipFunnelUpper",
+      "title": {
+        "zh": "只把上唇外翻成漏斗，下唇放松；不是内卷或上提",
+        "en": "Turn only your upper lip outward into a funnel; relax the lower lip; do not roll inward or raise it"
+      },
+      "instruction": {
+        "zh": "只把上唇外翻成漏斗，下唇放松；不是内卷或上提",
+        "en": "Turn only your upper lip outward into a funnel; relax the lower lip; do not roll inward or raise it"
+      },
+      "front": "LipFunnelUpper.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "profile": "LipFunnelUpper-profile.webp",
+      "animation": "LipFunnelUpper-motion.webp"
+    },
+    {
+      "id": "LipFunnelLower",
+      "title": {
+        "zh": "只把下唇外翻成漏斗，上唇放松；不是内卷或上推",
+        "en": "Turn only your lower lip outward into a funnel; relax the upper lip; do not roll inward or push up"
+      },
+      "instruction": {
+        "zh": "只把下唇外翻成漏斗，上唇放松；不是内卷或上推",
+        "en": "Turn only your lower lip outward into a funnel; relax the upper lip; do not roll inward or push up"
+      },
+      "front": "LipFunnelLower.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "profile": "LipFunnelLower-profile.webp",
+      "animation": "LipFunnelLower-motion.webp"
+    },
+    {
+      "id": "tongue_short",
+      "title": {
+        "zh": "舌尖刚超过唇缘，短伸舌",
+        "en": "Extend your tongue just past your lips"
+      },
+      "instruction": {
+        "zh": "舌尖刚超过唇缘，短伸舌",
+        "en": "Extend your tongue just past your lips"
+      },
+      "front": "tongue_short.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "tongue_short-profile.webp",
+      "animation": "tongue_short-motion.webp"
+    },
+    {
+      "id": "tongue_medium",
+      "title": {
+        "zh": "舌头向前伸到个人舒适行程的一半",
+        "en": "Extend your tongue to about half your comfortable range"
+      },
+      "instruction": {
+        "zh": "舌头向前伸到个人舒适行程的一半",
+        "en": "Extend your tongue to about half your comfortable range"
+      },
+      "front": "tongue_medium.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "tongue_medium-profile.webp",
+      "animation": "tongue_medium-motion.webp"
+    },
+    {
+      "id": "tongue_long",
+      "title": {
+        "zh": "舌头充分但舒适地向前伸",
+        "en": "Extend your tongue fully but comfortably"
+      },
+      "instruction": {
+        "zh": "舌头充分但舒适地向前伸",
+        "en": "Extend your tongue fully but comfortably"
+      },
+      "front": "tongue_long.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "tongue_long-profile.webp",
+      "animation": "tongue_long-motion.webp"
+    },
+    {
+      "id": "tongue_sweep",
+      "title": {
+        "zh": "缓慢短、中、长伸舌，再缓慢收回，重复一次",
+        "en": "Slowly extend short, medium, long, then retract; repeat once"
+      },
+      "instruction": {
+        "zh": "缓慢短、中、长伸舌，再缓慢收回，重复一次",
+        "en": "Slowly extend short, medium, long, then retract; repeat once"
+      },
+      "front": "tongue_sweep.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "tongue_sweep-profile.webp",
+      "animation": "tongue_sweep-motion.webp"
+    },
+    {
+      "id": "tongue_left_up",
+      "title": {
+        "zh": "舌头向自身左上方伸出",
+        "en": "Extend your tongue up-left"
+      },
+      "instruction": {
+        "zh": "舌头向自身左上方伸出",
+        "en": "Extend your tongue up-left"
+      },
+      "front": "tongue_left_up.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "tongue_left_up-profile.webp",
+      "animation": "tongue_left_up-motion.webp"
+    },
+    {
+      "id": "tongue_right_up",
+      "title": {
+        "zh": "舌头向自身右上方伸出",
+        "en": "Extend your tongue up-right"
+      },
+      "instruction": {
+        "zh": "舌头向自身右上方伸出",
+        "en": "Extend your tongue up-right"
+      },
+      "front": "tongue_right_up.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "tongue_right_up-profile.webp",
+      "animation": "tongue_right_up-motion.webp"
+    },
+    {
+      "id": "tongue_left_down",
+      "title": {
+        "zh": "舌头向自身左下方伸出",
+        "en": "Extend your tongue down-left"
+      },
+      "instruction": {
+        "zh": "舌头向自身左下方伸出",
+        "en": "Extend your tongue down-left"
+      },
+      "front": "tongue_left_down.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "tongue_left_down-profile.webp",
+      "animation": "tongue_left_down-motion.webp"
+    },
+    {
+      "id": "tongue_right_down",
+      "title": {
+        "zh": "舌头向自身右下方伸出",
+        "en": "Extend your tongue down-right"
+      },
+      "instruction": {
+        "zh": "舌头向自身右下方伸出",
+        "en": "Extend your tongue down-right"
+      },
+      "front": "tongue_right_down.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "tongue_right_down-profile.webp",
+      "animation": "tongue_right_down-motion.webp"
+    },
+    {
+      "id": "lips_opposed_a",
+      "title": {
+        "zh": "上唇左移、下唇右移",
+        "en": "Move upper lip left and lower lip right"
+      },
+      "instruction": {
+        "zh": "上唇左移、下唇右移",
+        "en": "Move upper lip left and lower lip right"
+      },
+      "front": "lips_opposed_a.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_mouth_shift_deltas_with_authored_independent_lip_masks"
+      ],
+      "animation": "lips_opposed_a-motion.webp"
+    },
+    {
+      "id": "lips_opposed_b",
+      "title": {
+        "zh": "上唇右移、下唇左移",
+        "en": "Move upper lip right and lower lip left"
+      },
+      "instruction": {
+        "zh": "上唇右移、下唇左移",
+        "en": "Move upper lip right and lower lip left"
+      },
+      "front": "lips_opposed_b.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_mouth_shift_deltas_with_authored_independent_lip_masks"
+      ],
+      "animation": "lips_opposed_b-motion.webp"
+    },
+    {
+      "id": "funnel_both",
+      "title": {
+        "zh": "上下唇同时外翻成漏斗",
+        "en": "Funnel upper and lower lips outward together"
+      },
+      "instruction": {
+        "zh": "上下唇同时外翻成漏斗",
+        "en": "Funnel upper and lower lips outward together"
+      },
+      "front": "funnel_both.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "profile": "funnel_both-profile.webp",
+      "animation": "funnel_both-motion.webp"
+    },
+    {
+      "id": "suck_both",
+      "title": {
+        "zh": "双侧轻吸腮，不内卷唇",
+        "en": "Gently suck both cheeks inward without rolling lips"
+      },
+      "instruction": {
+        "zh": "双侧轻吸腮，不内卷唇",
+        "en": "Gently suck both cheeks inward without rolling lips"
+      },
+      "front": "suck_both.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "suck_both-motion.webp"
+    },
+    {
+      "id": "jaw_tongue_small",
+      "title": {
+        "zh": "小幅张嘴并中等伸舌",
+        "en": "Open your jaw slightly and extend your tongue halfway"
+      },
+      "instruction": {
+        "zh": "小幅张嘴并中等伸舌",
+        "en": "Open your jaw slightly and extend your tongue halfway"
+      },
+      "front": "jaw_tongue_small.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "jaw_tongue_small-profile.webp",
+      "animation": "jaw_tongue_small-motion.webp"
+    },
+    {
+      "id": "jaw_tongue_large",
+      "title": {
+        "zh": "大幅张嘴并保持相同中等伸舌长度",
+        "en": "Open your jaw widely with the same halfway tongue extension"
+      },
+      "instruction": {
+        "zh": "大幅张嘴并保持相同中等伸舌长度",
+        "en": "Open your jaw widely with the same halfway tongue extension"
+      },
+      "front": "jaw_tongue_large.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "jaw_tongue_large-profile.webp",
+      "animation": "jaw_tongue_large-motion.webp"
+    },
+    {
+      "id": "smile_puff",
+      "title": {
+        "zh": "微笑并轻鼓左腮",
+        "en": "Smile and gently puff your left cheek"
+      },
+      "instruction": {
+        "zh": "微笑并轻鼓左腮",
+        "en": "Smile and gently puff your left cheek"
+      },
+      "front": "smile_puff.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "smile_puff-motion.webp"
+    },
+    {
+      "id": "negative_teeth",
+      "title": {
+        "zh": "露牙微笑，不伸舌",
+        "en": "Smile showing teeth without extending your tongue"
+      },
+      "instruction": {
+        "zh": "露牙微笑，不伸舌",
+        "en": "Smile showing teeth without extending your tongue"
+      },
+      "front": "negative_teeth.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "negative_teeth-motion.webp"
+    },
+    {
+      "id": "negative_wide_open",
+      "title": {
+        "zh": "大张嘴但舌头留在口内",
+        "en": "Open your mouth widely while keeping your tongue inside"
+      },
+      "instruction": {
+        "zh": "大张嘴但舌头留在口内",
+        "en": "Open your mouth widely while keeping your tongue inside"
+      },
+      "front": "negative_wide_open.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "negative_wide_open-motion.webp"
+    },
+    {
+      "id": "negative_pucker_release",
+      "title": {
+        "zh": "噘嘴再放松，不伸舌",
+        "en": "Pucker and release without extending your tongue"
+      },
+      "instruction": {
+        "zh": "噘嘴再放松，不伸舌",
+        "en": "Pucker and release without extending your tongue"
+      },
+      "front": "negative_pucker_release.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "negative_pucker_release-motion.webp"
+    },
+    {
+      "id": "negative_speech",
+      "title": {
+        "zh": "自然说一小段话，不刻意伸舌",
+        "en": "Speak naturally without deliberately extending your tongue"
+      },
+      "instruction": {
+        "zh": "自然说一小段话，不刻意伸舌",
+        "en": "Speak naturally without deliberately extending your tongue"
+      },
+      "front": "negative_speech.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives"
+      ],
+      "animation": "negative_speech-motion.webp"
+    },
+    {
+      "id": "negative_tip_curl_not_roll",
+      "title": {
+        "zh": "只弯起舌尖，不把舌侧卷成筒",
+        "en": "Curl only the tongue tip without rolling the sides into a tube"
+      },
+      "instruction": {
+        "zh": "只弯起舌尖，不把舌侧卷成筒",
+        "en": "Curl only the tongue tip without rolling the sides into a tube"
+      },
+      "front": "negative_tip_curl_not_roll.webp",
+      "provenance": [
+        "original_model_morphs_with_original_correctives",
+        "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls"
+      ],
+      "profile": "negative_tip_curl_not_roll-profile.webp",
+      "animation": "negative_tip_curl_not_roll-motion.webp"
+    },
+    {
+      "id": "negative_occluded",
+      "title": {
+        "zh": "嘴部被遮挡或不在图内时仅记录未知，不当成无舌",
+        "en": "Record an occluded or out-of-view mouth as unknown, not as no tongue"
+      },
+      "instruction": {
+        "zh": "嘴部被遮挡或不在图内时仅记录未知，不当成无舌",
+        "en": "Record an occluded or out-of-view mouth as unknown, not as no tongue"
+      },
+      "unavailable_reason": {
+        "zh": "本阶段是遮挡或重新佩戴操作，不用人物表情图代替，请按文字操作。",
+        "en": "This step concerns occlusion or refitting, not a facial pose. Follow the written instructions."
+      }
+    },
+    {
+      "id": "remount",
+      "title": {
+        "zh": "结束本轮，取下并重新佩戴后新建录制会话，跨天再重复",
+        "en": "Stop this recording, remove and refit the headset, then begin a new session; repeat on another day"
+      },
+      "instruction": {
+        "zh": "结束本轮，取下并重新佩戴后新建录制会话，跨天再重复",
+        "en": "Stop this recording, remove and refit the headset, then begin a new session; repeat on another day"
+      },
+      "unavailable_reason": {
+        "zh": "本阶段是遮挡或重新佩戴操作，不用人物表情图代替，请按文字操作。",
+        "en": "This step concerns occlusion or refitting, not a facial pose. Follow the written instructions."
+      }
+    }
+  ]
+}

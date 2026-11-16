@@ -1,125 +1,151 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>PICO Tongue</title>
-  <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/static/styles.css">
-  <script type="module" src="/static/app.mjs"></script>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PICO Mouth</title><link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/styles.css"><script type="module" src="/static/app.mjs"></script>
 </head>
-<body>
-  <main>
-    <header>
-      <h1 id="title">PICO Tongue</h1>
-      <select id="language" aria-label="Language">
-        <option value="en">English</option>
-        <option value="zh-CN">简体中文</option>
-      </select>
-    </header>
-    <form id="settings" novalidate>
-      <label><span id="host-label">Headset address</span><input id="headset_host" required autocomplete="off" spellcheck="false"></label>
-      <label><span id="model-label">Model path</span><input id="model_path" required autocomplete="off" spellcheck="false"></label>
-      <div class="actions">
-        <button id="start" type="submit" disabled>Start</button>
-        <button id="stop" type="button" disabled>Stop</button>
-        <span id="status" role="status">Connecting to local service…</span>
-      </div>
-      <details id="advanced">
-        <summary id="advanced-title">Advanced settings</summary>
-        <div class="fields">
-          <label><span id="port-label">Video port</span><input id="headset_port" type="number" min="1" max="65535" required></label>
-          <label><span id="device-label">Inference device</span><input id="device" list="devices" required><datalist id="devices"><option value="auto"></option><option value="cuda"></option><option value="dml"></option><option value="openvino"></option><option value="cpu"></option></datalist></label>
-          <label><span id="smoothing-label">Smoothing (ms)</span><input id="smoothing_ms" type="number" min="0" step="1" required></label>
-          <label><span id="hold-label">Uncertain hold (ms)</span><input id="uncertain_hold_ms" type="number" min="0" step="1" required></label>
-          <label><span id="expiry-label">Result expiry (ms)</span><input id="stale_ms" type="number" min="1" step="1" required></label>
-          <label><span id="fps-label">Preview rate (fps)</span><input id="preview_fps" type="number" min="1" max="10" step="1" required></label>
-        </div>
-        <label class="check"><input id="size_hysteresis" type="checkbox"><span id="hysteresis-label">Tongue size hysteresis (60% hold threshold)</span></label>
-        <label class="check"><input id="output_enabled" type="checkbox"><span id="udp-label">Send results over local UDP</span></label>
-        <div class="fields">
-          <label><span id="output-host-label">Loopback address</span><input id="output_host" value="127.0.0.1" readonly></label>
-          <label><span id="output-port-label">UDP port</span><input id="output_port" type="number" min="1" max="65535" required></label>
-        </div>
-        <p class="hint" id="settings-help">Changing connection, device or output settings stops the current run.</p>
-        <div class="actions"><button id="save" type="button" disabled>Save settings</button><span id="config-state"></span></div>
-        <div class="replay">
-          <button id="replay" type="button" disabled>Replay data</button>
-          <p id="replay-info" class="hint"></p>
-        </div>
-      </details>
-    </form>
+<body><main class="app-shell">
+  <aside class="sidebar">
+    <a class="brand" href="#/tracking"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>PICO<span class="brand-sub">MOUTH STUDIO</span></span></a>
+    <span id="nav-caption" class="nav-caption">WORKSPACE</span>
+    <nav aria-label="Workspace">
+      <a id="nav-workspace" class="nav-link active" href="#/tracking" aria-current="page"><span aria-hidden="true">◫</span><span id="nav-live-label">Tracking</span></a>
+      <a id="nav-recording" class="nav-link" href="#/recording"><span aria-hidden="true">◎</span><span id="nav-record-label">Capture</span></a>
+      <a id="nav-training" class="nav-link" href="#/training"><span aria-hidden="true">⏣</span><span id="nav-train-label">Train</span></a>
+      <a id="nav-advanced" class="nav-link" href="#/preferences"><span aria-hidden="true">≡</span><span id="nav-settings-label">Settings</span></a>
+    </nav>
+    <div class="sidebar-note"><span class="local-dot"></span><span id="local-label">Runs on your PC</span><p id="privacy-note">Your images stay here.</p></div>
+  </aside>
+  <div id="workspace" class="workspace">
+    <header class="topbar"><span id="workspace-caption">EXPRESSION WORKSPACE</span><div class="topbar-right"><span class="local-badge" id="service-state">Local service</span><select id="language" aria-label="Language"><option value="en">English</option><option value="zh-CN">简体中文</option></select></div></header>
+    <div class="page-heading"><div><p id="page-eyebrow" class="eyebrow" hidden>PICO / MOUTH TRACKING</p><h1 id="title" tabindex="-1">Tracking</h1><p id="page-intro">Choose your model, then start tracking.</p></div><span id="status" class="status-pill" role="status"></span></div>
     <p id="error" role="alert" hidden></p>
-    <div class="viewer">
-      <section>
-        <label class="check"><input id="preview-enabled" type="checkbox" checked><span id="preview-label">Show preview</span></label>
-        <div class="preview">
-          <img id="preview" width="400" height="400" alt="Mouth image with tongue overlay" hidden>
-          <span id="placeholder">No video</span>
+    <form id="settings" novalidate>
+      <div id="connection-setup" class="setup-grid">
+        <section class="setup-card"><div class="card-kicker"><h2 id="headset-title">Headset</h2><span id="discovery-badge" class="small-badge"></span></div>
+          <label for="headset-select" id="headset-select-label">Your headset</label><div class="input-action"><select id="headset-select"></select><button id="discover" type="button">Find again</button></div>
+          <p id="discovery-info" class="hint" role="status"></p>
+        </section>
+        <section id="model-setup" class="setup-card"><div class="card-kicker"><h2 id="model-label">Model</h2></div>
+          <div class="model-choice"><div class="model-file"><span class="file-icon" aria-hidden="true">◇</span><div><strong id="model-name"></strong><span id="model-location"></span></div></div><button id="model-browse" type="button">Choose file</button></div>
+          <p id="model-help" class="hint"></p>
+        </section>
+      </div>
+    </form>
+
+    <section id="page-tracking" class="task-page" aria-labelledby="title">
+      <div class="run-toolbar"><div class="actions"><button id="start" form="settings" type="submit" disabled>Start tracking</button><button id="stop" type="button" disabled>Stop</button></div><span id="run-help" class="hint"></span></div>
+      <div id="camera-slot-tracking" class="camera-slot">
+        <section id="camera-panel" class="camera-panel panel"><div class="panel-heading"><div><h2 id="camera-title">Camera preview</h2><span class="eyebrow" id="camera-eyebrow" hidden>LIVE INPUT</span></div><label class="check preview-switch"><input id="preview-enabled" type="checkbox" checked><span id="preview-label">Show preview</span></label></div>
+          <div class="preview"><img id="preview" width="400" height="400" alt="Mouth camera image" hidden><div id="empty-camera"><svg class="camera-glyph" width="90" height="72" viewBox="0 0 90 72" fill="none" aria-hidden="true"><path d="M22 14H12v12m56-12h10v12M12 46v12h10m56-12v12H68" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M27 36c7-10 29-10 36 0-7 12-29 12-36 0Z" stroke="currentColor" stroke-width="2"/><path d="M29 36h32" stroke="currentColor" stroke-width="1.5"/></svg><strong id="placeholder">Waiting for input</strong><span id="camera-empty-help"></span></div></div>
+          <div class="camera-footer"><span id="camera-privacy">LOCAL ONLY</span></div>
+        </section>
+      </div>
+      <p id="first-model-help" class="task-tip"><span id="first-model-text">No model yet?</span> <a id="go-capture" href="#/recording">Record your expressions first</a></p>
+    </section>
+
+    <section id="page-recording" class="task-page" aria-labelledby="title" hidden>
+      <section id="recording">
+        <div class="capture-toolbar"><div><h2 id="recording-title">Capture your expressions</h2><p id="record-help" class="hint"></p></div><div class="actions"><button id="capture" type="button" disabled>Open camera</button><button id="capture-stop" type="button" disabled>Close camera</button></div></div>
+        <div class="capture-workspace">
+          <div id="camera-slot-recording" class="camera-slot"></div>
+          <section id="pose-reference" class="pose-reference" aria-labelledby="reference-title">
+            <div class="capture-step-progress" aria-live="polite">
+              <div class="capture-progress-line"><span id="capture-progress-label">Step</span><strong id="capture-progress-count">0 / 0</strong><span id="capture-progress-phase">Not started</span></div>
+              <progress id="capture-progress" max="1" value="0" aria-label="Capture step progress"></progress>
+            </div>
+            <label class="capture-preset-choice"><span id="capture-preset-label">Capture preset</span><select id="capture-preset"></select></label>
+            <p id="capture-preset-description" class="hint"></p>
+            <details id="capture-plan-order"><summary id="capture-plan-order-title">Actions and order</summary><ol id="capture-action-list"></ol></details>
+            <div class="reference-heading"><h2 id="reference-title">Try this expression</h2><span id="reference-mode" class="hint"></span></div>
+            <p id="reference-pose" class="reference-pose"></p><p id="reference-instruction"></p>
+            <div id="reference-views" class="reference-views" hidden>
+              <figure class="reference-neutral"><img id="reference-neutral-image" width="512" height="512" alt="Neutral reference"><figcaption id="reference-neutral-caption">Relaxed</figcaption></figure>
+              <figure class="reference-target"><img id="reference-image" width="512" height="512" alt="Expression reference"><figcaption id="reference-target-caption">Copy this pose</figcaption></figure>
+              <figure id="reference-profile" class="reference-profile" hidden><img id="reference-profile-image" width="512" height="512" alt="Side view"><figcaption id="reference-profile-caption">Side view</figcaption></figure>
+            </div>
+            <div class="reference-actions"><button id="reference-prev" type="button">Previous</button><button id="reference-play" type="button" hidden>Play movement</button><button id="reference-next" type="button">Next</button></div>
+            <details id="reference-picker"><summary id="reference-picker-title">Choose another expression</summary><label><span id="reference-select-label">Expression</span><select id="reference-select"></select></label></details>
+            <p id="reference-message" class="hint" role="status"></p><p id="reference-directions" class="hint"></p>
+            <details id="reference-details"><summary id="reference-details-title">Reference source</summary><p id="reference-origin" class="hint"></p><p id="reference-source" class="hint"></p><a id="reference-license" href="https://developers.meta.com/horizon/licenses/oculussdk/" target="_blank" rel="noopener noreferrer">Asset license</a></details>
+          </section>
         </div>
+        <div class="record-controls panel">
+          <label class="check"><input id="voice-enabled" type="checkbox"><span id="voice-label">Spoken instructions</span></label><p id="voice-info" class="hint"></p>
+          <label class="check"><input id="record-consent" type="checkbox"><span id="consent-label">I agree to save these images on my PC and am ready.</span></label>
+          <div class="actions"><button id="record-start" type="button" disabled>Start recording</button><button id="record-stop" type="button" disabled>Finish</button><button id="record-cancel" type="button" disabled>Cancel</button><span id="record-state" role="status"></span></div>
+          <p id="record-next" class="hint"></p>
+          <div id="guide" hidden><h2 id="guide-step"></h2><p id="guide-hint"></p><progress id="guide-progress" max="1" value="0"></progress><div class="actions"><button id="guide-ready" type="button">Ready</button><button id="guide-finish" type="button">Finish hold</button><button id="guide-confirm" type="button">Confirm</button><button id="guide-skip" type="button">Skip</button></div></div>
+          <p id="record-error" role="alert" hidden></p>
+        </div>
+        <details id="record-options" class="disclosure-panel"><summary id="record-options-title">More recording options</summary>
+          <label><span id="person-label">Person name</span><input id="person_id" value="me" autocomplete="off" spellcheck="false"></label>
+          <label class="check"><input id="guide-enabled" type="checkbox" checked><span id="guided-label">Guided expressions</span></label>
+          <label><span id="label-stage-label">Training label stage</span><select id="label-stage"><option id="raw-only-option" value="raw_only">Archive raw only</option><option id="instant-option" value="instant">Instant compatibility labels</option></select></label>
+          <p id="record-path" class="hint"></p>
+        </details>
+        <details id="review" class="panel disclosure-panel"><summary id="review-title">Review saved images</summary>
+          <p id="review-help" class="hint"></p>
+          <label class="check"><input id="review-all" type="checkbox"><span id="review-all-label">Include frames without pose proposals</span></label>
+          <div class="actions"><button id="review-load" type="button" disabled>Load images</button><button id="review-prev" type="button" disabled>Previous</button><button id="review-next" type="button" disabled>Next</button><button id="review-select-page" type="button" disabled>Select page</button></div>
+          <p id="review-count" class="hint"></p><div id="review-grid" class="review-grid"></div>
+          <img id="review-image" class="review-image" width="400" height="400" alt="Saved recording frame" hidden>
+          <p id="review-focus" class="hint"></p><button id="review-proposal" type="button" disabled>Copy pose proposal to editor</button>
+          <label><span id="review-targets-label">Observed controls (JSON)</span><textarea id="review-targets" rows="3" spellcheck="false">{}</textarea></label>
+          <label><span id="reviewer-label">Reviewer ID</span><input id="reviewer" value="local-user" autocomplete="off"></label>
+          <label><span id="observation-label">Visibility</span><select id="observation"><option id="visible-option" value="visible">Visible</option><option id="uncertain-option" value="uncertain">Uncertain</option><option id="occluded-option" value="occluded">Occluded</option><option id="no-mouth-option" value="no_mouth">No mouth</option></select></label>
+          <label class="check"><input id="review-confirmed" type="checkbox"><span id="review-consent-label">I reviewed the selected images and confirm these observations.</span></label>
+          <button id="review-apply" type="button" disabled>Apply to selected images</button>
+        </details>
       </section>
-      <div id="outputs" class="outputs" aria-label="Tongue output">
-        <label><span id="out-label">Out</span> <output id="out">—</output><progress id="bar-out" max="1" value="0"></progress></label>
-        <label><span id="left-label">Left</span> <output id="left">—</output><progress id="bar-left" max="1" value="0"></progress></label>
-        <label><span id="right-label">Right</span> <output id="right">—</output><progress id="bar-right" max="1" value="0"></progress></label>
-      </div>
-    </div>
-    <details id="personalization">
-      <summary id="personal-title">Personal calibration</summary>
-      <p id="personal-help" class="hint"></p>
-      <p id="profile-info"></p>
-      <label class="check"><input id="voice-enabled" type="checkbox" checked><span id="voice-label">Spoken guidance</span></label>
-      <p id="voice-info" class="hint"></p>
-      <div class="actions">
-        <button id="calibrate" type="button" disabled>Calibrate</button>
-        <button id="personal-cancel" type="button" disabled>Cancel</button>
-        <button id="restore-standard" type="button" disabled>Restore standard</button>
-      </div>
-      <p id="personal-state" role="status"></p>
-      <div id="guide" hidden>
-        <h2 id="guide-step"></h2><p id="guide-hint"></p>
-        <progress id="guide-progress" max="1" value="0"></progress>
-        <p id="guide-count" class="hint"></p>
-      </div>
-      <p id="personal-error" role="alert" hidden></p>
-      <p id="training-metrics" class="hint"></p>
-      <details id="personal-advanced">
-        <summary id="retrain-title">Personal retraining (advanced)</summary>
-        <p id="retrain-warning" class="hint"></p>
-        <label class="check"><input id="record-consent" type="checkbox"><span id="consent-label">I agree to local image recording and personal training.</span></label>
-        <button id="retrain" type="button" disabled>Record and retrain</button>
+    </section>
+
+    <section id="page-training" class="task-page" aria-labelledby="title" hidden>
+      <section id="training">
+        <div class="training-intro panel"><span class="training-mark" aria-hidden="true">⏣</span><h2 id="training-title">Make the model yours</h2><p id="training-help" class="hint"></p><a id="train-go-record" class="button-link" href="#/recording">Collect images</a></div>
+        <ol class="training-steps">
+          <li><strong id="train-step-one">Record</strong><span id="train-step-one-help">Capture several separate headset fits.</span></li>
+          <li><strong id="train-step-two">Review</strong><span id="train-step-two-help">Check the images and the visible expressions.</span><a id="train-go-review" href="#/recording">Review images</a></li>
+          <li><strong id="train-step-three">Train</strong><span id="train-step-three-help">Use the reviewed data to train and validate a model.</span></li>
+        </ol>
+        <details id="training-tools" class="panel disclosure-panel"><summary id="training-tools-title">Advanced training tools</summary>
+          <p id="training-tools-help" class="hint"></p><div id="training-fields"></div>
+          <label><span id="train-action-label">Operation</span><select id="train-action"></select></label><div id="train-inputs"></div>
+          <button id="train-start" type="button" disabled>Run locally</button>
+          <p id="train-result" class="hint"></p>
+        </details>
+        <div id="training-status" class="training-status"><span id="train-state" role="status"></span><button id="train-cancel" type="button" disabled>Cancel</button><p id="train-error" role="alert" hidden></p></div>
+      </section>
+    </section>
+
+    <section id="page-preferences" class="task-page" aria-labelledby="title" hidden>
+      <div class="preferences-main panel"><label class="check"><input id="output_enabled" form="settings" type="checkbox"><span id="udp-label">Send expressions to VRCFaceTracking</span></label><p id="settings-help" class="hint"></p></div>
+      <details id="advanced" class="panel disclosure-panel"><summary id="advanced-title">Connection and performance</summary>
+        <label><span id="host-label">Manual headset address</span><input id="headset_host" form="settings" autocomplete="off" spellcheck="false"></label>
+        <label><span id="model-path-label">Model path</span><input id="model_path" form="settings" autocomplete="off" spellcheck="false"></label>
+        <div class="fields">
+          <label><span id="port-label">Video port</span><input id="headset_port" form="settings" type="number" min="1" max="65535" required></label>
+          <label><span id="device-label">Inference device</span><select id="device" form="settings"><option value="auto">auto</option><option value="cuda">CUDA</option><option value="dml">DirectML</option><option value="openvino">OpenVINO GPU</option><option value="cpu">CPU</option></select></label>
+          <label><span id="expiry-label">Result expiry (ms)</span><input id="stale_ms" form="settings" type="number" min="1" required></label>
+          <label><span id="fps-label">Preview rate (fps)</span><input id="preview_fps" form="settings" type="number" min="1" max="30" required></label>
+        </div>
+        <label><span id="output-port-label">UDP port</span><input id="output_port" form="settings" type="number" min="1" max="65535" required></label>
+        <p id="migration" class="hint" hidden></p>
       </details>
-    </details>
-    <details id="diagnostics">
-      <summary id="diagnostics-title">Diagnostics</summary>
-      <dl>
-        <dt id="engine-label">Active engine / device</dt><dd id="engine-info">—</dd>
-        <dt id="providers-label">Execution providers</dt><dd id="provider-info">—</dd>
-        <dt id="fallback-label">Backend fallback</dt><dd id="fallback-info">—</dd>
-        <dt id="source-label">Input session / seq</dt><dd id="source-info">—</dd>
-        <dt id="result-label">Result session / seq</dt><dd id="result-info">—</dd>
-        <dt>raw_identity</dt><dd id="raw-identity">—</dd>
-        <dt>eye0_sensor_ns</dt><dd id="time-eye0">—</dd>
-        <dt>eye1_sensor_ns</dt><dd id="time-eye1">—</dd>
-        <dt>mouth_sensor_ns</dt><dd id="time-mouth">—</dd>
-        <dt>sensor_ns</dt><dd id="time-sensor">—</dd>
-        <dt>vendor_ns</dt><dd id="time-vendor">—</dd>
-        <dt id="source-age-label">Source age</dt><dd id="source-age">—</dd>
-        <dt id="receive-age-label">Time since PC reception</dt><dd id="receive-age">—</dd>
-        <dt id="rate-label">Receive / infer (last 900 events)</dt><dd id="rates">—</dd>
-        <dt id="drop-label">Source gaps / PC drops</dt><dd id="drops">—</dd>
-        <dt id="order-label">Duplicates / out of order</dt><dd id="order">—</dd>
-        <dt id="queue-label">Pending / queue delay</dt><dd id="queue">—</dd>
-        <dt id="encode-label">JPEG encoding</dt><dd id="encode-time">—</dd>
-        <dt id="decode-label">JPEG decode P50 / P95</dt><dd id="decode-time">—</dd>
-        <dt id="inference-label">Model P50 / P95</dt><dd id="inference-time">—</dd>
-        <dt id="pc-label">PC processing</dt><dd id="pc-time">—</dd>
-        <dt id="latency-label">Copy → result P50 / P95</dt><dd id="latency">—</dd>
-        <dt id="clock-label">Clock uncertainty</dt><dd id="clock">—</dd>
-        <dt id="mask-label">Mask area / angle</dt><dd id="mask-info">—</dd>
-      </dl>
-      <p id="snapshot-state" class="hint"></p>
-    </details>
-  </main>
-</body>
-</html>
+      <div class="actions settings-save"><button id="save" type="button" disabled>Save settings</button><span id="config-state"></span></div>
+      <details id="replay-tools" class="panel disclosure-panel"><summary id="replay-tools-title">Replay a saved session</summary><label><span id="replay-path-label">Replay dataset</span><input id="replay_path" form="settings" autocomplete="off" spellcheck="false"></label><button id="replay" type="button" disabled>Replay data</button><p id="replay-info" class="hint"></p></details>
+      <details id="diagnostics" class="panel disclosure-panel"><summary id="diagnostics-title">Diagnostics</summary>
+        <h2 id="technical-error-title">Troubleshooting details</h2><pre id="technical-error" class="technical-error"></pre>
+        <section class="output-panel"><div class="panel-heading"><div><span id="output-eyebrow" class="eyebrow">MODEL OUTPUT</span><h2 id="output-title">Expression signals</h2></div></div><p id="support-info" class="hint"></p><div id="outputs" class="outputs"></div><p id="output-note" class="hint"></p></section>
+        <details id="all-channels" class="disclosure-panel"><summary id="all-channels-title">All model channels</summary><p id="unknown-help" class="hint"></p><div id="channel-table" class="channel-table"></div></details>
+        <dl><dt id="engine-label"></dt><dd id="engine-info">—</dd><dt id="providers-label"></dt><dd id="provider-info">—</dd>
+          <dt id="fallback-label"></dt><dd id="fallback-info">—</dd><dt id="source-label"></dt><dd id="source-info">—</dd><dt id="result-label"></dt><dd id="result-info">—</dd><dt>raw_identity</dt><dd id="raw-identity">—</dd>
+          <dt>mouth_sensor_ns</dt><dd id="time-mouth">—</dd><dt id="source-age-label"></dt><dd id="source-age">—</dd><dt id="receive-age-label"></dt><dd id="receive-age">—</dd><dt id="rate-label"></dt><dd id="rates">—</dd>
+          <dt id="drop-label"></dt><dd id="drops">—</dd><dt id="queue-label"></dt><dd id="queue">—</dd><dt id="inference-label"></dt><dd id="inference-time">—</dd><dt id="latency-label"></dt><dd id="latency">—</dd><dt id="stock-label"></dt><dd id="stock-info">—</dd>
+        </dl><p id="snapshot-state" class="hint"></p>
+      </details>
+    </section>
+    <footer class="page-footer"><span>PICO MOUTH STUDIO</span><span id="footer-note">Your expressions, on your PC.</span></footer>
+  </div>
+</main></body></html>
