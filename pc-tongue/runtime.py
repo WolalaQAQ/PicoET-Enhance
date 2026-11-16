@@ -7,6 +7,8 @@ import math
 import os
 from pathlib import Path
 import socket
+import subprocess
+import sys
 import threading
 import time
 import zlib
@@ -16,12 +18,14 @@ from PIL import Image, ImageDraw
 
 from state import TongueState
 from personalization import Personalization, apply_calibration
-from wire import END, JPEG, REPLAY, FrameHeader, SourceOrder, read_frame, result_packet, sync_clock
+from face_schema import ALL_VALID, CHANNELS, SCHEMA
+from wire import END, JPEG, REPLAY, FrameHeader, SourceOrder, read_frame, result_packet, face_result_packet, sync_clock
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT/'user-data'
 DEFAULT_CONFIG = dict(enabled=False, headset_host='',
-                      headset_port=45681, model_path=str(ROOT/'assets/shadow-final-v2.pt'), device='auto', smoothing_ms=20.,
+                       headset_port=45681, model_path='', model_kind='face50',
+                       device='auto', smoothing_ms=20.,
                       uncertain_hold_ms=100., stale_ms=350., preview_fps=10, size_hysteresis=True,
                       replay_path='',
                       output_enabled=False, output_host='127.0.0.1', output_port=45682)
@@ -38,6 +42,12 @@ def json_value(value):
 
 
 def load_model(config):
+    if config['model_kind'] == 'face50':
+        from face_model import FaceModel
+        return FaceModel(config['model_path'], config['device'])
+    if config['model_kind'] == 'mouthlink':
+        from mouthlink import MouthLinkModel
+        return MouthLinkModel(config['model_path'], config['device'])
     from model import TongueModel
     return TongueModel(config['model_path'], config['device'])
 
@@ -46,8 +56,15 @@ class Runtime:
     def __init__(self, config_path=None, model_factory=load_model, run_root=None, record_input=False):
         self.config_path = Path(config_path or DATA/'config.json')
         self.config = dict(DEFAULT_CONFIG)
+        self.legacy_configuration = None
         if self.config_path.exists():
-            self.config.update(json.loads(self.config_path.read_text(encoding='utf-8')))
+            saved = json.loads(self.config_path.read_text(encoding='utf-8'))
+            self.legacy_configuration = saved.pop('legacy_configuration', None)
+            if saved.get('model_kind', 'segmentation') != 'face50':
+                # Preserve the old settings, but never silently resume mask geometry.
+                self.legacy_configuration = saved
+                saved = {key: value for key, value in saved.items() if key not in ('model_kind', 'model_path')}
+            self.config.update(saved)
         self.config.pop('face_source', None)  # Obsolete PC-side override; VRCFT owns source selection.
         self.config['enabled'] = False  # Opening the local service never starts capture.
         self.model_factory = model_factory
@@ -60,7 +77,7 @@ class Runtime:
         self.last_error = None
         self.pending = None
         self.source = self.prediction_source = None
-        self.prediction = TongueState.invalid('stopped')
+        self.prediction = self._invalid('stopped')
         self.model = None
         self.model_key = None
         self.description = {}
@@ -91,19 +108,60 @@ class Runtime:
         self.profile_reload = False
         self.personal = Personalization(self.config_path.parent/'personalization', self.lock, self._personal_changed)
         self.personal.set_checkpoint(self.config['model_path'])
+        self.capture_only = False
+        self.recorder = None
+        self.record_status = dict(state='idle')
+        self.record_condition = threading.Condition()
+        self.record_control = threading.RLock()
+        self.record_queue = deque()
+        self.record_stopping = False
+        self.record_cancelled = False
+        self.record_thread = None
+        self.stock_socket = None
+        self.stock_stop = threading.Event()
+        self.stock_thread = None
+        self.stock_status = dict(active=False, records=0, associated=0, unassociated=0, error=None)
+        self.training = dict(state='idle', running=False, error=None, result=None)
+        self.training_process = None
+        self.training_thread = None
+        self.transport_bindings = {}
+        self.capture_context = None
+
+    def _invalid(self, reason):
+        if self.config['model_kind'] != 'face50':
+            return TongueState.invalid(reason)
+        return dict(schema=SCHEMA, values=[0.]*50, channels={}, valid_mask=0,
+                    state=reason, fresh=False, override=False)
+
+    def _face_prediction(self, raw):
+        values = raw['values']
+        if len(values) != 50:
+            raise ValueError('Whole-mouth prediction requires 50 values')
+        validated = set(self.description.get('validated_channels', []))
+        trained = set(self.description['trained_channels'])
+        supported = sum(1 << i for i, name in enumerate(CHANNELS) if name in trained & validated)
+        mask = int(raw['valid_mask']) & int(self.description.get('valid_mask', 0)) & supported & ALL_VALID
+        controls = [float(value) if mask & (1 << i) else 0. for i, value in enumerate(values)]
+        if any(not math.isfinite(value) or not 0 <= value <= 1 for value in controls):
+            raise ValueError('Whole-mouth supported controls must be finite and in [0,1]')
+        return dict(schema=SCHEMA, values=controls,
+                    channels={name: controls[i] for i, name in enumerate(CHANNELS) if mask & (1 << i)},
+                    valid_mask=mask, fresh=bool(mask), override=bool(mask), state='valid' if mask else 'untrained')
 
     def configure(self, changes):
         unknown = set(changes)-set(DEFAULT_CONFIG)
         if unknown:
             raise ValueError('Unknown configuration fields: '+', '.join(sorted(unknown)))
         updated = dict(self.config, **changes)
+        if updated['model_kind'] not in ('face50', 'segmentation', 'mouthlink'):
+            raise ValueError('Unknown model kind')
         for key in ('smoothing_ms', 'uncertain_hold_ms', 'stale_ms'):
             if not math.isfinite(float(updated[key])) or float(updated[key]) < 0:
                 raise ValueError(key+' must be a finite nonnegative number')
         if not 1 <= int(updated['preview_fps']) <= 30:
             raise ValueError('preview_fps must be 1–30')
         if self.running and any(updated[k] != self.config[k] for k in
-                                ('headset_host', 'headset_port', 'model_path', 'device',
+                                ('headset_host', 'headset_port', 'model_path', 'model_kind', 'device',
                                  'output_enabled', 'output_host', 'output_port')):
             self.stop()
             updated['enabled'] = False
@@ -113,21 +171,28 @@ class Runtime:
             self.config = updated
             self.personal.set_checkpoint(updated['model_path'])
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            self.config_path.write_text(json.dumps(updated, ensure_ascii=False, indent=2), encoding='utf-8')
+            saved = dict(updated)
+            if self.legacy_configuration:
+                saved['legacy_configuration'] = self.legacy_configuration
+            self.config_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding='utf-8')
         return dict(self.config)
 
     def prepare(self):
         if self.running:
             return dict(self.description)
         self.personal.set_checkpoint(self.config['model_path'])
-        key = (self.personal.profile['head'] or self.config['model_path'], self.config['device'])
+        checkpoint = self.config['model_path']
+        if self.config['model_kind'] == 'segmentation':
+            checkpoint = self.personal.profile['head'] or checkpoint
+        key = (checkpoint, self.config['device'], self.config['model_kind'])
         if self.model is None or self.model_key != key:
             if not key[0]:
                 raise ValueError('Configure a model checkpoint path before starting')
             self.model = self.model_factory(dict(self.config, model_path=key[0]))
             self.model_key = key
             self.description = json_value(self.model.describe())
-            self.description.update(standard_checkpoint=self.config['model_path'], personal_head=bool(self.personal.profile['head']))
+            self.description.update(standard_checkpoint=self.config['model_path'],
+                                    personal_head=key[2] == 'segmentation' and bool(self.personal.profile['head']))
         self.profile_reload = False
         return dict(self.description)
 
@@ -145,8 +210,12 @@ class Runtime:
 
     def personalize(self, action, confirmed=False):
         with self.lock:
+            if self.config['model_kind'] == 'face50':
+                raise ValueError('Whole-mouth models use local whole-mouth recording and training, not mask calibration')
             self.personal.set_checkpoint(self.config['model_path'])
             if action in ('calibrate', 'retrain'):
+                if self.config['model_kind'] != 'segmentation':
+                    raise ValueError('MouthLink models use the MouthLink recording and training tools')
                 fresh = self.source is not None and self._age(self.source, time.perf_counter_ns())[1] <= self.config['stale_ms']
                 if not self.running or not self.connected or self.mode != 'live' or not fresh:
                     raise ValueError('Start live input and wait for fresh camera images before calibration')
@@ -190,11 +259,13 @@ class Runtime:
                 except OSError as error:
                     self.personal.fail_pending(request, error)
                     return
-            self.model, self.model_key = model, (config['model_path'], config['device'])
+            self.model, self.model_key = model, (config['model_path'], config['device'], config['model_kind'])
             self.description = dict(description, standard_checkpoint=self.config['model_path'], personal_head=bool(profile['head']))
             self.profile_reload = False
 
-    def start(self, mode='live', replay_path=None):
+    def start(self, mode='live', replay_path=None, *, capture_only=False):
+        if mode == 'capture':
+            mode, capture_only = 'live', True
         if self.running:
             raise ValueError('Runtime is already running')
         if mode not in ('live', 'replay'):
@@ -203,7 +274,11 @@ class Runtime:
             raise ValueError('Enter the headset address before starting live input')
         self.stop()
         generation = self.lifecycle
-        self.prepare()
+        if capture_only:
+            self.model = self.model_key = None
+            self.description = dict(model_kind='face50', schema=SCHEMA, trained_channels=[], capture_only=True)
+        else:
+            self.prepare()
         if mode == 'replay':
             path = Path(replay_path or self.config['replay_path'])
             if not path.is_file():
@@ -214,13 +289,14 @@ class Runtime:
             self.stop_event.clear()
             self.inference_ready.clear()
             self.running = True
+            self.capture_only = capture_only
             self.connected = False
             self.mode = mode
             self.config['enabled'] = True
             self.last_error = None
             self.pending = None
             self.source = self.prediction_source = None
-            self.prediction = TongueState.invalid('waiting')
+            self.prediction = self._invalid('waiting')
             self.order = SourceOrder()
             self.tongue.clear()
             self.preview = None
@@ -229,6 +305,8 @@ class Runtime:
             self.received_times.clear()
             self.inferred_times.clear()
             self.last_header = None
+            self.transport_bindings = {}
+            self.capture_context = None
             self.output_session_id = time.time_ns()
             self.last_result_ns = self.last_preview_ns = 0
             self.counts = dict(received=0, decoded=0, inferred=0, pending_dropped=0,
@@ -261,7 +339,7 @@ class Runtime:
                 return False
             if reason == 'new_session':
                 if self.last_header is not None:
-                    self.prediction = self.tongue.invalid('new_session')
+                    self.prediction = self._invalid('new_session')
                     self._send_result(self.last_header, self.prediction, 0.)
                 self.output_session_id = time.time_ns()
                 self.preview = None
@@ -279,7 +357,275 @@ class Runtime:
                 self.counts['pending_dropped'] += 1
             self.pending = (header, payload, received_ns)
             self.condition.notify()
+        self._record_enqueue('frame', (header, payload))
         return True
+
+    def _record_enqueue(self, kind, value):
+        with self.record_condition:
+            if self.record_thread is None or self.record_stopping:
+                return
+            if len(self.record_queue) >= 256:
+                self.record_status = dict(self.record_status, error='Local recording queue overflow; recording stopped')
+                self.record_stopping = True
+            else:
+                self.record_queue.append((kind, value))
+            self.record_condition.notify()
+
+    def _record_worker(self):
+        last_status = 0.
+        try:
+            while True:
+                with self.record_condition:
+                    self.record_condition.wait_for(lambda: self.record_queue or self.record_stopping, timeout=.2)
+                    if not self.record_queue and self.record_stopping:
+                        break
+                    item = self.record_queue.popleft() if self.record_queue else None
+                if item:
+                    kind, value = item
+                    if kind == 'frame':
+                        self.recorder.on_frame(*value)
+                    elif kind == 'stock':
+                        self.recorder.on_stock(value)
+                if time.monotonic()-last_status > .2:
+                    self.record_status = self.recorder.status()
+                    last_status = time.monotonic()
+        except Exception as error:
+            self.record_status = dict(self.record_status, error=str(error))
+        finally:
+            (self.recorder.cancel if self.record_cancelled else self.recorder.stop)()
+            self.record_status = dict(self.recorder.status(), error=self.record_status.get('error'))
+            self.stock_stop.set()
+            sock = self.stock_socket
+            if sock:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    def _stock_receive(self):
+        from stock import read_stock
+        try:
+            sock = socket.create_connection((self.config['headset_host'], int(self.config['headset_port'])), timeout=3)
+            self.stock_socket = sock
+            self.stock_status['active'] = True
+            with sock:
+                sock.sendall(b'LABELS\n')
+                while not self.stock_stop.is_set():
+                    record = read_stock(sock)
+                    self._record_enqueue('stock', record)
+                    self.stock_status['records'] += 1
+                    self.stock_status['associated' if record.association_valid else 'unassociated'] += 1
+        except (OSError, EOFError, ValueError) as error:
+            if not self.stock_stop.is_set():
+                self.stock_status['error'] = str(error)
+        finally:
+            self.stock_status['active'] = False
+            self.stock_socket = None
+
+    def recording(self, action, *, person_id='', confirmed=False, guide=True, stage='raw_only',
+                  role=None, evaluation_only=None, preset_id='complete'):
+        if action == 'begin':
+            if confirmed is not True:
+                raise ValueError('Confirm local image/stock recording and local training first')
+            if not isinstance(person_id, str) or not person_id.strip():
+                raise ValueError('person_id must be a nonempty anonymous string')
+            if self.record_thread is not None:
+                raise ValueError('Stop the active recording before beginning another')
+            if not self.running or not self.connected or self.mode != 'live' or self.config['model_kind'] != 'face50':
+                raise ValueError('Start capture-only or live whole-mouth input explicitly before recording')
+            from face_capture import WholeMouthRecording
+            self.recorder = WholeMouthRecording(self.config_path.parent/'recordings')
+            self.recorder.set_label_stage(stage)
+            self.record_status = self.recorder.begin(person_id, confirmed=True, guide=guide,
+                                                     role=role, evaluation_only=evaluation_only, preset_id=preset_id)
+            for capture_session_id, binding in self.transport_bindings.items():
+                self.recorder.bind_capture(capture_session_id, **binding)
+            self.record_stopping = False
+            self.record_cancelled = False
+            self.record_queue.clear()
+            self.stock_stop.clear()
+            self.stock_status = dict(active=False, records=0, associated=0, unassociated=0, error=None)
+            self.record_thread = threading.Thread(target=self._record_worker, name='mouth-recording', daemon=True)
+            self.stock_thread = threading.Thread(target=self._stock_receive, name='mouth-stock', daemon=True)
+            self.record_thread.start()
+            self.stock_thread.start()
+        elif action in ('ready', 'finish', 'confirm', 'skip'):
+            if self.recorder is None:
+                raise ValueError('Begin a recording first')
+            self.recorder.advance(action)
+            self.record_status = self.recorder.status()
+        elif action in ('stop', 'cancel'):
+            # End the run as well: no previous output or preview survives cancellation.
+            self.stop(cancel_recording=action == 'cancel')
+        else:
+            raise ValueError('Unknown whole-mouth recording action')
+        return dict(self.record_status)
+
+    def bind_capture(self, capture_session_id, service_generation, *, evidence):
+        """Called by a verified transport-metadata reader BEFORE its first PTJ frame.
+
+        A stock record, receive time or HTTP form is not transport metadata.
+        """
+        if type(capture_session_id) is not int or service_generation is None or not evidence:
+            raise ValueError('Capture binding requires explicit trusted transport metadata')
+        binding = dict(service_generation=service_generation, evidence=evidence)
+        with self.lock:
+            if capture_session_id in self.transport_bindings and self.transport_bindings[capture_session_id] != binding:
+                raise ValueError('Capture session cannot change service generation')
+            self.transport_bindings[capture_session_id] = binding
+        if self.recorder is not None and self.record_thread is not None:
+            self.recorder.bind_capture(capture_session_id, **binding)
+
+    def review_samples(self, offset=0, limit=24, all_frames=False):
+        if self.recorder is None:
+            return dict(total=0, offset=0, samples=[], session_id=None)
+        if offset < 0 or not 1 <= limit <= 120:
+            raise ValueError('Review page must use offset >= 0 and limit 1..120')
+        result = self.recorder.review_candidates(offset=offset, limit=limit)
+        if all_frames:
+            rows = self.recorder.samples()
+            fields = ('sample_id', 'image', 'prompt_candidate', 'review_labels', 'observation',
+                      'capture_session_id', 'source_seq', 'mouth_sensor_ns', 'pairing_status')
+            result = dict(total=len(rows), offset=offset,
+                          samples=[{key: row.get(key) for key in fields} for row in rows[offset:offset+limit]])
+        return dict(result, session_id=self.recorder.session_id)
+
+    def review_image(self, session_id, sample_id):
+        if self.recorder is None or session_id != self.recorder.session_id:
+            raise ValueError('Image does not belong to the current local recording')
+        with self.recorder.lock:
+            row = next((row for row in self.recorder.images if row['sample_id'] == sample_id), None)
+            if row is None:
+                raise ValueError('Unknown local recording sample')
+            root = self.recorder.path.resolve()
+            path = (root/row['image']).resolve()
+            if not path.is_relative_to(root/'images') or not path.is_file():
+                raise ValueError('Image must remain inside the current recording images directory')
+            return path.read_bytes()
+
+    def review(self, session_id, sample_ids, targets, *, confirmed=False, reviewer='', observation='visible'):
+        if self.recorder is None or session_id != self.recorder.session_id:
+            raise ValueError('Review does not belong to the current local recording')
+        if not isinstance(targets, dict) or not isinstance(sample_ids, list):
+            raise ValueError('Review requires a target dictionary and selected sample IDs')
+        result = self.recorder.review(sample_ids, targets, confirmed=confirmed,
+                                      reviewer=reviewer, observation=observation)
+        self.record_status = self.recorder.status()
+        return result
+
+    def _stop_recording(self, cancel=False):
+        with self.record_control:
+            self._finish_recording(cancel)
+
+    def _finish_recording(self, cancel=False):
+        self.record_cancelled = cancel
+        self.stock_stop.set()
+        sock = self.stock_socket
+        if sock:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        for thread in (self.stock_thread,):
+            if thread is not None:
+                thread.join(timeout=5)
+                if thread.is_alive():
+                    raise RuntimeError('Owned stock worker did not stop')
+        with self.record_condition:
+            self.record_stopping = True
+            self.record_condition.notify_all()
+        if self.record_thread is not None:
+            self.record_thread.join(timeout=5)
+            if self.record_thread.is_alive():
+                raise RuntimeError('Owned recording worker did not stop')
+            self.record_status = dict(self.recorder.status(), error=self.record_status.get('error'))
+        self.record_thread = self.stock_thread = None
+
+    @staticmethod
+    def training_operations():
+        # Derive the web form and flags from the delivered CLI, not a second parser.
+        import argparse
+        from face_train import parser
+        commands = next(action for action in parser()._actions if isinstance(action, argparse._SubParsersAction)).choices
+        operations = {}
+        optional = {'dino_repo', 'initial', 'backbone_checkpoint', 'pretrained', 'teacher',
+                    'teacher_approval', 'approval', 'epochs', 'device', 'group_by', 'tune'}
+        for name, command in commands.items():
+            operations[name] = [dict(name=action.dest, required=action.required,
+                                     type='number' if action.type in (int, float) else 'text',
+                                     default=action.default if action.default is not None else '',
+                                     choices=list(action.choices) if action.choices else None)
+                                for action in command._actions
+                                if action.dest != 'help' and (action.required or action.dest in optional)]
+        return operations
+
+    def train(self, action, operation=None, args=None):
+        if action == 'cancel':
+            process = self.training_process
+            if process is not None and process.poll() is None:
+                self.training['state'] = 'cancelling'
+                process.terminate()
+            if self.training_thread is not None:
+                self.training_thread.join(timeout=5)
+                if self.training_thread.is_alive():
+                    raise RuntimeError('Owned whole-mouth training worker did not stop')
+            self.training.update(state='cancelled', running=False)
+            self.stop()
+            return dict(self.training)
+        if action != 'begin':
+            raise ValueError('Unknown local training action')
+        if self.training.get('running'):
+            raise ValueError('A local training job is already running')
+        operations = self.training_operations()
+        if operation not in operations:
+            raise ValueError('Unknown local training operation')
+        args = args or {}
+        fields = {field['name']: field for field in operations[operation]}
+        if set(args)-set(fields):
+            raise ValueError('Unknown local training arguments')
+        command = [operation]
+        for name, field in fields.items():
+            value = args.get(name, field['default'])
+            if field['required'] and (value is None or str(value).strip() == ''):
+                raise ValueError('Required local training argument: '+name)
+            if value is not None and str(value).strip() != '':
+                command.extend(['--'+name.replace('_', '-'), str(value)])
+        from face_train import parser
+        try:
+            parser().parse_args(command)
+        except SystemExit as error:
+            raise ValueError('Invalid local training arguments') from error
+        self.stop()  # Starting an offline training job ends this runtime's live run.
+        process = subprocess.Popen([sys.executable, '-B', '-X', 'utf8', str(ROOT/'face_train.py'), *command],
+                                   cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   encoding='utf-8', text=True)
+        self.training_process = process
+        self.training = dict(state='training', running=True, operation=operation, error=None, result=None,
+                             progress=None, log_tail=[])
+        self.training_thread = threading.Thread(target=self._training_wait, args=(process,), name='mouth-local-training', daemon=True)
+        self.training_thread.start()
+        return dict(self.training)
+
+    def _training_wait(self, process):
+        try:
+            for line in process.stdout:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    row = None
+                with self.lock:
+                    self.training['log_tail'] = (self.training['log_tail']+[line.rstrip()])[-30:]
+                    if isinstance(row, dict) and row.get('event') == 'result':
+                        self.training['result'] = row['result']
+                    elif isinstance(row, dict) and row.get('event') == 'progress':
+                        self.training['progress'] = row
+            code = process.wait()
+            with self.lock:
+                cancelled = self.training['state'] == 'cancelling'
+                self.training.update(running=False, state='cancelled' if cancelled else 'completed' if code == 0 else 'failed',
+                                     error=None if code == 0 or cancelled else '\n'.join(self.training['log_tail']))
+        finally:
+            process.stdout.close()
 
     def _receive(self):
         config = dict(self.config)
@@ -289,6 +635,13 @@ class Runtime:
                 return
             calibrated = sync_clock(config['headset_host'], int(config['headset_port']))
             self._set_clock(calibrated)
+            context = None
+            if config['model_kind'] == 'face50':
+                from stock import read_capture_context
+                with socket.create_connection((config['headset_host'], int(config['headset_port'])), timeout=3) as control:
+                    context = read_capture_context(control)
+                self.bind_capture(context.capture_session_id, context.service_generation, evidence=context.evidence)
+                self.capture_context = context.evidence
             sock = socket.create_connection((config['headset_host'], int(config['headset_port'])), timeout=3)
             sock.settimeout(1)
             with self.lock:
@@ -299,6 +652,8 @@ class Runtime:
                 while not self.stop_event.is_set():
                     header, payload = read_frame(sock)
                     received_ns = time.perf_counter_ns()
+                    if context is not None:
+                        context.require_session(header.session_id)
                     if header.flags & END:
                         with self.lock:
                             self.replay['finished'] = True
@@ -316,7 +671,14 @@ class Runtime:
             with self.condition:
                 self.connected = False
                 self.socket = None
+                self.model_version += 1
+                self.pending = None
+                self.prediction = self._invalid('disconnected')
+                self.preview = None
+                if self.last_header is not None:
+                    self._send_result(self.last_header, self.prediction, 0.)
                 self.condition.notify_all()
+            self._stop_recording()
 
     def _clock_refresh(self):
         while not self.stop_event.wait(10):
@@ -400,11 +762,20 @@ class Runtime:
     def _send_result(self, header, prediction, age):
         if not self.config['output_enabled']:
             return
+        if self.config['model_kind'] == 'face50':
+            data = face_result_packet(replace(header, session_id=self.output_session_id),
+                                      prediction['values'], prediction['valid_mask'],
+                                      max(0., age) if math.isfinite(age) else self.config['stale_ms'],
+                                      state=0 if prediction['fresh'] else 1)
+            self.udp.sendto(data, (self.config['output_host'], int(self.config['output_port'])))
+            return
         state = {'present': 1, 'absent': 2, 'uncertain': 4, 'stopped': 16}.get(prediction['state'], 8)
         if not prediction['override'] and state != 16:
             state = 8
         data = result_packet(replace(header, session_id=self.output_session_id), state, prediction['left'], prediction['right'],
-                             prediction['out'] or 0., max(0., age) if math.isfinite(age) else self.config['stale_ms'])
+                       prediction['out'] or 0., max(0., age) if math.isfinite(age) else self.config['stale_ms'],
+                       extended=self.config['model_kind'] == 'mouthlink',
+                       up=prediction.get('up', 0.), down=prediction.get('down', 0.), roll=prediction.get('roll', 0.))
         self.udp.sendto(data, (self.config['output_host'], int(self.config['output_port'])))
 
     def _expire(self):
@@ -413,7 +784,7 @@ class Runtime:
         now = time.perf_counter_ns()
         _, upper = self._age(self.last_header, now)
         if upper > self.config['stale_ms']:
-            self.prediction = self.tongue.invalid('stale')
+            self.prediction = self._invalid('stale')
             self.tongue.clear()
             self._send_result(self.last_header, self.prediction, upper)
 
@@ -421,8 +792,9 @@ class Runtime:
         try:
             # CUDA's first call is per-thread. Finish warmup before subscribing,
             # so the native producer can choose its fixed epoch afterwards.
-            for _ in range(2):
-                self.model.predict(np.zeros((400, 400), dtype=np.uint8), dict(self.config))
+            if not self.capture_only:
+                for _ in range(2):
+                    self.model.predict(np.zeros((400, 400), dtype=np.uint8), dict(self.config))
             # Warm Pillow's lazy JPEG plugin and default font before real sources.
             warm_picture = Image.fromarray(np.zeros((400, 400), dtype=np.uint8)).convert('RGB')
             ImageDraw.Draw(warm_picture).text((0, 0), 'warm', fill='white')
@@ -431,7 +803,8 @@ class Runtime:
             Image.open(io.BytesIO(warm_jpeg.getvalue())).load()
             self.inference_ready.set()
             while not self.stop_event.is_set():
-                self._activate_personal_profile()
+                if self.config['model_kind'] == 'segmentation':
+                    self._activate_personal_profile()
                 with self.condition:
                     self._expire()
                     if self.pending is None:
@@ -456,7 +829,8 @@ class Runtime:
                     decoded = time.perf_counter_ns()
                     if image.shape != (400, 400):
                         raise ValueError('Decoded source dimensions changed')
-                    raw = self.model.predict(image, config)
+                    raw = (dict(values=[0.]*50, valid_mask=0) if self.capture_only else
+                           self.model.predict(image, config))
                 except Exception:
                     with self.lock:
                         if self.stop_event.is_set() or header.session_id != self.order.session or model_version != self.model_version:
@@ -471,16 +845,20 @@ class Runtime:
                         self.counts['superseded'] += 1
                         continue
                     self.counts['decoded'] += 1
-                    self.counts['inferred'] += 1
-                    self.inferred_times.append(finished)
-                    if upper <= config['stale_ms']:
+                    if not self.capture_only:
+                        self.counts['inferred'] += 1
+                        self.inferred_times.append(finished)
+                    if upper <= config['stale_ms'] and config['model_kind'] == 'segmentation':
                         self.personal.feed(image, raw, header)
-                    else:
+                    elif upper > config['stale_ms']:
                         self.tongue.clear()
-                    raw = apply_calibration(raw, self.personal.profile['calibration'],
-                                            active=self.tongue.visual is not None,
-                                            hysteresis=config['size_hysteresis'])
-                    prediction = self.tongue.update(raw, header, config) if upper <= config['stale_ms'] else self.tongue.invalid('stale')
+                    if config['model_kind'] == 'face50':
+                        prediction = self._face_prediction(raw) if upper <= config['stale_ms'] else self._invalid('stale')
+                    else:
+                        raw = apply_calibration(raw, self.personal.profile['calibration'],
+                                                active=self.tongue.visual is not None,
+                                                hysteresis=config['size_hysteresis'])
+                        prediction = self.tongue.update(raw, header, config) if upper <= config['stale_ms'] else self._invalid('stale')
                     self.prediction = dict(json_value(raw), **prediction)
                     frame_prediction = dict(self.prediction)
                     output_session_id = self.output_session_id
@@ -511,7 +889,7 @@ class Runtime:
                 self.last_error = type(error).__name__+': '+str(error)
             self.stop_event.set()
             with self.lock:
-                self.prediction = self.tongue.invalid('error')
+                self.prediction = self._invalid('error')
                 self.running = False
                 self.config['enabled'] = False
                 if self.last_header is not None:
@@ -519,20 +897,29 @@ class Runtime:
 
     def _preview_image(self, image, mask, prediction):
         picture = Image.fromarray(image).convert('RGB')
-        if mask is not None:
+        if self.config['model_kind'] != 'face50' and mask is not None:
             alpha = Image.fromarray((np.asarray(mask, dtype=np.uint8)>0).astype(np.uint8)*110).resize((400, 400), Image.Resampling.NEAREST)
             overlay = Image.new('RGB', picture.size, '#fb7185')
             picture = Image.composite(overlay, picture, alpha)
-        text = f"{prediction['state']}  L={prediction['left']:.2f} R={prediction['right']:.2f}"
-        draw = ImageDraw.Draw(picture)
-        draw.rectangle((0, 377, 400, 400), fill='#0f172a')
-        draw.text((8, 382), text, fill='white')
+        if self.config['model_kind'] != 'face50':
+            text = f"{prediction['state']}  L={prediction['left']:.2f} R={prediction['right']:.2f}"
+            draw = ImageDraw.Draw(picture)
+            draw.rectangle((0, 377, 400, 400), fill='#0f172a')
+            draw.text((8, 382), text, fill='white')
         output = io.BytesIO()
         picture.save(output, format='JPEG', quality=90)
         return output.getvalue()
 
-    def stop(self):
+    def stop(self, *, cancel_recording=False):
         self.stop_event.set()
+        with self.condition:
+            self.model_version += 1
+            self.pending = None
+            self.prediction = self._invalid('stopped')
+            self.preview = None
+            if self.last_header is not None:
+                self._send_result(self.last_header, self.prediction, 0.)
+        self._stop_recording(cancel=cancel_recording)
         self.personal.cancel()
         training = self.personal.thread
         if training is not None and training is not threading.current_thread():
@@ -554,8 +941,6 @@ class Runtime:
                 if thread.is_alive():
                     raise RuntimeError('Owned runtime worker did not stop: '+thread.name)
         with self.lock:
-            if self.last_header is not None:
-                self._send_result(self.last_header, self.tongue.invalid('stopped'), 0.)
             if self.log:
                 self.log.flush()
                 self.log.close()
@@ -570,7 +955,7 @@ class Runtime:
             self.running = self.connected = False
             self.config['enabled'] = False
             self.pending = None
-            self.prediction = self.tongue.invalid('stopped')
+            self.prediction = self._invalid('stopped')
             self.tongue.clear()
             self.preview = None
             if self.run_dir is not None:
@@ -599,13 +984,20 @@ class Runtime:
                     'metrics': dict(self.counts, received_hz=hz(self.received_times), inference_hz=hz(self.inferred_times),
                                     source_age_ms=age if age is not None and math.isfinite(age) else None,
                                     receive_age_ms=(now-self.received_times[-1])/1e6 if self.received_times else None,
-                                    source_fresh=self.prediction['fresh'] and upper is not None and upper <= self.config['stale_ms'],
+                                     source_fresh=self.prediction['fresh'] and upper is not None and upper <= self.config['stale_ms'] and self.connected,
+                                     video_fresh=upper is not None and upper <= self.config['stale_ms'] and self.connected,
                                     queue_depth=int(self.pending is not None),
                                     queue_ms=self.latencies[-1]['queue_ms'] if self.latencies else None,
                                     pc_total_ms=self.latencies[-1]['pc_total_ms'] if self.latencies else None,
                                     latency_ms=latency, clock_uncertainty_ms=self.clock['uncertainty_ms'] if self.clock else None),
                     'prediction': json_value(self.prediction), 'config': dict(self.config),
-                     'last_error': self.last_error, 'replay': dict(self.replay),
+                      'contract': dict(schema=SCHEMA, channels=list(CHANNELS)),
+                       'recording': dict(self.record_status), 'stock': dict(self.stock_status),
+                       'capture_context': self.capture_context,
+                      'training': dict(self.training, operations=self.training_operations()),
+                      'last_error': self.last_error, 'replay': dict(self.replay),
+                      'capture_only': self.capture_only,
+                      'legacy_configuration_available': bool(self.legacy_configuration),
                      'personalization': self.personal.status(),
                     'run_directory': str(self.run_dir) if self.run_dir else None,
                     'source_directory': str(ROOT),

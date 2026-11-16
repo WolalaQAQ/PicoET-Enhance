@@ -17,7 +17,7 @@ import numpy as np
 from PIL import Image
 
 from backend import make_server
-from runtime import DEFAULT_CONFIG, ROOT, Runtime
+from runtime import DEFAULT_CONFIG, ROOT, Runtime, load_model
 from state import TongueState
 from wire import END, JPEG, HEADER, RAW, RESULT, FrameHeader, SourceOrder, read_frame, result_packet
 
@@ -62,6 +62,12 @@ class FakeModel:
 
 
 class ManualRuntime(Runtime):
+    def __init__(self, config_path=None, model_factory=load_model, run_root=None, **kwargs):
+        super().__init__(config_path, model_factory, run_root, **kwargs)
+        if model_factory is not load_model:
+            # Explicit legacy fixture for the retained mask/personalization regressions.
+            self.config['model_kind'] = 'segmentation'
+
     def _receive(self):
         with self.lock:
             self.clock = {'offset_ns': 0., 'uncertainty_ms': 0., 'calibrated_pc_ns': time.perf_counter_ns()}
@@ -174,7 +180,8 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(runtime.config['headset_host'], '')
             self.assertFalse(runtime.config['output_enabled'])
             self.assertFalse(runtime.running)
-            self.assertEqual(Path(runtime.config['model_path']), ROOT/'assets/shadow-final-v2.pt')
+            self.assertEqual(runtime.config['model_path'], '')
+            self.assertEqual(runtime.config['model_kind'], 'face50')
             with self.assertRaisesRegex(ValueError, 'Enter the headset address'):
                 runtime.start()
             self.assertFalse(runtime.threads)
@@ -243,7 +250,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(self.runtime.running)
 
     def test_advanced_restart_settings_stop_the_actual_runtime(self):
-        for key, value in [('device', 'cpu'), ('output_port', 45693), ('output_enabled', True)]:
+        for key, value in [('device', 'cpu'), ('output_port', 45693), ('output_enabled', True), ('model_kind', 'mouthlink')]:
             with self.subTest(field=key):
                 self.start()
                 saved = self.runtime.configure({key: value})
@@ -334,7 +341,7 @@ class RuntimeTests(unittest.TestCase):
                           Path(self.tmp.name)/'network-runs', record_input=True)
         try:
             runtime.configure({'model_path': 'test-only', 'headset_host': '127.0.0.1',
-                               'headset_port': server.server_address[1]})
+                               'headset_port': server.server_address[1], 'model_kind': 'segmentation'})
             runtime.start()
             wait_for(lambda: runtime.counts['inferred'] == 2)
             wait_for(lambda: not runtime.connected)
@@ -389,6 +396,7 @@ class RuntimeTests(unittest.TestCase):
         runtime = ManualRuntime(path, lambda config: self.model, Path(self.tmp.name)/'legacy-runs')
         try:
             self.assertNotIn('face_source', runtime.config)
+            runtime.configure({'model_kind': 'segmentation', 'model_path': 'test-only'})
             runtime.start()
             wait_for(lambda: runtime.connected)
             self.assertTrue(runtime.running)
