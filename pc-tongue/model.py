@@ -94,6 +94,11 @@ class TongueModel:
     auto tries installed ORT providers: CUDA Graph, CUDA, OpenVINO GPU, DirectML, CPU.
     Explicit cuda/dml/openvino/cpu and comparison engine:device choices are strict.
     """
+    input_name = 'image'
+    output_name = 'logits'
+    input_shape = (1, 1, 224, 224)
+    output_shape = (1, 1, 56, 56)
+
     def __init__(self, checkpoint: str, device: str = "auto"):
         start = time.perf_counter()
         # Process-local: this dedicated pipeline only needs one CPU preprocessing thread.
@@ -182,20 +187,20 @@ class TongueModel:
             raise RuntimeError(provider+" did not initialize; active providers: "+str(session.get_providers()))
         # Own the selection, so ORT cannot switch providers behind the status display.
         session.disable_fallback()
-        sample = np.zeros((1, 1, 224, 224), np.float32)
+        sample = np.zeros(self.input_shape, np.float32)
         if engine == "onnxgraph":
             input_value = ort.OrtValue.ortvalue_from_numpy(sample, "cuda", 0)
-            output_value = ort.OrtValue.ortvalue_from_shape_and_type((1, 1, 56, 56), np.float32, "cuda", 0)
+            output_value = ort.OrtValue.ortvalue_from_shape_and_type(self.output_shape, np.float32, "cuda", 0)
             binding = session.io_binding()
-            binding.bind_ortvalue_input("image", input_value)
-            binding.bind_ortvalue_output("logits", output_value)
+            binding.bind_ortvalue_input(self.input_name, input_value)
+            binding.bind_ortvalue_output(self.output_name, output_value)
             for _ in range(3):
                 session.run_with_iobinding(binding)
                 binding.synchronize_outputs()
             self.input_value, self.output_value, self.binding = input_value, output_value, binding
         else:
             # Test compilation and first execution before choosing this provider.
-            session.run(None, {"image": sample})
+            session.run(None, {self.input_name: sample})
         self.engine, self.device, self.provider = engine, device, provider
         self.session, self.providers = session, session.get_providers()
 

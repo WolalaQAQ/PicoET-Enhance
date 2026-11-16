@@ -1,0 +1,10 @@
+# Optional offline training/export environment, separate from the runtime environment.
+# Do not install multiple onnxruntime CPU/CUDA/DirectML distributions together.
+torch>=2.6,<2.11
+torchvision>=0.21,<0.26
+numpy>=1.26,<3
+Pillow>=10,<13
+onnx>=1.17,<2
+onnxruntime>=1.20,<2
+# DINOv2 source and B/14-reg checkpoint are explicit local CLI arguments.
+# This requirements file does not download either, nor any training data.

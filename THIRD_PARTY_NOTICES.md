@@ -180,7 +180,7 @@ tool executables are distributed in the module.
 
 ## PC tongue development dependencies and upstream work
 
-The optional `pc-tongue/` model architecture, preprocessing and geometry adapt
+The archived `pc-tongue/` segmentation architecture, preprocessing and geometry adapt
 Rulez777's MIT-licensed PicoET-Enhance PR #4, pinned to
 `04fe68ac88e8c1fcaf504eba8223ebf33c629d93` for `shadow_model.py`, with calibration,
 personal mask-head training/acceptance and size hysteresis based on tongue.2
@@ -189,8 +189,9 @@ personal mask-head training/acceptance and size hysteresis based on tongue.2
 in this repository's [LICENSE](LICENSE). The PC adaptation adds ONNX Runtime
 providers, fresh-source transport and transactional personal-profile activation.
 The upstream photographs and demo media are not distributed here. Standard
-weights are fetched from the author's `v2.4.2-tongue.1` release, not included in
-this source tree; its checkpoint digest is pinned by `prepare_model.py`.
+weights are not included in this source tree. The archived `prepare_model.py`
+can fetch the author's `v2.4.2-tongue.1` release using its pinned checkpoint digest;
+it is not invoked by the whole-mouth regression setup or runtime.
 
 PC packages are installed separately: PyTorch/torchvision (BSD-style licenses),
 ONNX (Apache-2.0), ONNX Runtime (MIT), NumPy (BSD), Pillow (HPND), and optional
@@ -208,6 +209,62 @@ three-clause BSD license. This integration uses the libjpeg API, not TurboJPEG.
 and retains `LICENSE.md` and `README.ijg` with the build outputs. Keep those
 notices and this attribution when distributing a linked daemon. ShadowHook and
 the Android C++ runtime use the existing notices above.
+
+## MouthLink interoperability
+
+The `pc-tongue/mouthlink.py` adapter and whole-mouth regression tools follow the ONNX/JSON contract and
+Pillow preprocessing of [UndefinedSignal/MouthLink](https://github.com/UndefinedSignal/MouthLink),
+reviewed at `39e091f4191d2ea1ad8536120924cdf61949dae2` (`training/export_onnx.py`,
+`tools/mouthlink_live.py`). Negative-pose sampling, session-wise validation and
+incremental fine-tuning, continuous regression and masked-label supervision also draw on that project's training workflow and
+[issue #5](https://github.com/WolalaQAQ/PicoET-Enhance/issues/5). This integration
+uses the existing JPEG transport and PC inference path; upstream photos, personal
+weights, raw UDP source and native ORT bindings are not distributed here.
+
+```
+MIT License
+
+Copyright (c) 2026 UndefinedSignal
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## Optional DINOv2 training backbone
+
+The teacher adapter can load an explicitly supplied local checkout and checkpoint
+of [Meta's DINOv2](https://github.com/facebookresearch/dinov2), using the ordinary
+ViT-B/14-with-registers backbone as a candidate. DINOv2's ordinary code and weights
+are available under [Apache-2.0](https://github.com/facebookresearch/dinov2/blob/main/LICENSE).
+Backbone source and weights are not vendored or downloaded by this pipeline.
+Keep the notices accompanying the actual backbone/checkpoint if distributing a
+trained model. This attribution does not cover unrelated specialist weights in
+the upstream repository or private training images.
+
+## Optional DINOv3 training backbone
+
+The teacher adapter can load an explicitly supplied local checkout and ViT-B/16,
+ViT-L/16 or ViT-H+/16
+checkpoint of [Meta's DINOv3](https://github.com/facebookresearch/dinov3), covered
+by the [DINOv3 License](https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md).
+Obtain access to the weights and accept their accompanying terms through Meta's
+official distribution. Source and weights are not bundled. Retain the applicable
+license and attribution when distributing trained derivatives.
 
 ## PICO system software
 
