@@ -9,17 +9,17 @@
     "license": "Oculus SDK License Agreement",
     "license_url": "https://developers.meta.com/horizon/licenses/oculussdk/"
   },
-  "scope": "Visual guidance only. Original morphs/correctives plus explicitly attributed added tongue and independent-lip controls on the original mesh. Operation steps are text-only. No training labels.",
+  "scope": "Reference images for the capture guide. Poses use Meta-Man's original morphs and correctives; the tongue and independent lip movements come from controls added on the original mesh. Occlusion and refit steps are text-only.",
   "poses": [
     {
       "id": "neutral",
       "title": {
-        "zh": "自然放松嘴部，舌头收回",
-        "en": "Relax your mouth naturally with your tongue retracted"
+        "zh": "放松",
+        "en": "Relax"
       },
       "instruction": {
-        "zh": "自然放松嘴部，舌头收回",
-        "en": "Relax your mouth naturally with your tongue retracted"
+        "zh": "自然放松嘴部，舌头收在口内",
+        "en": "Relax your mouth naturally with your tongue inside"
       },
       "front": "neutral.webp",
       "provenance": [
@@ -29,8 +29,8 @@
     {
       "id": "CheekPuff",
       "title": {
-        "zh": "双侧轻轻鼓腮",
-        "en": "Gently puff both cheeks"
+        "zh": "鼓腮",
+        "en": "Puff cheeks"
       },
       "instruction": {
         "zh": "双侧轻轻鼓腮",
@@ -45,8 +45,8 @@
     {
       "id": "CheekSquintL",
       "title": {
-        "zh": "抬起左侧面颊，轻轻眯左眼",
-        "en": "Raise your left cheek with a gentle left squint"
+        "zh": "左脸颊上抬",
+        "en": "Left cheek raise"
       },
       "instruction": {
         "zh": "抬起左侧面颊，轻轻眯左眼",
@@ -61,8 +61,8 @@
     {
       "id": "CheekSquintR",
       "title": {
-        "zh": "抬起右侧面颊，轻轻眯右眼",
-        "en": "Raise your right cheek with a gentle right squint"
+        "zh": "右脸颊上抬",
+        "en": "Right cheek raise"
       },
       "instruction": {
         "zh": "抬起右侧面颊，轻轻眯右眼",
@@ -77,12 +77,12 @@
     {
       "id": "JawForward",
       "title": {
-        "zh": "下颌轻轻前伸，不用力咬牙",
-        "en": "Gently move your jaw forward without clenching"
+        "zh": "下颌前伸",
+        "en": "Jaw forward"
       },
       "instruction": {
-        "zh": "下颌轻轻前伸，不用力咬牙",
-        "en": "Gently move your jaw forward without clenching"
+        "zh": "下颌轻轻前伸，牙齿保持放松",
+        "en": "Gently move your jaw forward, keeping your teeth relaxed"
       },
       "front": "JawForward.webp",
       "provenance": [
@@ -94,8 +94,8 @@
     {
       "id": "JawLeft",
       "title": {
-        "zh": "下颌向自身左侧移动",
-        "en": "Move your jaw to your own left"
+        "zh": "下颌左移",
+        "en": "Jaw left"
       },
       "instruction": {
         "zh": "下颌向自身左侧移动",
@@ -110,12 +110,12 @@
     {
       "id": "JawOpen",
       "title": {
-        "zh": "自然张开下颌，不伸舌",
-        "en": "Open your jaw naturally without extending your tongue"
+        "zh": "张开下颌",
+        "en": "Open jaw"
       },
       "instruction": {
-        "zh": "自然张开下颌，不伸舌",
-        "en": "Open your jaw naturally without extending your tongue"
+        "zh": "自然张开下颌，舌头留在口内",
+        "en": "Open your jaw naturally, tongue inside your mouth"
       },
       "front": "JawOpen.webp",
       "provenance": [
@@ -126,8 +126,8 @@
     {
       "id": "JawRight",
       "title": {
-        "zh": "下颌向自身右侧移动",
-        "en": "Move your jaw to your own right"
+        "zh": "下颌右移",
+        "en": "Jaw right"
       },
       "instruction": {
         "zh": "下颌向自身右侧移动",
@@ -142,8 +142,8 @@
     {
       "id": "MouthClose",
       "title": {
-        "zh": "下颌稍张开但双唇保持闭合",
-        "en": "Lower your jaw slightly while keeping your lips together"
+        "zh": "闭唇",
+        "en": "Lips together"
       },
       "instruction": {
         "zh": "下颌稍张开但双唇保持闭合",
@@ -158,8 +158,8 @@
     {
       "id": "MouthDimpleL",
       "title": {
-        "zh": "左嘴角向内收紧，做左侧酒窝",
-        "en": "Draw your left mouth corner inward to make a dimple"
+        "zh": "左侧酒窝",
+        "en": "Left dimple"
       },
       "instruction": {
         "zh": "左嘴角向内收紧，做左侧酒窝",
@@ -174,8 +174,8 @@
     {
       "id": "MouthDimpleR",
       "title": {
-        "zh": "右嘴角向内收紧，做右侧酒窝",
-        "en": "Draw your right mouth corner inward to make a dimple"
+        "zh": "右侧酒窝",
+        "en": "Right dimple"
       },
       "instruction": {
         "zh": "右嘴角向内收紧，做右侧酒窝",
@@ -190,8 +190,8 @@
     {
       "id": "MouthFrownL",
       "title": {
-        "zh": "左嘴角向下压",
-        "en": "Lower your left mouth corner"
+        "zh": "左嘴角下压",
+        "en": "Left corner down"
       },
       "instruction": {
         "zh": "左嘴角向下压",
@@ -206,8 +206,8 @@
     {
       "id": "MouthFrownR",
       "title": {
-        "zh": "右嘴角向下压",
-        "en": "Lower your right mouth corner"
+        "zh": "右嘴角下压",
+        "en": "Right corner down"
       },
       "instruction": {
         "zh": "右嘴角向下压",
@@ -222,8 +222,8 @@
     {
       "id": "MouthFunnel",
       "title": {
-        "zh": "双唇松开，做圆形漏斗口型",
-        "en": "Part your lips into a rounded funnel shape"
+        "zh": "漏斗口型",
+        "en": "Funnel"
       },
       "instruction": {
         "zh": "双唇松开，做圆形漏斗口型",
@@ -239,8 +239,8 @@
     {
       "id": "MouthLeft",
       "title": {
-        "zh": "整张嘴向自身左侧移",
-        "en": "Move your whole mouth to your own left"
+        "zh": "嘴向左移",
+        "en": "Mouth left"
       },
       "instruction": {
         "zh": "整张嘴向自身左侧移",
@@ -255,8 +255,8 @@
     {
       "id": "MouthLowerDownL",
       "title": {
-        "zh": "左半下唇向下拉，露出下齿",
-        "en": "Lower the left half of your lower lip to show lower teeth"
+        "zh": "左下唇下拉",
+        "en": "Left lower lip down"
       },
       "instruction": {
         "zh": "左半下唇向下拉，露出下齿",
@@ -271,8 +271,8 @@
     {
       "id": "MouthLowerDownR",
       "title": {
-        "zh": "右半下唇向下拉，露出下齿",
-        "en": "Lower the right half of your lower lip to show lower teeth"
+        "zh": "右下唇下拉",
+        "en": "Right lower lip down"
       },
       "instruction": {
         "zh": "右半下唇向下拉，露出下齿",
@@ -287,8 +287,8 @@
     {
       "id": "MouthPressL",
       "title": {
-        "zh": "轻压左侧上下唇",
-        "en": "Gently press the left sides of your lips together"
+        "zh": "左侧压唇",
+        "en": "Left lip press"
       },
       "instruction": {
         "zh": "轻压左侧上下唇",
@@ -303,8 +303,8 @@
     {
       "id": "MouthPressR",
       "title": {
-        "zh": "轻压右侧上下唇",
-        "en": "Gently press the right sides of your lips together"
+        "zh": "右侧压唇",
+        "en": "Right lip press"
       },
       "instruction": {
         "zh": "轻压右侧上下唇",
@@ -319,8 +319,8 @@
     {
       "id": "MouthPucker",
       "title": {
-        "zh": "双唇向前噘起，做亲吻口型",
-        "en": "Pucker both lips forward as for a kiss"
+        "zh": "噘嘴",
+        "en": "Pucker"
       },
       "instruction": {
         "zh": "双唇向前噘起，做亲吻口型",
@@ -336,8 +336,8 @@
     {
       "id": "MouthRight",
       "title": {
-        "zh": "整张嘴向自身右侧移",
-        "en": "Move your whole mouth to your own right"
+        "zh": "嘴向右移",
+        "en": "Mouth right"
       },
       "instruction": {
         "zh": "整张嘴向自身右侧移",
@@ -352,8 +352,8 @@
     {
       "id": "MouthRollLower",
       "title": {
-        "zh": "只把下唇向口内卷",
-        "en": "Roll only your lower lip inward"
+        "zh": "下唇内卷",
+        "en": "Roll lower lip"
       },
       "instruction": {
         "zh": "只把下唇向口内卷",
@@ -369,8 +369,8 @@
     {
       "id": "MouthRollUpper",
       "title": {
-        "zh": "只把上唇向口内卷",
-        "en": "Roll only your upper lip inward"
+        "zh": "上唇内卷",
+        "en": "Roll upper lip"
       },
       "instruction": {
         "zh": "只把上唇向口内卷",
@@ -386,8 +386,8 @@
     {
       "id": "MouthShrugLower",
       "title": {
-        "zh": "下唇向上推，轻轻覆盖上唇",
-        "en": "Push your lower lip upward toward and slightly over the upper lip"
+        "zh": "下唇上推",
+        "en": "Lower lip up"
       },
       "instruction": {
         "zh": "下唇向上推，轻轻覆盖上唇",
@@ -402,12 +402,12 @@
     {
       "id": "MouthShrugUpper",
       "title": {
-        "zh": "只把上唇向上耸起，不内卷",
-        "en": "Raise your upper lip without rolling it inward"
+        "zh": "上唇上耸",
+        "en": "Upper lip up"
       },
       "instruction": {
-        "zh": "只把上唇向上耸起，不内卷",
-        "en": "Raise your upper lip without rolling it inward"
+        "zh": "只把上唇向上耸起，上唇不内卷",
+        "en": "Raise only your upper lip, keeping it from rolling inward"
       },
       "front": "MouthShrugUpper.webp",
       "provenance": [
@@ -418,8 +418,8 @@
     {
       "id": "MouthSmileL",
       "title": {
-        "zh": "仅左嘴角轻轻微笑",
-        "en": "Smile gently with only your left mouth corner"
+        "zh": "左侧微笑",
+        "en": "Left smile"
       },
       "instruction": {
         "zh": "仅左嘴角轻轻微笑",
@@ -434,8 +434,8 @@
     {
       "id": "MouthSmileR",
       "title": {
-        "zh": "仅右嘴角轻轻微笑",
-        "en": "Smile gently with only your right mouth corner"
+        "zh": "右侧微笑",
+        "en": "Right smile"
       },
       "instruction": {
         "zh": "仅右嘴角轻轻微笑",
@@ -450,12 +450,12 @@
     {
       "id": "MouthStretchL",
       "title": {
-        "zh": "左嘴角水平向外拉，不向上笑",
-        "en": "Stretch your left mouth corner outward without raising it"
+        "zh": "左嘴角外拉",
+        "en": "Left corner stretch"
       },
       "instruction": {
-        "zh": "左嘴角水平向外拉，不向上笑",
-        "en": "Stretch your left mouth corner outward without raising it"
+        "zh": "左嘴角水平向外拉开，嘴角不上扬",
+        "en": "Stretch your left mouth corner straight outward, keeping it level"
       },
       "front": "MouthStretchL.webp",
       "provenance": [
@@ -466,12 +466,12 @@
     {
       "id": "MouthStretchR",
       "title": {
-        "zh": "右嘴角水平向外拉，不向上笑",
-        "en": "Stretch your right mouth corner outward without raising it"
+        "zh": "右嘴角外拉",
+        "en": "Right corner stretch"
       },
       "instruction": {
-        "zh": "右嘴角水平向外拉，不向上笑",
-        "en": "Stretch your right mouth corner outward without raising it"
+        "zh": "右嘴角水平向外拉开，嘴角不上扬",
+        "en": "Stretch your right mouth corner straight outward, keeping it level"
       },
       "front": "MouthStretchR.webp",
       "provenance": [
@@ -482,8 +482,8 @@
     {
       "id": "MouthUpperUpL",
       "title": {
-        "zh": "只抬起左半上唇，露出上齿",
-        "en": "Raise only the left half of your upper lip to show upper teeth"
+        "zh": "左上唇抬起",
+        "en": "Left upper lip raise"
       },
       "instruction": {
         "zh": "只抬起左半上唇，露出上齿",
@@ -498,8 +498,8 @@
     {
       "id": "MouthUpperUpR",
       "title": {
-        "zh": "只抬起右半上唇，露出上齿",
-        "en": "Raise only the right half of your upper lip to show upper teeth"
+        "zh": "右上唇抬起",
+        "en": "Right upper lip raise"
       },
       "instruction": {
         "zh": "只抬起右半上唇，露出上齿",
@@ -514,8 +514,8 @@
     {
       "id": "NoseSneerL",
       "title": {
-        "zh": "轻皱左鼻翼",
-        "en": "Gently wrinkle the left side of your nose"
+        "zh": "左鼻翼皱起",
+        "en": "Left nose wrinkle"
       },
       "instruction": {
         "zh": "轻皱左鼻翼",
@@ -530,8 +530,8 @@
     {
       "id": "NoseSneerR",
       "title": {
-        "zh": "轻皱右鼻翼",
-        "en": "Gently wrinkle the right side of your nose"
+        "zh": "右鼻翼皱起",
+        "en": "Right nose wrinkle"
       },
       "instruction": {
         "zh": "轻皱右鼻翼",
@@ -546,8 +546,8 @@
     {
       "id": "TongueOut",
       "title": {
-        "zh": "舌头直向前伸到舒适长度",
-        "en": "Extend your tongue straight forward to a comfortable length"
+        "zh": "伸舌",
+        "en": "Tongue out"
       },
       "instruction": {
         "zh": "舌头直向前伸到舒适长度",
@@ -564,8 +564,8 @@
     {
       "id": "TongueLeft",
       "title": {
-        "zh": "舌头向自身左侧伸出",
-        "en": "Extend your tongue to your own left"
+        "zh": "舌向左",
+        "en": "Tongue left"
       },
       "instruction": {
         "zh": "舌头向自身左侧伸出",
@@ -582,8 +582,8 @@
     {
       "id": "TongueRight",
       "title": {
-        "zh": "舌头向自身右侧伸出",
-        "en": "Extend your tongue to your own right"
+        "zh": "舌向右",
+        "en": "Tongue right"
       },
       "instruction": {
         "zh": "舌头向自身右侧伸出",
@@ -600,12 +600,12 @@
     {
       "id": "TongueUp",
       "title": {
-        "zh": "舌体朝上伸，不只是弯起舌尖",
-        "en": "Extend your tongue upward, not just curl the tip"
+        "zh": "舌向上",
+        "en": "Tongue up"
       },
       "instruction": {
-        "zh": "舌体朝上伸，不只是弯起舌尖",
-        "en": "Extend your tongue upward, not just curl the tip"
+        "zh": "整条舌头朝上伸出，不只是弯起舌尖",
+        "en": "Extend your whole tongue upward, not just the tip"
       },
       "front": "TongueUp.webp",
       "provenance": [
@@ -618,8 +618,8 @@
     {
       "id": "TongueDown",
       "title": {
-        "zh": "舌体朝下伸",
-        "en": "Extend your tongue downward"
+        "zh": "舌向下",
+        "en": "Tongue down"
       },
       "instruction": {
         "zh": "舌体朝下伸",
@@ -636,8 +636,8 @@
     {
       "id": "CheekPuffLeft",
       "title": {
-        "zh": "只鼓左腮，右侧尽量放松",
-        "en": "Puff only your left cheek and relax the right"
+        "zh": "左腮鼓起",
+        "en": "Left cheek puff"
       },
       "instruction": {
         "zh": "只鼓左腮，右侧尽量放松",
@@ -652,8 +652,8 @@
     {
       "id": "CheekPuffRight",
       "title": {
-        "zh": "只鼓右腮，左侧尽量放松",
-        "en": "Puff only your right cheek and relax the left"
+        "zh": "右腮鼓起",
+        "en": "Right cheek puff"
       },
       "instruction": {
         "zh": "只鼓右腮，左侧尽量放松",
@@ -668,8 +668,8 @@
     {
       "id": "CheekSuckLeft",
       "title": {
-        "zh": "只轻吸左腮，不内卷嘴唇",
-        "en": "Gently suck in only your left cheek without rolling your lips"
+        "zh": "左腮内吸",
+        "en": "Left cheek suck"
       },
       "instruction": {
         "zh": "只轻吸左腮，不内卷嘴唇",
@@ -684,8 +684,8 @@
     {
       "id": "CheekSuckRight",
       "title": {
-        "zh": "只轻吸右腮，不内卷嘴唇",
-        "en": "Gently suck in only your right cheek without rolling your lips"
+        "zh": "右腮内吸",
+        "en": "Right cheek suck"
       },
       "instruction": {
         "zh": "只轻吸右腮，不内卷嘴唇",
@@ -700,8 +700,8 @@
     {
       "id": "MouthTightenerLeft",
       "title": {
-        "zh": "左嘴角水平收紧，区别于压唇或微笑",
-        "en": "Tighten your left mouth corner horizontally, distinct from pressing or smiling"
+        "zh": "左嘴角收紧",
+        "en": "Left corner tighten"
       },
       "instruction": {
         "zh": "左嘴角水平收紧，区别于压唇或微笑",
@@ -716,8 +716,8 @@
     {
       "id": "MouthTightenerRight",
       "title": {
-        "zh": "右嘴角水平收紧，区别于压唇或微笑",
-        "en": "Tighten your right mouth corner horizontally, distinct from pressing or smiling"
+        "zh": "右嘴角收紧",
+        "en": "Right corner tighten"
       },
       "instruction": {
         "zh": "右嘴角水平收紧，区别于压唇或微笑",
@@ -732,12 +732,12 @@
     {
       "id": "TongueRoll",
       "title": {
-        "zh": "舌头两侧向上卷成筒形，不只是舌尖上弯；做不到就跳过",
-        "en": "Roll the sides of your tongue into a tube, not just curl the tip; skip if unable"
+        "zh": "卷舌",
+        "en": "Tongue roll"
       },
       "instruction": {
-        "zh": "舌头两侧向上卷成筒形，不只是舌尖上弯；做不到就跳过",
-        "en": "Roll the sides of your tongue into a tube, not just curl the tip; skip if unable"
+        "zh": "舌头两侧向上卷成筒形，不只是舌尖上弯；做不到可以跳过",
+        "en": "Roll the sides of your tongue into a tube, not just the tip; skip if you cannot"
       },
       "front": "TongueRoll.webp",
       "provenance": [
@@ -750,8 +750,8 @@
     {
       "id": "MouthUpperLeft",
       "title": {
-        "zh": "只让上唇向自身左侧横移，下唇放松",
-        "en": "Move only your upper lip to your own left; relax the lower lip"
+        "zh": "上唇左移",
+        "en": "Upper lip left"
       },
       "instruction": {
         "zh": "只让上唇向自身左侧横移，下唇放松",
@@ -767,8 +767,8 @@
     {
       "id": "MouthUpperRight",
       "title": {
-        "zh": "只让上唇向自身右侧横移，下唇放松",
-        "en": "Move only your upper lip to your own right; relax the lower lip"
+        "zh": "上唇右移",
+        "en": "Upper lip right"
       },
       "instruction": {
         "zh": "只让上唇向自身右侧横移，下唇放松",
@@ -784,8 +784,8 @@
     {
       "id": "MouthLowerLeft",
       "title": {
-        "zh": "只让下唇向自身左侧横移，尽量不移动下颌",
-        "en": "Move only your lower lip to your own left without moving your jaw"
+        "zh": "下唇左移",
+        "en": "Lower lip left"
       },
       "instruction": {
         "zh": "只让下唇向自身左侧横移，尽量不移动下颌",
@@ -801,8 +801,8 @@
     {
       "id": "MouthLowerRight",
       "title": {
-        "zh": "只让下唇向自身右侧横移，尽量不移动下颌",
-        "en": "Move only your lower lip to your own right without moving your jaw"
+        "zh": "下唇右移",
+        "en": "Lower lip right"
       },
       "instruction": {
         "zh": "只让下唇向自身右侧横移，尽量不移动下颌",
@@ -818,12 +818,12 @@
     {
       "id": "LipFunnelUpper",
       "title": {
-        "zh": "只把上唇外翻成漏斗，下唇放松；不是内卷或上提",
-        "en": "Turn only your upper lip outward into a funnel; relax the lower lip; do not roll inward or raise it"
+        "zh": "上唇漏斗",
+        "en": "Upper lip funnel"
       },
       "instruction": {
-        "zh": "只把上唇外翻成漏斗，下唇放松；不是内卷或上提",
-        "en": "Turn only your upper lip outward into a funnel; relax the lower lip; do not roll inward or raise it"
+        "zh": "只把上唇向外翻成漏斗，下唇放松",
+        "en": "Turn only your upper lip outward into a funnel, lower lip relaxed"
       },
       "front": "LipFunnelUpper.webp",
       "provenance": [
@@ -835,12 +835,12 @@
     {
       "id": "LipFunnelLower",
       "title": {
-        "zh": "只把下唇外翻成漏斗，上唇放松；不是内卷或上推",
-        "en": "Turn only your lower lip outward into a funnel; relax the upper lip; do not roll inward or push up"
+        "zh": "下唇漏斗",
+        "en": "Lower lip funnel"
       },
       "instruction": {
-        "zh": "只把下唇外翻成漏斗，上唇放松；不是内卷或上推",
-        "en": "Turn only your lower lip outward into a funnel; relax the upper lip; do not roll inward or push up"
+        "zh": "只把下唇向外翻成漏斗，上唇放松",
+        "en": "Turn only your lower lip outward into a funnel, upper lip relaxed"
       },
       "front": "LipFunnelLower.webp",
       "provenance": [
@@ -852,8 +852,8 @@
     {
       "id": "tongue_short",
       "title": {
-        "zh": "舌尖刚超过唇缘，短伸舌",
-        "en": "Extend your tongue just past your lips"
+        "zh": "短伸舌",
+        "en": "Short extension"
       },
       "instruction": {
         "zh": "舌尖刚超过唇缘，短伸舌",
@@ -870,8 +870,8 @@
     {
       "id": "tongue_medium",
       "title": {
-        "zh": "舌头向前伸到个人舒适行程的一半",
-        "en": "Extend your tongue to about half your comfortable range"
+        "zh": "中等伸舌",
+        "en": "Medium extension"
       },
       "instruction": {
         "zh": "舌头向前伸到个人舒适行程的一半",
@@ -888,8 +888,8 @@
     {
       "id": "tongue_long",
       "title": {
-        "zh": "舌头充分但舒适地向前伸",
-        "en": "Extend your tongue fully but comfortably"
+        "zh": "长伸舌",
+        "en": "Long extension"
       },
       "instruction": {
         "zh": "舌头充分但舒适地向前伸",
@@ -906,8 +906,8 @@
     {
       "id": "tongue_sweep",
       "title": {
-        "zh": "缓慢短、中、长伸舌，再缓慢收回，重复一次",
-        "en": "Slowly extend short, medium, long, then retract; repeat once"
+        "zh": "伸舌往返",
+        "en": "Extension sweep"
       },
       "instruction": {
         "zh": "缓慢短、中、长伸舌，再缓慢收回，重复一次",
@@ -924,8 +924,8 @@
     {
       "id": "tongue_left_up",
       "title": {
-        "zh": "舌头向自身左上方伸出",
-        "en": "Extend your tongue up-left"
+        "zh": "舌向左上",
+        "en": "Tongue up-left"
       },
       "instruction": {
         "zh": "舌头向自身左上方伸出",
@@ -942,8 +942,8 @@
     {
       "id": "tongue_right_up",
       "title": {
-        "zh": "舌头向自身右上方伸出",
-        "en": "Extend your tongue up-right"
+        "zh": "舌向右上",
+        "en": "Tongue up-right"
       },
       "instruction": {
         "zh": "舌头向自身右上方伸出",
@@ -960,8 +960,8 @@
     {
       "id": "tongue_left_down",
       "title": {
-        "zh": "舌头向自身左下方伸出",
-        "en": "Extend your tongue down-left"
+        "zh": "舌向左下",
+        "en": "Tongue down-left"
       },
       "instruction": {
         "zh": "舌头向自身左下方伸出",
@@ -978,8 +978,8 @@
     {
       "id": "tongue_right_down",
       "title": {
-        "zh": "舌头向自身右下方伸出",
-        "en": "Extend your tongue down-right"
+        "zh": "舌向右下",
+        "en": "Tongue down-right"
       },
       "instruction": {
         "zh": "舌头向自身右下方伸出",
@@ -996,8 +996,8 @@
     {
       "id": "lips_opposed_a",
       "title": {
-        "zh": "上唇左移、下唇右移",
-        "en": "Move upper lip left and lower lip right"
+        "zh": "上唇左移 · 下唇右移",
+        "en": "Upper left · lower right"
       },
       "instruction": {
         "zh": "上唇左移、下唇右移",
@@ -1013,8 +1013,8 @@
     {
       "id": "lips_opposed_b",
       "title": {
-        "zh": "上唇右移、下唇左移",
-        "en": "Move upper lip right and lower lip left"
+        "zh": "上唇右移 · 下唇左移",
+        "en": "Upper right · lower left"
       },
       "instruction": {
         "zh": "上唇右移、下唇左移",
@@ -1030,8 +1030,8 @@
     {
       "id": "funnel_both",
       "title": {
-        "zh": "上下唇同时外翻成漏斗",
-        "en": "Funnel upper and lower lips outward together"
+        "zh": "上下唇漏斗",
+        "en": "Both lips funnel"
       },
       "instruction": {
         "zh": "上下唇同时外翻成漏斗",
@@ -1047,8 +1047,8 @@
     {
       "id": "suck_both",
       "title": {
-        "zh": "双侧轻吸腮，不内卷唇",
-        "en": "Gently suck both cheeks inward without rolling lips"
+        "zh": "双腮内吸",
+        "en": "Both cheeks suck"
       },
       "instruction": {
         "zh": "双侧轻吸腮，不内卷唇",
@@ -1063,8 +1063,8 @@
     {
       "id": "jaw_tongue_small",
       "title": {
-        "zh": "小幅张嘴并中等伸舌",
-        "en": "Open your jaw slightly and extend your tongue halfway"
+        "zh": "小张嘴伸舌",
+        "en": "Small opening, tongue out"
       },
       "instruction": {
         "zh": "小幅张嘴并中等伸舌",
@@ -1081,8 +1081,8 @@
     {
       "id": "jaw_tongue_large",
       "title": {
-        "zh": "大幅张嘴并保持相同中等伸舌长度",
-        "en": "Open your jaw widely with the same halfway tongue extension"
+        "zh": "大张嘴伸舌",
+        "en": "Wide opening, tongue out"
       },
       "instruction": {
         "zh": "大幅张嘴并保持相同中等伸舌长度",
@@ -1099,8 +1099,8 @@
     {
       "id": "smile_puff",
       "title": {
-        "zh": "微笑并轻鼓左腮",
-        "en": "Smile and gently puff your left cheek"
+        "zh": "微笑并鼓左腮",
+        "en": "Smile and left cheek puff"
       },
       "instruction": {
         "zh": "微笑并轻鼓左腮",
@@ -1115,12 +1115,12 @@
     {
       "id": "negative_teeth",
       "title": {
-        "zh": "露牙微笑，不伸舌",
-        "en": "Smile showing teeth without extending your tongue"
+        "zh": "露牙微笑",
+        "en": "Smile with teeth"
       },
       "instruction": {
-        "zh": "露牙微笑，不伸舌",
-        "en": "Smile showing teeth without extending your tongue"
+        "zh": "露出牙齿微笑，舌头留在口内",
+        "en": "Smile showing your teeth, tongue inside your mouth"
       },
       "front": "negative_teeth.webp",
       "provenance": [
@@ -1131,12 +1131,12 @@
     {
       "id": "negative_wide_open",
       "title": {
-        "zh": "大张嘴但舌头留在口内",
-        "en": "Open your mouth widely while keeping your tongue inside"
+        "zh": "大张嘴",
+        "en": "Wide open mouth"
       },
       "instruction": {
-        "zh": "大张嘴但舌头留在口内",
-        "en": "Open your mouth widely while keeping your tongue inside"
+        "zh": "大张嘴，舌头留在口内",
+        "en": "Open your mouth wide, tongue inside your mouth"
       },
       "front": "negative_wide_open.webp",
       "provenance": [
@@ -1147,12 +1147,12 @@
     {
       "id": "negative_pucker_release",
       "title": {
-        "zh": "噘嘴再放松，不伸舌",
-        "en": "Pucker and release without extending your tongue"
+        "zh": "噘嘴再放松",
+        "en": "Pucker and release"
       },
       "instruction": {
-        "zh": "噘嘴再放松，不伸舌",
-        "en": "Pucker and release without extending your tongue"
+        "zh": "噘嘴再放松，舌头留在口内",
+        "en": "Pucker, then relax, tongue inside your mouth"
       },
       "front": "negative_pucker_release.webp",
       "provenance": [
@@ -1163,12 +1163,12 @@
     {
       "id": "negative_speech",
       "title": {
-        "zh": "自然说一小段话，不刻意伸舌",
-        "en": "Speak naturally without deliberately extending your tongue"
+        "zh": "自然说话",
+        "en": "Natural speech"
       },
       "instruction": {
-        "zh": "自然说一小段话，不刻意伸舌",
-        "en": "Speak naturally without deliberately extending your tongue"
+        "zh": "自然说一小段话，不用刻意伸舌",
+        "en": "Speak a short passage naturally, with no need to stick out your tongue"
       },
       "front": "negative_speech.webp",
       "provenance": [
@@ -1179,12 +1179,12 @@
     {
       "id": "negative_tip_curl_not_roll",
       "title": {
-        "zh": "只弯起舌尖，不把舌侧卷成筒",
-        "en": "Curl only the tongue tip without rolling the sides into a tube"
+        "zh": "舌尖上弯",
+        "en": "Tongue tip curl"
       },
       "instruction": {
-        "zh": "只弯起舌尖，不把舌侧卷成筒",
-        "en": "Curl only the tongue tip without rolling the sides into a tube"
+        "zh": "只弯起舌尖，舌头两侧保持平展",
+        "en": "Curl only your tongue tip, keeping the sides of the tongue flat"
       },
       "front": "negative_tip_curl_not_roll.webp",
       "provenance": [
@@ -1197,31 +1197,31 @@
     {
       "id": "negative_occluded",
       "title": {
-        "zh": "嘴部被遮挡或不在图内时仅记录未知，不当成无舌",
-        "en": "Record an occluded or out-of-view mouth as unknown, not as no tongue"
+        "zh": "嘴部被遮挡或画外",
+        "en": "Mouth covered or out of view"
       },
       "instruction": {
-        "zh": "嘴部被遮挡或不在图内时仅记录未知，不当成无舌",
-        "en": "Record an occluded or out-of-view mouth as unknown, not as no tongue"
+        "zh": "嘴部被遮挡或不在画面内时，只记为未知，不当作没有伸舌",
+        "en": "When the mouth is covered or out of view, record it as unknown, not as no tongue"
       },
       "unavailable_reason": {
-        "zh": "本阶段是遮挡或重新佩戴操作，不用人物表情图代替，请按文字操作。",
-        "en": "This step concerns occlusion or refitting, not a facial pose. Follow the written instructions."
+        "zh": "这一步是遮挡或重新佩戴，没有对应的表情图，请按文字说明操作。",
+        "en": "This step is about covering the mouth or refitting the headset, so it has no expression image. Follow the written instructions."
       }
     },
     {
       "id": "remount",
       "title": {
-        "zh": "结束本轮，取下并重新佩戴后新建录制会话，跨天再重复",
-        "en": "Stop this recording, remove and refit the headset, then begin a new session; repeat on another day"
+        "zh": "重新佩戴",
+        "en": "Refit the headset"
       },
       "instruction": {
-        "zh": "结束本轮，取下并重新佩戴后新建录制会话，跨天再重复",
-        "en": "Stop this recording, remove and refit the headset, then begin a new session; repeat on another day"
+        "zh": "结束本次录制，取下并重新戴好头显，再开始新的录制；隔天再做一次更好",
+        "en": "Stop this recording, take off and refit the headset, then start a new recording; repeating on another day adds variety"
       },
       "unavailable_reason": {
-        "zh": "本阶段是遮挡或重新佩戴操作，不用人物表情图代替，请按文字操作。",
-        "en": "This step concerns occlusion or refitting, not a facial pose. Follow the written instructions."
+        "zh": "这一步是遮挡或重新佩戴，没有对应的表情图，请按文字说明操作。",
+        "en": "This step is about covering the mouth or refitting the headset, so it has no expression image. Follow the written instructions."
       }
     }
   ]

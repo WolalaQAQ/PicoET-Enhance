@@ -29,9 +29,9 @@ if __name__ == '__main__':
     initial = Path(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else None
     try:
         selected = filedialog.askopenfilename(
-            parent=root, title='PICO Mouth — ONNX',
+            parent=root, title='Choose the whole-mouth model (.onnx)',
             initialdir=str(initial.parent) if initial and initial.parent.is_dir() else None,
-            filetypes=[('ONNX model', '*.onnx')])
+            filetypes=[('ONNX model (*.onnx)', '*.onnx')])
         print(json.dumps(selected, ensure_ascii=True), flush=True)
     finally:
         root.destroy()

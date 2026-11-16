@@ -172,6 +172,22 @@ class FaceRuntimeTests(unittest.TestCase):
                 self.runtime.train('begin', 'local-adapt', {})
             spawn.assert_not_called()
 
+    def test_every_training_form_label_has_bilingual_text(self):
+        import re
+        source = (Path(__file__).parent/'web'/'i18n.mjs').read_text(encoding='utf-8')
+        english, chinese = source.split('"zh-CN": {')
+        alias = dict(device='trainDevice', split='splitPath')
+        keys = set()
+        for operation, fields in self.runtime.training_operations().items():
+            keys.add(operation)
+            for field in fields:
+                keys.add(alias.get(field['name'], field['name']))
+                keys.update('choice-'+choice for choice in field['choices'] or [])
+        for key in keys:
+            pattern = r'(?:^|[\s,{])"?'+re.escape(key)+r'"?\s*:'
+            for language, text in (('en', english), ('zh-CN', chinese)):
+                self.assertRegex(text, re.compile(pattern, re.M), (language, key))
+
     def test_C_recording_role_reaches_first_manifest_before_queued_frame(self):
         self.runtime.start('capture'); wait_for(lambda: self.runtime.connected)
         status = self.runtime.recording('begin', person_id='fixture', confirmed=True,

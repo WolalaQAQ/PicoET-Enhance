@@ -26,13 +26,13 @@ pc-tongue/start.cmd
 
 Open `http://127.0.0.1:8787`. The default Windows environment uses ONNX Runtime DirectML; it works with DirectX 12 GPUs without requiring NVIDIA. The page starts idle and UDP output is off.
 
-The sidebar switches between four separate task pages: **Tracking** selects a headset/model and starts tracking; **Capture** opens the camera and records with separate consent; **Train** explains data preparation and provides advanced training tools; **Settings** contains output, connection, replay and diagnostics. Navigation preserves drafts and active runs without starting or stopping tracking.
+The sidebar switches between four task pages: **Tracking** selects a headset and model and starts tracking; **Capture** opens the camera, shows the expression guide and records after you tick the consent box; **Train** explains how to prepare data and provides advanced training tools; **Settings** holds output, connection, replay and diagnostics. Switching pages keeps unsaved input and any running session.
 
-The main page discovers matching mouth sources on the local network. A single result is selected automatically; choose from the list when several sources are found, or use **Refresh** to search again. Discovery broadcasts on UDP45681, then checks the same service's PTC1 context over TCP without subscribing to images or labels. Run this branch's updated source on the headset; older sources do not answer discovery. A manual address and port remain in Advanced settings for networks that isolate broadcasts.
+The main page looks for matching mouth sources on the local network. A single result is selected automatically; choose from the list when several are found, or click **Find again** to search again. Discovery broadcasts on UDP45681, then checks the service identity over TCP with the PTC1 context, without subscribing to images or labels. The headset needs this branch's updated source; older sources do not answer discovery. If your network blocks broadcasts, enter the address and port under Settings → Connection and performance.
 
-Use **Choose file** to open the PC's file dialog and select a whole-mouth `.onnx`, keeping its same-name `.json` manifest beside it. The page shows the filename and full path. Cancelling retains the previous model. Device and file selection update the draft; settings are saved when you start or explicitly save.
+Click **Choose file** to open the PC's file dialog and select a whole-mouth `.onnx`; its same-name `.json` manifest goes in the same folder. The page shows the file name and full path, and cancelling keeps the previous model. Choosing a device or file updates the draft; settings are saved when you start or click Save.
 
-Inference needs a local whole-mouth `.onnx` and adjacent `.json` manifest. No validated general-purpose mouth/teacher weights are bundled or downloaded automatically. Without a model, use capture-only mode to record the first images and labels; recording does not require a trained model. The old `prepare_model.py` and segmentation/geometry code remain for history and regression checks, not as preparation steps or silent fallbacks.
+Inference needs a local whole-mouth `.onnx` and a `.json` manifest with the same name. This branch bundles no validated general-purpose mouth or teacher weights and downloads none. Without a model, open the camera on the Capture page and record your first images and labels; recording does not need a trained model. The old `prepare_model.py` and the segmentation/geometry code remain for history and regression checks and are not part of the current setup.
 
 ### Other backends
 
@@ -114,22 +114,22 @@ Before opening video, complete the PTC1 context handshake on the same endpoint, 
 
 Guidance covers existing mouth controls, independent cheeks/upper/lower lips, short/medium/full tongue extension, directions/tube Roll, combinations and hard negatives. Exclude transitions and skip actions that cannot be performed or observed. Prompt targets need review; unspecified fields remain unknown rather than zero. In particular, a gated TongueOut zero does not establish that the image contains no slight tongue extension.
 
-Open **Capture** to practice from relaxed/target reference images before connecting a headset. Use Previous/Next; the complete list is under **Choose another expression**. Side views clarify lip and jaw depth, and movement plays only when requested. Front views act as a mirror: image-left is your own left. During guided recording, the card follows the backend's current step rather than the practice selection. Browsing images does not start capture or approve labels. More recording options and image review have separate folded entries on this page.
+Open **Capture** to practice with the relaxed and target reference images before connecting a headset. Use **Previous** and **Next**, or pick from the full list under **Pick another expression**. Side views show lip and jaw depth, and movements play when you click **Play movement**. Front images work like a mirror: the left side of the image is your own left. While recording, the reference card follows the current recording step instead of your practice selection. Browsing images does not start capture or approve labels. More recording options and image review have their own folded sections on this page.
 
-Choose a **Capture preset** before recording; expand **Actions and order** to see every step in sequence. The progress bar displays the current step and the selected plan's total, such as `7 / 12`. Preset selection stays locked during recording, and the actual plan is saved in the recording manifest before any frames arrive.
+Choose a **Capture preset** before recording, and expand **Actions in order** to see every step in sequence. The progress bar shows the current step and the selected plan's total, such as `7 / 12`. The preset is locked once recording starts, and the actual plan is saved in the recording manifest before the first frame arrives.
 
 | Preset | Steps | Contents |
 |---|---:|---|
 | Mouth basics | 12 | Relaxation, opening/closing, left/right smiles, pucker, funnel, cheeks, jaw shifts, tongue extension, relaxation |
 | Tongue movements | 11 | Relaxation, short/medium/full extension, left/right/up/down, side roll, tip-curl contrast, relaxation |
 | Independent lip movements | 13 | Relaxation, upper/lower horizontal shifts, inward rolls, upper/lower funnels, pucker, left/right presses, relaxation |
-| Complete guide (default) | 73 | All existing controls, combinations, extension levels, hard negatives and refitting |
+| Complete guide (default) | 73 | Every named control, combined movements, three tongue-extension lengths, contrast movements and a refit prompt |
 
-After opening the camera and confirming recording consent, **Start recording** uses the selected preset. Selecting or previewing a preset does not record anything or approve image labels. Disabling pose guidance uses free recording without a step count. Finishing the guide does not stop recording; use **Stop recording**.
+After you open the camera and tick the consent box, click **Start recording** to follow the selected preset step by step. For each step, click **Start holding**, hold the pose until **Finish holding** becomes available, then click **Confirm action done**; use **Skip** for any step you cannot do. Selecting or previewing a preset records nothing and approves no labels. Untick **Guide me step by step** for free recording without a step count. The recording keeps running after the last step; click **Finish recording** to end it.
 
-The image pack uses face close-ups of the original [Unity-Movement HighFidelity character](https://github.com/oculus-samples/Unity-Movement/tree/v71.0.0/Samples~/BodyTrackingSamples/HighFidelity). It illustrates 71 of 73 stages, including all 50 named controls, with 70 optional movement animations and 25 side views. Occlusion and refitting remain text-only operations; no neutral image is substituted.
+The image pack uses face close-ups of the original [Unity-Movement HighFidelity character](https://github.com/oculus-samples/Unity-Movement/tree/v71.0.0/Samples~/BodyTrackingSamples/HighFidelity). It illustrates 71 of 73 stages, including all 50 named controls, with 70 optional movement animations and 25 side views. Occlusion and refitting have no image; follow their written instructions.
 
-The source label distinguishes 48 stages made with the original morphs and official corrective rules from 23 stages using added guide controls on the original mesh. Tongue examples add skin binding and continuous bending, including separate side-rolling and tip-curl examples. Independent upper/lower lip shifts use masked horizontal displacement from the original mouth-shift morphs; the other lip and jaw stay in the same position. Original mesh and morph coordinates are preserved. These are visual examples, not measured training targets or original Meta tongue/lip morphs. Source and asset-license notices are included; the original model and SDK code are not bundled.
+The source label separates 48 stages made with the original morphs and official corrective rules from 23 stages that use guide controls added on the original mesh. Tongue examples add skin binding and continuous bending, with separate side-rolling and tip-curl examples. Independent upper and lower lip shifts apply masked horizontal displacement to the original mouth-shift morphs, while the other lip and the jaw stay in place. The original mesh and morph coordinates are unchanged. These images help you copy the movement; training labels come from your review. The tongue and independent lip movements are shown with added guide controls because the original Meta model has no matching morphs. Source and asset-license notices are included; the original model and SDK code are not bundled.
 
 Teacher/student training entry:
 
@@ -151,7 +151,7 @@ The default teacher is DINOv2 ViT-B/14-reg at 392×392. DINOv3 supports ViT-B/16
 
 For personal adaptation, distribute the fine-tuned teacher to the user's PC, generate soft labels from their local images and train their student. Run only the student during normal use. Images, soft labels and personal weights are not uploaded. Distillation on developer data alone does not guarantee all of the teacher's new-user generalization; distillation does not automatically correct teacher errors on that user.
 
-Replay accepts your own NPZ with `images[N,400,400]` uint8, `seq[N]`, and `times[N,3]` source nanoseconds; optional `vendor_ns` and `raw_identity` preserve those identities. Select it in advanced settings. No personal photos or replay dataset is included in the branch.
+Replay accepts your own NPZ with `images[N,400,400]` uint8, `seq[N]`, and `times[N,3]` source nanoseconds; optional `vendor_ns` and `raw_identity` preserve those identities. Select it under Settings → Replay a saved recording. No personal photos or replay dataset is included in the branch.
 
 ## Offline verification
 

@@ -145,7 +145,7 @@ test("read-only preset previews do not replace the external plan or grant headse
   assert.equal(JSON.parse(f.server.calls.at(-1).body).media_ready,false);
   assert.equal(f.el("capture-progress-count").textContent,"0 / 2");
   assert.equal(f.server.status.external_guide.steps.length,1);
-  assert.match(f.el("capture-preset-description").textContent,/Preview only/);
+  assert.ok(f.el("capture-preset-description").textContent.includes(messages.en.capturePreviewOnly));
   assert.ok(f.server.calls.filter(c=>c.method==="POST").every(c=>c.path==="/api/display"));
 });
 test("progress never marks a paused external hold as a finished plan",()=>{
@@ -323,6 +323,15 @@ test("local training form is supplied by backend CLI spec and uses real operatio
   assert.deepEqual(body, {action: "begin", operation: "export", args: {checkpoint: "student.pt", output: "candidate.onnx"}});
   assert.equal(el("train-cancel").disabled, false); await app.train("cancel"); assert.equal(el("train-state").textContent, messages.en.cancelled);
 });
+test("training choice values show localized labels and follow the language", async t => {
+  const {app, server} = setup(t); server.status.training.operations = {"teacher-train": [{name: "tune", required: false, choices: ["frozen", "last-two"], default: "frozen"}]};
+  await app.init(); const options = () => app.trainInputs.get("tune").input.children;
+  assert.deepEqual(options().map(o => o.value), ["frozen", "last-two"]); assert.equal(options()[1].textContent, messages.en["choice-last-two"]);
+  app.setLanguage("zh-CN"); assert.equal(options()[0].textContent, messages["zh-CN"]["choice-frozen"]); assert.deepEqual(options().map(o => o.value), ["frozen", "last-two"]);
+});
+test("DINO form labels do not name a single DINO version", () => {
+  for (const language of ["en", "zh-CN"]) for (const key of ["dino_repo", "backbone_checkpoint"]) assert.doesNotMatch(messages[language][key], /v2|V2|DINOv/);
+});
 test("missing training integration is explicitly disabled, never an empty success", async t => {
   const {app, server, el} = setup(t); server.status.training.operations = {}; await app.init(); await app.train();
   assert.equal(el("train-start").disabled, true); assert.equal(el("train-state").textContent, messages.en.trainUnavailable); assert.ok(!server.calls.some(c => c.path === "/api/training"));
@@ -363,6 +372,7 @@ test("preview toggle is independent, one request at a time and hidden tabs do no
 });
 test("raw HTTP errors stay available with bilingual known-error explanations", async () => {
   const raw = "POST /api/start · HTTP 400: trained_channels missing"; assert.ok(errorMessage("zh-CN", raw).includes(messages["zh-CN"].manifestInvalid));
+  assert.equal(errorMessage("en", "POST /api/model/select · HTTP 400: The adjacent JSON model manifest was not found"), messages.en.modelMissing);
   await assert.rejects(requestJson(async () => Response.json({error: "model missing"}, {status: 422}), "/api/start", {}), /POST \/api\/start.*HTTP 422.*model missing/);
   await assert.rejects(requestJson(async () => new Response("not json"), "/api/status"), /HTTP 200.*not json/);
 });

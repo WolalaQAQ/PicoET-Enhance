@@ -6,13 +6,14 @@ English | [简体中文](CHANGELOG_zh.md)
 
 ### Features
 - Add a persistent current-step counter/progress bar, four ordered capture presets (12/11/13/73 steps) and an expandable action list to Capture. Guided recording uses the selected preset and locks it for the session.
+- Rewrite the wording of all four pages in both languages: buttons, status and error messages, help, preset names and descriptions, the ordered action lists, step prompts and the reference image titles and captions. Each message now says what is happening, what to do and what the result is.
 - Add reusable exact-pair auditing and derived raw-supervision helpers, preserving signed archives, reviewed-label priority and whole-session grouping.
 - Add optional source-weighted MSE/Huber and mild, non-mirrored IR augmentation for matched training comparisons.
 - Support optional 224×224 student inputs, retaining 160×160 by default and restoring input size when reloading checkpoints.
 - Lower the default teacher-head learning rate to `1e-4` after observing sigmoid saturation and zero gradients on sparse real-image supervision; student defaults remain `1e-3`.
 - Support explicitly selected local DINOv3 ViT-B/16, ViT-L/16 and ViT-H+/16 teachers with full 400×400 inputs, head training, last-two-block fine-tuning and the existing pseudo-label/student-distillation flow.
 - Split the PC app into Tracking, Capture, Train and Settings pages with direct links and browser-history navigation. Keep everyday actions visible and move channel tables, technical parameters and individual training operations into advanced entries.
-- Discover mouth sources on the LAN through UDP45681 and verify their PTC1 identity over TCP; retain a manual address in Advanced settings.
+- Discover mouth sources on the LAN through UDP45681 and verify their PTC1 identity over TCP; keep a manual address under Settings → Connection and performance.
 - Select the local ONNX path through the PC's native file dialog, without uploading or copying the model.
 - Add bilingual Meta-Man face close-ups to pose guidance: 71 illustrated stages covering all 50 named controls, 70 opt-in animations and 25 side views, with practice browsing and recording-step matching. Occlusion and refitting remain text-only operations.
 - Add an opt-in 400×400 grayscale JPEG95 camera source with shared-slot IPC and a separate root transport daemon, targeting fresh 90 Hz inputs.

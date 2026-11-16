@@ -9,9 +9,9 @@ POSES = {
     'CheekPuff': ('双侧轻轻鼓腮', 'Gently puff both cheeks'),
     'CheekSquintL': ('抬起左侧面颊，轻轻眯左眼', 'Raise your left cheek with a gentle left squint'),
     'CheekSquintR': ('抬起右侧面颊，轻轻眯右眼', 'Raise your right cheek with a gentle right squint'),
-    'JawForward': ('下颌轻轻前伸，不用力咬牙', 'Gently move your jaw forward without clenching'),
+    'JawForward': ('下颌轻轻前伸，牙齿保持放松', 'Gently move your jaw forward, keeping your teeth relaxed'),
     'JawLeft': ('下颌向自身左侧移动', 'Move your jaw to your own left'),
-    'JawOpen': ('自然张开下颌，不伸舌', 'Open your jaw naturally without extending your tongue'),
+    'JawOpen': ('自然张开下颌，舌头留在口内', 'Open your jaw naturally, tongue inside your mouth'),
     'JawRight': ('下颌向自身右侧移动', 'Move your jaw to your own right'),
     'MouthClose': ('下颌稍张开但双唇保持闭合', 'Lower your jaw slightly while keeping your lips together'),
     'MouthDimpleL': ('左嘴角向内收紧，做左侧酒窝', 'Draw your left mouth corner inward to make a dimple'),
@@ -29,11 +29,11 @@ POSES = {
     'MouthRollLower': ('只把下唇向口内卷', 'Roll only your lower lip inward'),
     'MouthRollUpper': ('只把上唇向口内卷', 'Roll only your upper lip inward'),
     'MouthShrugLower': ('下唇向上推，轻轻覆盖上唇', 'Push your lower lip upward toward and slightly over the upper lip'),
-    'MouthShrugUpper': ('只把上唇向上耸起，不内卷', 'Raise your upper lip without rolling it inward'),
+    'MouthShrugUpper': ('只把上唇向上耸起，上唇不内卷', 'Raise only your upper lip, keeping it from rolling inward'),
     'MouthSmileL': ('仅左嘴角轻轻微笑', 'Smile gently with only your left mouth corner'),
     'MouthSmileR': ('仅右嘴角轻轻微笑', 'Smile gently with only your right mouth corner'),
-    'MouthStretchL': ('左嘴角水平向外拉，不向上笑', 'Stretch your left mouth corner outward without raising it'),
-    'MouthStretchR': ('右嘴角水平向外拉，不向上笑', 'Stretch your right mouth corner outward without raising it'),
+    'MouthStretchL': ('左嘴角水平向外拉开，嘴角不上扬', 'Stretch your left mouth corner straight outward, keeping it level'),
+    'MouthStretchR': ('右嘴角水平向外拉开，嘴角不上扬', 'Stretch your right mouth corner straight outward, keeping it level'),
     'MouthUpperUpL': ('只抬起左半上唇，露出上齿', 'Raise only the left half of your upper lip to show upper teeth'),
     'MouthUpperUpR': ('只抬起右半上唇，露出上齿', 'Raise only the right half of your upper lip to show upper teeth'),
     'NoseSneerL': ('轻皱左鼻翼', 'Gently wrinkle the left side of your nose'),
@@ -41,7 +41,7 @@ POSES = {
     'TongueOut': ('舌头直向前伸到舒适长度', 'Extend your tongue straight forward to a comfortable length'),
     'TongueLeft': ('舌头向自身左侧伸出', 'Extend your tongue to your own left'),
     'TongueRight': ('舌头向自身右侧伸出', 'Extend your tongue to your own right'),
-    'TongueUp': ('舌体朝上伸，不只是弯起舌尖', 'Extend your tongue upward, not just curl the tip'),
+    'TongueUp': ('整条舌头朝上伸出，不只是弯起舌尖', 'Extend your whole tongue upward, not just the tip'),
     'TongueDown': ('舌体朝下伸', 'Extend your tongue downward'),
     'CheekPuffLeft': ('只鼓左腮，右侧尽量放松', 'Puff only your left cheek and relax the right'),
     'CheekPuffRight': ('只鼓右腮，左侧尽量放松', 'Puff only your right cheek and relax the left'),
@@ -49,32 +49,35 @@ POSES = {
     'CheekSuckRight': ('只轻吸右腮，不内卷嘴唇', 'Gently suck in only your right cheek without rolling your lips'),
     'MouthTightenerLeft': ('左嘴角水平收紧，区别于压唇或微笑', 'Tighten your left mouth corner horizontally, distinct from pressing or smiling'),
     'MouthTightenerRight': ('右嘴角水平收紧，区别于压唇或微笑', 'Tighten your right mouth corner horizontally, distinct from pressing or smiling'),
-    'TongueRoll': ('舌头两侧向上卷成筒形，不只是舌尖上弯；做不到就跳过', 'Roll the sides of your tongue into a tube, not just curl the tip; skip if unable'),
+    'TongueRoll': ('舌头两侧向上卷成筒形，不只是舌尖上弯；做不到可以跳过', 'Roll the sides of your tongue into a tube, not just the tip; skip if you cannot'),
     'MouthUpperLeft': ('只让上唇向自身左侧横移，下唇放松', 'Move only your upper lip to your own left; relax the lower lip'),
     'MouthUpperRight': ('只让上唇向自身右侧横移，下唇放松', 'Move only your upper lip to your own right; relax the lower lip'),
     'MouthLowerLeft': ('只让下唇向自身左侧横移，尽量不移动下颌', 'Move only your lower lip to your own left without moving your jaw'),
     'MouthLowerRight': ('只让下唇向自身右侧横移，尽量不移动下颌', 'Move only your lower lip to your own right without moving your jaw'),
-    'LipFunnelUpper': ('只把上唇外翻成漏斗，下唇放松；不是内卷或上提', 'Turn only your upper lip outward into a funnel; relax the lower lip; do not roll inward or raise it'),
-    'LipFunnelLower': ('只把下唇外翻成漏斗，上唇放松；不是内卷或上推', 'Turn only your lower lip outward into a funnel; relax the upper lip; do not roll inward or push up'),
+    'LipFunnelUpper': ('只把上唇向外翻成漏斗，下唇放松', 'Turn only your upper lip outward into a funnel, lower lip relaxed'),
+    'LipFunnelLower': ('只把下唇向外翻成漏斗，上唇放松', 'Turn only your lower lip outward into a funnel, upper lip relaxed'),
 }
 
 
 def _step(key, zh, en, labels=None, *, kind='pose', hold_s=3., **extra):
+    if kind == 'remount':
+        prepare = dict(zh=f'最后一步：{zh}。点「完成录制」结束本次录制。',
+                       en=f'Last step: {en}. Click \u201cFinish recording\u201d to end this recording.')
+    else:
+        prepare = dict(zh=f'下一个动作：{zh}。准备好后点「开始保持」。',
+                       en=f'Next: {en}. Click \u201cStart holding\u201d when you are ready.')
     return dict(id=key, title=dict(zh=zh, en=en), kind=kind, labels=dict(labels or {}), hold_s=hold_s,
-                reaction_s=1., tail_s=.3, skippable=True,
-                prepare=dict(zh=f'准备：{zh}。按自身左右；不适或做不到可跳过。准备好后确认开始。',
-                             en=f'Prepare: {en}. Use your own left/right. Skip if uncomfortable or unable. Confirm when ready.'),
-                hold=dict(zh=f'保持：{zh}。稳定后再结束保持；计时只统计连续新图，不能证明动作正确。',
-                          en=f'Hold: {en}. Finish after holding steadily. Timing counts continuous new frames, not pose correctness.'),
-                confirm=dict(zh='确认本次动作是否完成；查看图像后只审核确实可见的通道。未观察、过渡或做不到的项目保持未知。',
-                             en='Confirm whether you performed the action. Review images and label only observed channels. Leave unobserved, transitional or unachievable actions unknown.'),
-                skip=dict(zh='跳过本阶段，保留原始记录，不生成动作真值。',
-                          en='Skip this stage; keep original records without creating pose ground truth.'), **extra)
+                reaction_s=1., tail_s=.3, skippable=True, prepare=prepare,
+                hold=dict(zh=f'保持：{zh}。「结束保持」亮起后点击它。',
+                          en=f'Hold: {en}. Click \u201cFinish holding\u201d when it becomes available.'),
+                confirm=dict(zh='点「确认已完成动作」进入下一步。',
+                             en='Click \u201cConfirm action done\u201d to move on.'),
+                skip=dict(zh='跳过这一步。', en='Skip this step.'), **extra)
 
 
 def prompt_plan():
     """JSON-serializable plan for optional browser speech; no audio/device calls."""
-    steps = [_step('neutral', '自然放松嘴部，舌头收回', 'Relax your mouth naturally with your tongue retracted',
+    steps = [_step('neutral', '自然放松嘴部，舌头收在口内', 'Relax your mouth naturally with your tongue inside',
                    {'TongueOut': 0.}, kind='negative')]
     steps += [_step(name, *POSES[name], {name: 1.}) for name in CHANNELS]
     for name, value, zh, en in (
@@ -100,17 +103,17 @@ def prompt_plan():
     ):
         steps.append(_step(name, zh, en, labels, kind='combination'))
     for name, zh, en in (
-        ('teeth', '露牙微笑，不伸舌', 'Smile showing teeth without extending your tongue'),
-        ('wide_open', '大张嘴但舌头留在口内', 'Open your mouth widely while keeping your tongue inside'),
-        ('pucker_release', '噘嘴再放松，不伸舌', 'Pucker and release without extending your tongue'),
-        ('speech', '自然说一小段话，不刻意伸舌', 'Speak naturally without deliberately extending your tongue'),
-        ('tip_curl_not_roll', '只弯起舌尖，不把舌侧卷成筒', 'Curl only the tongue tip without rolling the sides into a tube'),
-        ('occluded', '嘴部被遮挡或不在图内时仅记录未知，不当成无舌', 'Record an occluded or out-of-view mouth as unknown, not as no tongue')):
+        ('teeth', '露出牙齿微笑，舌头留在口内', 'Smile showing your teeth, tongue inside your mouth'),
+        ('wide_open', '大张嘴，舌头留在口内', 'Open your mouth wide, tongue inside your mouth'),
+        ('pucker_release', '噘嘴再放松，舌头留在口内', 'Pucker, then relax, tongue inside your mouth'),
+        ('speech', '自然说一小段话，不用刻意伸舌', 'Speak a short passage naturally, with no need to stick out your tongue'),
+        ('tip_curl_not_roll', '只弯起舌尖，舌头两侧保持平展', 'Curl only your tongue tip, keeping the sides of the tongue flat'),
+        ('occluded', '嘴部被遮挡或不在画面内时，只记为未知，不当作没有伸舌', 'When the mouth is covered or out of view, record it as unknown, not as no tongue')):
         labels = ({'TongueRoll': 0.} if name == 'tip_curl_not_roll' else
                   {'TongueOut': 0.} if name in ('teeth', 'wide_open', 'pucker_release') else {})
         steps.append(_step('negative_'+name, zh, en, labels, kind='negative', hold_s=5.))
-    steps.append(_step('remount', '结束本轮，取下并重新佩戴后新建录制会话，跨天再重复',
-                       'Stop this recording, remove and refit the headset, then begin a new session; repeat on another day',
+    steps.append(_step('remount', '结束本次录制，取下并重新戴好头显，再开始新的录制；隔天再做一次更好',
+                       'Stop this recording, take off and refit the headset, then start a new recording; repeating on another day adds variety',
                        kind='remount', requires_new_session=True))
     return deepcopy(steps)
 

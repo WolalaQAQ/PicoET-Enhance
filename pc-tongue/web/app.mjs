@@ -91,6 +91,7 @@ export function createApp(doc, options = {}) {
     page: routePage(navigation?.location.hash), cameraPage: "", referencePaintedKey: "", visualReporting: false,
     presets: [], selectedPreset: null, presetPreview: false, presetOptionsKey: "", presetListKey: "", externalCase: null};
   const t = key => messages[state.language][key] ?? key, view = () => deriveView(state.status, state.online, now()-state.at);
+  const choiceLabel = value => messages[state.language][`choice-${value}`] ?? value;
   const fieldLabel = name => t(name === "device" ? "trainDevice" : name === "split" ? "splitPath" : name);
   const rows = new Map(), trainInputs = new Map(); let rowKey = "", specKey = "";
   function clearPreview() {
@@ -117,7 +118,7 @@ export function createApp(doc, options = {}) {
       buildTrainInputs();
     }
     for (const option of get("train-action").children) option.textContent = t(option.value);
-    for (const [name, item] of trainInputs) item.label.textContent = fieldLabel(name);
+    for (const [name, item] of trainInputs) { item.label.textContent = fieldLabel(name); for (const option of item.input.children ?? []) option.textContent = choiceLabel(option.value); }
     const active = training?.running === true;
     get("train-start").disabled = !current.current || !Object.keys(spec).length || active || Boolean(state.busy);
     get("train-cancel").disabled = !current.current || !active || Boolean(state.busy);
@@ -132,7 +133,7 @@ export function createApp(doc, options = {}) {
     trainInputs.clear(); get("train-inputs").replaceChildren();
     for (const field of state.status?.training?.operations?.[get("train-action").value] ?? []) {
       const wrapper = doc.createElement("label"), label = doc.createElement("span"), input = doc.createElement(field.choices ? "select" : "input");
-      if (field.choices) for (const value of field.choices) { const option = doc.createElement("option"); option.value = value; option.textContent = value; input.append(option); }
+      if (field.choices) for (const value of field.choices) { const option = doc.createElement("option"); option.value = value; option.textContent = choiceLabel(value); input.append(option); }
       label.textContent = fieldLabel(field.name); input.value = previous[field.name] ?? field.default ?? ""; if (!field.choices) input.type = field.type ?? "text";
       input.required = field.required === true; wrapper.append(label, input); get("train-inputs").append(wrapper); trainInputs.set(field.name, {input, label});
     }
@@ -140,11 +141,11 @@ export function createApp(doc, options = {}) {
   function availablePresets() {
     const external = state.status?.external_guide;
     if (!external) return state.presets;
-    const name = {zh:`本轮研究采集（${external.role}）`,en:`Current research round (${external.role})`};
+    const name = {zh:`本轮研究采集（${external.role}）`,en:`Research round ${external.role}`};
     const steps = external.steps.map(step => ({id:step.action, demo_id:step.visual.demo_prompt_ids[0],
       title:{zh:step.text,en:state.reference?.poses?.find(p=>p.id===step.visual.demo_prompt_ids[0])?.title?.en ?? step.action}}));
-    return [{id:external.case,name,description:{zh:"本轮已固定动作与顺序。其他预设可预览，不更改本轮计划。",
-      en:"This round has a fixed action order. Other presets can be previewed without changing it."},steps},...state.presets];
+    return [{id:external.case,name,description:{zh:"这一轮的动作和顺序已经固定。其他预设可以预览，不影响本轮。",
+      en:"This round's actions and order are fixed. You can preview other presets without affecting it."},steps},...state.presets];
   }
   function selectedPreset() { return availablePresets().find(p=>p.id===state.selectedPreset); }
   function renderCapturePlan(current) {
