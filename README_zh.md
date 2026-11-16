@@ -201,6 +201,16 @@ pwsh -File build-picoet-enhance.ps1 -Python python # 构建面板并打包 Magis
 
 欢迎提交 Issue。请提供头显型号、PICO OS 版本、模块版本、当前模式，以及 `picoet.sh status` 的输出与相关日志片段。
 
+## 社区
+
+使用求助、交流和版本更新通知，欢迎加入 Pico-Enhance 社区。
+
+<a href="https://discord.gg/ueSEydeVD8"><img src="https://img.shields.io/badge/Discord-Join%20Pico--Enhance-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="加入 Pico-Enhance Discord"></a>
+
+**QQ 群：** 1129699813，用 QQ 扫描下方二维码即可加入。
+
+<img src="assets/community/qq-group-qr.png" alt="Pico-Enhance QQ 群二维码" width="240">
+
 ## 许可证
 
 本项目原创代码与脚本采用 [MIT](LICENSE)。内置的 ShadowHook 2.0.1 源码包含 MIT／BSD 许可的依赖，Magisk ZIP 内附相应声明与项目许可。本项目不包含也不分发任何 PICO 二进制，仅在运行期按数字偏移引用设备自身的库。详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

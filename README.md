@@ -201,6 +201,16 @@ Pushing a `v<version>` tag makes GitHub Actions build on a Windows runner and pu
 
 Issues are welcome. Please include the headset model, PICO OS version, module version, the current mode, the output of `picoet.sh status`, and relevant log excerpts.
 
+## Community
+
+Join the Pico-Enhance community for help, discussion and release announcements.
+
+<a href="https://discord.gg/ueSEydeVD8"><img src="https://img.shields.io/badge/Discord-Join%20Pico--Enhance-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join Pico-Enhance on Discord"></a>
+
+**QQ group:** 1129699813. Scan the code below with QQ to join.
+
+<img src="assets/community/qq-group-qr.png" alt="Pico-Enhance QQ group QR code" width="240">
+
 ## License
 
 The original code and scripts of this project are licensed under [MIT](LICENSE). The vendored ShadowHook 2.0.1 sources include MIT- and BSD-licensed dependencies; the Magisk ZIP includes their notices and the project license. This project contains and distributes no PICO binary; it only references the device's own libraries by numeric offset at runtime. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
