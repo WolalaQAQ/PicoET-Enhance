@@ -13,7 +13,7 @@ import test_ipc as ipc
 import test_camera as camera
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'pc-tongue'))
-from stock import (StockRecord, STOCK_BYTES, read_stock, CaptureContext,
+from stock import (StockRecord, STOCK_BYTES, EYE_WIRE, read_eye, read_stock, CaptureContext,
                     CaptureContextUnavailable, read_capture_context)
 from discovery import DISCOVER, discover_cameras, discover_sources
 
@@ -150,6 +150,40 @@ class StockNativeTests(ipc.IPCTests):
             fresh = self.labels(rt)
             self.assertEqual(self.submit(source, stock(seq=2, session=source.session)), 0)
             self.assertEqual(read_stock(fresh).label_seq, 2)
+
+    def test_stock_eye_gate_is_independent_of_mouth_and_image_streams(self):
+        rt = self.runtime(daemon=False)
+        rt.launch('results-on', 'eyes-off')
+        source = rt.source()
+        mouth = self.labels(rt)
+        image = rt.connect(stream=1)
+        with rt.connect(b'EYES\n', wait_subscription=False, stream=1) as blocked:
+            self.assertEqual(blocked.recv(1), b'')
+        raw = EYE_WIRE.pack(b'PSE1', 1, 64, EYE_WIRE.size, 7, 0, 0, 9, 123, 124, 1000, *([.125] * 64))
+        data = C.create_string_buffer(raw)
+        submit_eye = source.module.lib.ptj_submit_eye
+        submit_eye.argtypes = [C.c_void_p, C.c_void_p]
+        self.assertEqual(submit_eye(source.handle, data), 1)
+        rt.module.fixture(26)
+        def eye_enabled():
+            try:
+                return json.loads((rt.module.root/'ipc-daemon-status.json').read_text())['eye_sharing']
+            except (OSError, ValueError):
+                return False
+        ipc.wait(eye_enabled)
+        eyes = rt.connect(b'EYES\n', wait_subscription=False, stream=1)
+        ipc.wait(lambda: submit_eye(source.handle, data) == 0)
+        record = read_eye(eyes)
+        self.assertEqual((record.capture_session_id, record.service_generation),
+                         (source.session, rt.module.probe()['client_birth']))
+        self.assertEqual((record.source_ns, record.updated_mask, record.valid_mask), ((123, 124), 3, 1))
+        self.assertEqual(record.final20, (.125,)*20)
+        rt.module.fixture(27)
+        self.assertEqual(eyes.recv(1), b'')
+        self.assertEqual(self.submit(source, stock(session=source.session)), 0)
+        self.assertEqual(read_stock(mouth).capture_session_id, source.session)
+        self.assertEqual(source.submit(stream=1), 0)
+        self.assertEqual(ipc.packet(image)[0]['source_seq'], 1)
 
     def test_stock_no_subscriber_wrong_session_and_stop(self):
         rt = self.runtime(); source = rt.source()

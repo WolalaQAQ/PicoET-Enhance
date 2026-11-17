@@ -16,7 +16,7 @@ int main() {
     check(camera_service::parse_owner(prefix,owner));check(owner.pid==123&&owner.birth==456&&owner.command==7);
     check(!camera_service::parse_owner("{}",owner));
     auto memory=std::make_unique<ipc::Channel>();auto& c=*memory;
-    std::memcpy(c.magic,"PTJIPC4",8);c.session=100;c.daemon_pid=50;c.daemon_birth=60;c.daemon_nonce[0]=10;
+    std::memcpy(c.magic,"PTJIPC5",8);c.session=100;c.daemon_pid=50;c.daemon_birth=60;c.daemon_nonce[0]=10;
     c.client_pid=123;c.client_birth=456;c.request_session=100;c.client_ready=1;c.client_nonce[0]=20;
     c.client_root_echo[0]=10;c.attach_ack=1;c.attach_ack_session=100;c.attach_client_nonce[0]=20;c.attach_root_nonce[0]=10;
     check(camera_service::attached(c,123,456));check(!camera_service::attached(c,123,457));

@@ -20,6 +20,7 @@ void failure(Channel& c, uint32_t stage, int error) {
     c.error_stage = stage; c.error_code = uint32_t(error);
     for (auto& image : c.images) image.subscription.store(0, std::memory_order_release);
     c.stock_subscription.store(0, std::memory_order_release);
+    c.eye_subscription.store(0, std::memory_order_release);
     c.state.store(Failed, std::memory_order_release);
 }
 void release_slot(ImageChannel& image, int index) {
@@ -118,6 +119,8 @@ std::string status_json(const Channel& c) {
           << ",\"borrow_active\":" << borrowed[i].active << '}';
     }
     j << ']';
+    j << ",\"eye_sharing\":" << (c.eye_applied.load() == 2)
+      << ",\"eye_subscription\":" << c.eye_subscription.load();
     if (tracking) {
         const auto demand = tracking->snapshot();
         j << ",\"tracking\":{\"wanted\":" << demand.wanted << ",\"active\":" << demand.active
@@ -143,11 +146,13 @@ uint32_t core_failure_stage() {
 }
 }
 int main(int argc, char** argv) {
-    if (argc < 2 || argc > 4 || (argc == 4 && std::strcmp(argv[3], "results-off") && std::strcmp(argv[3], "results-on"))) {
+    if (argc < 2 || argc > 5 || (argc >= 4 && std::strcmp(argv[3], "results-off") && std::strcmp(argv[3], "results-on")) ||
+        (argc == 5 && std::strcmp(argv[4], "eyes-off") && std::strcmp(argv[4], "eyes-on"))) {
         std::fprintf(stderr, "Usage: ptj_ipc_daemon <private-root0700> [port=45681 [results-off|results-on]]\n"); return 2;
     }
-    const bool managed = argc == 4;
+    const bool managed = argc >= 4;
     const bool allow_results = !managed || !std::strcmp(argv[3], "results-on");
+    const bool allow_eyes = argc == 5 && !std::strcmp(argv[4], "eyes-on");
     const std::string root = argv[1];
     int error = private_directory(root);
     if (error) { std::fprintf(stderr, "FAIL stage=private_directory errno=%d\n", error); return 1; }
@@ -155,7 +160,7 @@ int main(int argc, char** argv) {
     error = map_file(mapping, root + "/video-channel.bin", sizeof(Channel), true);
     if (error) { std::fprintf(stderr, "FAIL stage=channel_create errno=%d operation=%s\n", error, map_operation()); return 1; }
     Channel& c = *new(mapping.address) Channel;
-    std::memcpy(c.magic, "PTJIPC4", 8);
+    std::memcpy(c.magic, "PTJIPC5", 8);
     c.daemon_pid = pid(); c.daemon_birth = self_birth(error);
     if (!c.daemon_birth) failure(c, SelfIdentity, error ? error : ESRCH);
     else if ((error = random_nonce(c.daemon_nonce))) failure(c, NonceRandom, error);
@@ -169,7 +174,8 @@ int main(int argc, char** argv) {
     for (uint32_t stream = 0; stream < PTJ_STREAMS && c.state != Failed; ++stream) {
         PTJConfig stream_config = config;
         stream_config.port = uint16_t(config.port + stream); stream_config.reserved = uint16_t(stream);
-        if (core_ptj_start_with_results(&stream_config, &cores[stream], allow_results))
+        if (core_ptj_start_with_results(&stream_config, &cores[stream],
+                                       stream == PTJ_MOUTH ? allow_results : stream == PTJ_EYE_LEFT && allow_eyes))
             failure(c, core_failure_stage(), core_start_errno());
     }
     if (c.state != Failed) {
@@ -186,6 +192,7 @@ int main(int argc, char** argv) {
         unmap_file(mapping); return 1;
     }
     PTJSource* core = cores[PTJ_MOUTH]; // Labels and the legacy control endpoint remain on mouth.
+    PTJSource* eye = cores[PTJ_EYE_LEFT];
     auto native_operation = tracking_operation();
     TrackingDemand demand([&c, native_operation](bool start) {
         if (start) c.capture_epoch.fetch_add(1, std::memory_order_release);
@@ -197,6 +204,8 @@ int main(int argc, char** argv) {
         c.results_request = allow_results ? 2 : 1;
         c.results_applied = c.results_request.load();
     }
+    c.eye_request = allow_eyes ? 2 : 1;
+    c.eye_applied = c.eye_request.load();
     c.state.store(Ready, std::memory_order_release);
     std::printf("READY session=%llu pid=%llu birth=%llu channel_bytes=%zu port=%u\n",
                 (unsigned long long)c.session, (unsigned long long)c.daemon_pid,
@@ -233,14 +242,20 @@ int main(int argc, char** argv) {
         const uint32_t results_request = c.results_request.load();
         const bool change_results = managed && !stopping && results_request != c.results_applied;
         if (change_results) core_ptj_allow_results(core, results_request == 2);
+        const uint32_t eye_request = c.eye_request.load();
+        const bool change_eyes = managed && !stopping && eye_request != c.eye_applied;
+        if (change_eyes) core_ptj_allow_results(eye, eye_request == 2);
         for (uint32_t stream = 0; stream < PTJ_STREAMS; ++stream)
             c.images[stream].subscription.store(!stopping && validated
                 ? core_ptj_image_subscription(cores[stream]) : 0, std::memory_order_release);
         const uint64_t stock_subscription = !stopping && validated ? core_ptj_stock_subscription(core) : 0;
         c.stock_subscription.store(stock_subscription, std::memory_order_release);
+        const uint64_t eye_subscription = !stopping && validated ? core_ptj_stock_subscription(eye) : 0;
+        c.eye_subscription.store(eye_subscription, std::memory_order_release);
         if (change_results) c.results_applied.store(results_request, std::memory_order_release);
+        if (change_eyes) c.eye_applied.store(eye_request, std::memory_order_release);
 #if defined(__ANDROID__)
-        bool wanted = stock_subscription != 0;
+        bool wanted = stock_subscription != 0 || eye_subscription != 0;
         for (const auto& image : c.images) wanted |= image.subscription.load() != 0;
         demand.want(!stopping && wanted);
 #endif
@@ -252,6 +267,13 @@ int main(int argc, char** argv) {
                 ? core_ptj_submit_stock(core, &slot.record, stock_subscription) : PTJ_NO_SUBSCRIBER;
             if (result == PTJ_ACCEPTED) ++c.stock_dispatched;
             else ++c.stock_cancelled;
+            slot.state.store(Free, std::memory_order_release);
+        }
+        for (auto& slot : c.eyes) {
+            uint32_t pending = Pending;
+            if (!slot.state.compare_exchange_strong(pending, Processing, std::memory_order_acq_rel)) continue;
+            if (eye_subscription && eye_subscription == slot.subscription)
+                core_ptj_submit_eye(eye, &slot.record, eye_subscription);
             slot.state.store(Free, std::memory_order_release);
         }
         if (validated && now - last_identity_check >= 100000000ULL) {
@@ -308,6 +330,7 @@ int main(int argc, char** argv) {
     }
     for (auto& image : c.images) image.subscription.store(0, std::memory_order_release);
     c.stock_subscription.store(0, std::memory_order_release);
+    c.eye_subscription.store(0, std::memory_order_release);
     demand.want(false);
     for (;;) {
         const auto state = demand.snapshot();
@@ -330,6 +353,8 @@ int main(int argc, char** argv) {
     const uint64_t drain_deadline = mono_ns() + 500000000ULL;
     auto producers_busy = [&] {
         for (const auto& image : c.images) if (image.producer_lock.load()) return true;
+        for (const auto& slot : c.labels) if (slot.state.load() == Writing) return true;
+        for (const auto& slot : c.eyes) if (slot.state.load() == Writing) return true;
         return false;
     };
     while (producers_busy() && mono_ns() < drain_deadline) {
@@ -337,6 +362,8 @@ int main(int argc, char** argv) {
     }
     if (producers_busy()) { c.error_stage = LocalCalls; c.error_code = EBUSY; }
     else {
+        for (auto& slot : c.labels) slot.state.store(Free, std::memory_order_release);
+        for (auto& slot : c.eyes) slot.state.store(Free, std::memory_order_release);
         for (auto& image : c.images) {
             uint32_t p = image.pending.exchange(0, std::memory_order_acq_rel);
             if (p == 1 || p == 2) { ++image.cancel_stop; release_slot(image, int(p - 1)); }

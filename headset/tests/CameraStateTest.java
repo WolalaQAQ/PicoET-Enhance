@@ -9,6 +9,9 @@ public final class CameraStateTest {
         check(!idle.resultsSupported);
         CameraState results=CameraState.parse(base+"results.enabled=1\nresults.online=1\nresults.clients=1\n");
         check(results.resultsSupported&&results.resultsEnabled&&results.resultsOnline&&results.resultsClients==1);
+        check(!results.eyesSupported);
+        CameraState both=CameraState.parse(base+"results.enabled=0\nresults.online=0\nresults.clients=0\neyes.enabled=1\neyes.online=1\neyes.clients=1\n");
+        check(!both.resultsEnabled&&both.eyesSupported&&both.eyesEnabled&&both.eyesOnline&&both.eyesClients==1);
         check(CameraState.parse(base.replace("state=idle","state=connected").replace("mouth.clients=0","mouth.clients=8")).clients[0]==8);
         CameraState failed=CameraState.parse(base.replace("enabled=1","enabled=0").replace("state=idle","state=error").replace("error=\n","error=stop_pending\n"));
         check(!failed.enabled&&failed.online&&failed.error.equals("stop_pending"));

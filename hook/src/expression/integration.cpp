@@ -24,6 +24,13 @@ struct LabelSink {
     uint64_t sequence = 0;
 };
 LabelSink& label_sink() { static LabelSink value; return value; }
+struct EyeSink {
+    std::mutex mutex;
+    PTJEyeSink callback = nullptr;
+    void* context = nullptr;
+    uint64_t sequence = 0;
+};
+EyeSink& eye_sink() { static EyeSink value; return value; }
 void publish_stock(const MouthState& state, const float raw35[35], const FrameTiming& timing, bool valid) {
     auto& sink = label_sink();
     std::unique_lock<std::mutex> lock(sink.mutex, std::try_to_lock);
@@ -106,6 +113,25 @@ void mark_observation(unsigned group, uint64_t source) {
         frame.updated_mask |= bit;
     }
     frame.export_sources[group] = frame.state->published_sources[group];
+}
+void publish_eye(const Validity& validity) {
+    const unsigned updated = frame.updated_mask & 3;
+    if (!updated) return;
+    auto& sink = eye_sink();
+    std::unique_lock<std::mutex> lock(sink.mutex, std::try_to_lock);
+    if (!lock.owns_lock() || !sink.callback) return;
+    PTJEyeRecord record;
+    record.flags = updated | ((validity.eye[0] && (updated & 1)) ? 4u : 0u)
+                           | ((validity.eye[1] && (updated & 2)) ? 8u : 0u);
+    record.left_source_ns = updated & 1 ? frame.timing.source_ns[0] : 0;
+    record.right_source_ns = updated & 2 ? frame.timing.source_ns[1] : 0;
+    record.sequence = ++sink.sequence;
+    record.produced_mono_ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    std::memcpy(record.raw24, frame.raw, sizeof(record.raw24));
+    std::memcpy(record.post20, frame.post, sizeof(record.post20));
+    std::memcpy(record.final20, frame.filtered, sizeof(record.final20));
+    sink.callback(sink.context, &record);
 }
 }
 
@@ -259,6 +285,7 @@ void end_frame(float* output) {
     for (unsigned eye = 0; eye < 2; ++eye)
         if (frame.state->dt_filter.eye[eye].diagnostics.update == SourceUpdate::Updated)
             mark_observation(eye, frame.timing.source_ns[eye]);
+    publish_eye(validity);
     if (frame.timing.slow && full_completed &&
         (!frame.state->have_mouth_source || frame.timing.source_ns[2] > frame.state->mouth_source)) {
         mark_observation(2, frame.timing.source_ns[2]);
@@ -279,3 +306,9 @@ extern "C" void picoet_set_stock_sink(PTJStockSink callback, void* context) {
     sink.context = context;
 }
 extern "C" uint32_t picoet_stock_input_identity_version() { return 1; }
+extern "C" void picoet_set_eye_sink(PTJEyeSink callback, void* context) {
+    auto& sink = expression_independent::eye_sink();
+    std::lock_guard<std::mutex> lock(sink.mutex);
+    sink.callback = callback;
+    sink.context = context;
+}

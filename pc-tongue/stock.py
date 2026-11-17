@@ -11,6 +11,7 @@ import struct
 STOCK_BYTES = 640
 STOCK_WIRE = struct.Struct('<4sHHII9QiI134f2I')
 CONTEXT_WIRE = struct.Struct('<4sHHQQ')
+EYE_WIRE = struct.Struct('<4sHHII6Q64f')
 VALID, ASSOCIATED, WARMUP = 1, 2, 4
 STAGES = 15  # raw, postprocess-before-clamp, post-clamp instant, temporal final
 
@@ -154,3 +155,34 @@ def _read_exact(sock, count, name):
 
 def read_stock(sock):
     return StockRecord.unpack(_read_exact(sock, STOCK_BYTES, 'PSL1 record'))
+
+
+@dataclass(frozen=True)
+class EyeRecord:
+    capture_session_id: int
+    service_generation: int
+    sequence: int
+    source_ns: tuple
+    produced_mono_ns: int
+    updated_mask: int
+    valid_mask: int
+    raw24: tuple
+    post20: tuple
+    final20: tuple
+
+    @classmethod
+    def unpack(cls, data):
+        magic, version, header, size, flags, session, generation, seq, left, right, produced, *values = EYE_WIRE.unpack(data)
+        updated, valid = flags & 3, flags >> 2
+        if ((magic, version, header, size) != (b'PSE1', 1, 64, EYE_WIRE.size)
+                or not all((session, generation, seq, produced, updated))
+                or valid & ~updated or updated != (bool(left) | (bool(right) << 1))
+                or not all(map(math.isfinite, values))):
+            raise ValueError('invalid PSE1 header, source clocks or values')
+        return cls(session, generation, seq, (left, right), produced, updated, valid,
+                   tuple(values[:24]), tuple(values[24:44]), tuple(values[44:]))
+
+
+def read_eye(sock):
+    """Read one PSE1 observation after sending EYES on the left-camera endpoint."""
+    return EyeRecord.unpack(_read_exact(sock, EYE_WIRE.size, 'PSE1 record'))

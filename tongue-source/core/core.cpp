@@ -95,6 +95,10 @@ struct Frame {
     uint64_t copy_ns = 0, subscription = 0;
     std::shared_ptr<Client> client;
 };
+struct ResultPacket {
+    size_t size;
+    std::array<uint8_t, sizeof(PTJStockRecord)> bytes;
+};
 struct PTJSource {
     uint64_t session;
     uint64_t service_generation = 0; // Root-verified immutable owner; never inferred from labels.
@@ -117,7 +121,7 @@ struct PTJSource {
     Counters stats;
     bool results_allowed = true;
     std::shared_ptr<Client> stock_client;
-    std::array<PTJStockRecord, 16> stock_records;
+    std::array<ResultPacket, 16> stock_records;
     size_t stock_head = 0, stock_size = 0;
     uint64_t stock_connection = 0;
     CoreBorrowStats borrow;
@@ -447,7 +451,7 @@ static void drop_stock_client(PTJSource& s, const std::shared_ptr<Client>& clien
 }
 static void send_stock(PTJSource& s) {
     std::shared_ptr<Client> client;
-    PTJStockRecord record;
+    ResultPacket record;
     bool present = false;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
@@ -462,7 +466,7 @@ static void send_stock(PTJSource& s) {
     char byte;
     const int n = recv(client->fd, &byte, 1, MSG_PEEK);
     if (n == 0 || n > 0 || (n < 0 && !would_block(socket_error()))) { drop_stock_client(s, client); return; }
-    if (present && write_all(s, client->fd, &record, sizeof(record),
+    if (present && write_all(s, client->fd, record.bytes.data(), record.size,
                             mono_ns() + uint64_t(s.timeout_ms) * 1000000ULL) != IOResult::Ok)
         drop_stock_client(s, client);
 }
@@ -626,7 +630,8 @@ static void server_loop(PTJSource& s) {
             if (s.running && !s.client && s.jpeg_clients.empty()) {
                 s.client = std::move(client); ++s.stats.connections; ++s.image_generation; s.has_seq = false;
             }
-        } else if (!s.stream_id && !std::strcmp(command, "LABELS")) {
+        } else if ((!s.stream_id && !std::strcmp(command, "LABELS")) ||
+                   (s.stream_id == PTJ_EYE_LEFT && !std::strcmp(command, "EYES"))) {
             auto client = std::make_shared<Client>(fd, false);
             std::lock_guard<std::mutex> lock(s.mutex);
             if (s.running && s.results_allowed && !s.stock_client) {
@@ -725,16 +730,26 @@ extern "C" PTJ_API uint64_t core_ptj_stock_subscription(const PTJSource* s) {
     std::lock_guard<std::mutex> lock(s->mutex);
     return s->running && s->stock_client ? s->stock_connection : 0;
 }
-extern "C" PTJ_API int core_ptj_submit_stock(PTJSource* s, const PTJStockRecord* record, uint64_t subscription) {
+template<class Record>
+static int submit_result(PTJSource* s, const Record* record, uint64_t subscription, uint32_t stream) {
     if (!s || !record) return PTJ_INVALID;
+    if (s->stream_id != stream) return PTJ_INVALID;
     std::unique_lock<std::mutex> lock(s->mutex, std::try_to_lock);
     if (!lock.owns_lock()) return PTJ_BUSY;
     if (!s->running) return PTJ_STOPPED;
     if (record->capture_session_id != s->session) return PTJ_WRONG_SESSION;
     if (!s->stock_client || subscription != s->stock_connection) return PTJ_NO_SUBSCRIBER;
     if (s->stock_size == s->stock_records.size()) return PTJ_FULL;
-    s->stock_records[(s->stock_head + s->stock_size++) % s->stock_records.size()] = *record;
+    auto& packet = s->stock_records[(s->stock_head + s->stock_size++) % s->stock_records.size()];
+    packet.size = sizeof(Record);
+    std::memcpy(packet.bytes.data(), record, packet.size);
     return PTJ_ACCEPTED;
+}
+extern "C" PTJ_API int core_ptj_submit_stock(PTJSource* s, const PTJStockRecord* record, uint64_t subscription) {
+    return submit_result(s, record, subscription, PTJ_MOUTH);
+}
+extern "C" int core_ptj_submit_eye(PTJSource* s, const PTJEyeRecord* record, uint64_t subscription) {
+    return submit_result(s, record, subscription, PTJ_EYE_LEFT);
 }
 static int submit_frame(PTJSource* s, const uint8_t* pixels, uint32_t stride, const PTJMeta* meta,
                         uint64_t capture_copy_ns, bool borrowed, uint64_t subscription) {

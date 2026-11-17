@@ -31,6 +31,7 @@ struct API {
     CameraSubmitStream submit_stream = nullptr;
     CameraEpoch capture_epoch = nullptr;
     StockSubmit stock = nullptr;
+    decltype(&ptj_submit_eye) eye = nullptr;
     int (*stats)(const PTJSource*, PTJStats*) = nullptr;
     int (*stream_stats)(const PTJSource*, uint32_t, PTJStats*) = nullptr;
     void (*stop)(PTJSource*) = nullptr;
@@ -41,9 +42,11 @@ PTJSource* video = nullptr;
 PTJStats video_stats{};
 PTJStats stream_stats[PTJ_STREAMS]{};
 void (*set_stock_sink)(PTJStockSink, void*) = nullptr;
+void (*set_eye_sink)(PTJEyeSink, void*) = nullptr;
 bool stock_sink_registered = false;
 bool stock_input_identity_supported = false;
 void stock_callback(void*, const PTJStockRecord* record) { if (record) bridge().on_stock(*record); }
+void eye_callback(void* source, const PTJEyeRecord* record) { api.eye(static_cast<PTJSource*>(source), record); }
 uintptr_t service_base = 0;
 void* intercept_handle = nullptr;
 uint8_t owned_window[32]{};
@@ -277,11 +280,12 @@ bool load_video() {
     RESOLVE(start, "ptj_start") RESOLVE(session_id, "ptj_session_id") RESOLVE(submit, "ptj_submit")
     RESOLVE(stats, "ptj_get_stats") RESOLVE(stop, "ptj_stop") RESOLVE(destroy, "ptj_destroy")
     RESOLVE(stock, "ptj_submit_stock")
+    RESOLVE(eye, "ptj_submit_eye")
     RESOLVE(submit_stream, "ptj_submit_stream") RESOLVE(stream_stats, "ptj_get_stream_stats")
     RESOLVE(capture_epoch, "ptj_capture_epoch")
 #undef RESOLVE
     if (!api.start || !api.session_id || !api.submit || !api.stats || !api.stop || !api.destroy ||
-        !api.stock || !api.submit_stream || !api.stream_stats || !api.capture_epoch) {
+         !api.stock || !api.eye || !api.submit_stream || !api.stream_stats || !api.capture_epoch) {
         set_error(-2, "video C ABI exports missing"); dlclose(video_library); video_library = nullptr; return false;
     }
     return true;
@@ -289,6 +293,7 @@ bool load_video() {
 void stop_video(const char* stopped_state = "stopped") {
     state = "stopping";
     if (set_stock_sink) set_stock_sink(nullptr, nullptr); // Drains old callback on control thread.
+    if (set_eye_sink) set_eye_sink(nullptr, nullptr);
     stock_sink_registered = false;
     stock_input_identity_supported = false;
     bridge().detach_and_drain();
@@ -315,6 +320,7 @@ void start_video() {
     void* main_payload = dlopen("libpicoet_hook.so", RTLD_NOW | RTLD_NOLOAD);
     if (main_payload) {
         set_stock_sink = reinterpret_cast<decltype(set_stock_sink)>(dlsym(main_payload, "picoet_set_stock_sink"));
+        set_eye_sink = reinterpret_cast<decltype(set_eye_sink)>(dlsym(main_payload, "picoet_set_eye_sink"));
         auto identity_version = reinterpret_cast<uint32_t (*)()>(dlsym(main_payload, "picoet_stock_input_identity_version"));
         stock_input_identity_supported = identity_version && identity_version() == 1;
         dlclose(main_payload); // The installed main payload remains resident.
@@ -326,6 +332,7 @@ void start_video() {
         stock_sink_registered = true;
     }
     else log("stock labels unavailable: main payload has no stock sink");
+    if (set_eye_sink) set_eye_sink(eye_callback, video);
     state = "armed";
 }
 void commands() {

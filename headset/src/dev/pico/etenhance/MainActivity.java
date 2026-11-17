@@ -22,10 +22,10 @@ public final class MainActivity extends Activity {
     private Context localized;
     private PanelChannel channel;
     private CameraState camera;
-    private Switch toggle, resultsToggle;
+    private Switch toggle, resultsToggle, eyesToggle;
     private Button retry;
-    private TextView status, error, resultsStatus;
-    private LinearLayout resultsCard;
+    private TextView status, error, resultsStatus, eyesStatus;
+    private LinearLayout resultsCard, eyesCard;
     private final TextView[] clients = new TextView[3], addresses = new TextView[3];
     private String pending="", pendingAction="", issue="";
     private boolean rendering;
@@ -114,6 +114,13 @@ public final class MainActivity extends Activity {
         resultsStatus=text("",14,ACCENT,true); resultsCard.addView(resultsStatus); gap(resultsCard,10);
         resultsCard.addView(text(s("camera_results_hint"),14,MUTED,false));
 
+        eyesCard=card(content);
+        eyesToggle=cameraSwitch("camera_eyes_title","camera_eyes_toggle");
+        eyesToggle.setOnCheckedChangeListener((view,checked)->{if(!rendering)request(checked?"camera-eyes-on":"camera-eyes-off");});
+        eyesCard.addView(eyesToggle);
+        eyesStatus=text("",14,ACCENT,true); eyesCard.addView(eyesStatus); gap(eyesCard,10);
+        eyesCard.addView(text(s("camera_eyes_hint"),14,MUTED,false));
+
         LinearLayout processing=card(content);
         processing.addView(text(s("processing_title"),18,TEXT,true)); gap(processing,10);
         processing.addView(text(s("processing_hint"),14,MUTED,false)); gap(processing,18);
@@ -135,6 +142,15 @@ public final class MainActivity extends Activity {
             String resultKey=pendingAction.startsWith("camera-results-")?"updating":
                 camera.resultsOnline?(camera.resultsEnabled?"on":"pending_off"):camera.resultsEnabled?"pending_on":"off";
             resultsStatus.setText(s("camera_results_"+resultKey).replace("{0}",String.valueOf(camera.resultsClients)));
+        }
+        boolean supportsEyes=camera!=null && camera.eyesSupported;
+        eyesCard.setVisibility(supportsEyes?View.VISIBLE:View.GONE);
+        eyesToggle.setChecked(supportsEyes && camera.eyesEnabled);
+        eyesToggle.setEnabled(supportsEyes && pending.isEmpty());
+        if(supportsEyes) {
+            String resultKey=pendingAction.startsWith("camera-eyes-")?"updating":
+                camera.eyesOnline?(camera.eyesEnabled?"on":"pending_off"):camera.eyesEnabled?"pending_on":"off";
+            eyesStatus.setText(s("camera_results_"+resultKey).replace("{0}",String.valueOf(camera.eyesClients)));
         }
         for(int i=0;i<3;++i) {
             clients[i].setText(camera==null?"—":s("camera_clients").replace("{0}",String.valueOf(camera.clients[i])));

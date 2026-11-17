@@ -45,7 +45,7 @@ EXPORT int ipc_test_fixture(const char* root, uint32_t action) {
     if (error) return error;
     auto* c = action == 0 ? new(m.address) Channel : static_cast<Channel*>(m.address);
     if (action == 0) {
-        std::memcpy(c->magic, "PTJIPC4", 8); c->session = mono_ns();
+        std::memcpy(c->magic, "PTJIPC5", 8); c->session = mono_ns();
         c->daemon_pid = pid(); c->daemon_birth = self_birth(error);
         if (!error) error = random_nonce(c->daemon_nonce);
         c->daemon_heartbeat = mono_ns(); c->state = Ready;
@@ -82,6 +82,7 @@ EXPORT int ipc_test_fixture(const char* root, uint32_t action) {
     else if (action == 17) c->request_session ^= 1;
     else if (action == 18) c->attach_client_nonce[0] ^= 1;
     else if (action == 25) ++c->capture_epoch;
+    else if (action == 26 || action == 27) c->eye_request = action == 26 ? 2 : 1;
     else if (action == 23 || action == 24) {
         c->stock_subscription = 123;
         for (auto& label : c->labels) label.state.store(action == 23 ? Pending : Free, std::memory_order_release);

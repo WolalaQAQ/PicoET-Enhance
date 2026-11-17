@@ -44,7 +44,8 @@ inline bool stopped(const ipc::Channel& c, uint64_t pid, uint64_t birth) {
         for(const auto& slot:image.slots) if(slot.state!=ipc::Free) return false;
     }
     for(const auto& label:c.labels) if(label.state!=ipc::Free) return false;
-    return !c.stock_subscription;
+    for(const auto& record:c.eyes) if(record.state!=ipc::Free) return false;
+    return !c.stock_subscription && !c.eye_subscription;
 }
 inline bool unattached_stopped(const ipc::Channel& c) {
     return ipc::valid_header(c) && !c.client_ready && !c.client_pid && c.stop_ack &&

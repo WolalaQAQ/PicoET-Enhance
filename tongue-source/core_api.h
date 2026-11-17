@@ -16,5 +16,6 @@ const char* core_start_stage();
 int core_start_errno();
 uint64_t core_ptj_stock_subscription(const PTJSource*);
 int core_ptj_submit_stock(PTJSource*, const PTJStockRecord*, uint64_t subscription);
+int core_ptj_submit_eye(PTJSource*, const PTJEyeRecord*, uint64_t subscription);
 int core_ptj_bind_capture_context(PTJSource*, uint64_t session, uint64_t service_generation);
 }

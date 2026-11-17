@@ -8,6 +8,8 @@
     <string name="camera_hint">Share the mouth and both eye cameras with apps on your network. Cameras run only while a client subscribes. Turning this off disconnects all three streams; closing this app leaves the service running. Your choice is remembered after a restart.</string>
     <string name="camera_privacy">Anyone on the same network can view these images while sharing is on. Use a trusted private network.</string>
     <string name="camera_results_title">Share mouth results</string>
+    <string name="camera_eyes_title">Share eye results</string>
+    <string name="camera_eyes_hint">Share both eyes’ expression values with apps on this network while LAN cameras are on. Does not change image or Facial Bridge sharing.</string>
     <string name="camera_results_hint">Let apps on this network receive mouth tracking values while LAN cameras are on. This does not affect camera images or Facial Bridge.</string>
     <string name="camera_results_off">Not shared</string>
     <string name="camera_results_pending_on">Allowed · waiting for camera sharing</string>

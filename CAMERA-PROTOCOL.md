@@ -115,8 +115,18 @@ On the module-managed source, enable **Share mouth results** in the companion to
 
 The PC workbench opens a label subscription at the start of a recording only if **Receive headset mouth results** is selected. Preview never opens it. **Training label stage** still controls how training labels are derived. If the label connection is unavailable, images continue and missing labels remain unknown.
 
+PSL1 and images are delivered independently. Pair only records marked associated, using the capture session, verified service generation, original frame number, sensor and vendor timestamps, and raw frame identity. Missing records or images remain unmatched. Do not pair by arrival order or nearest timestamp.
+
+## Eye expression results (PSE1)
+
+Enable **Share eye results** in the companion. It defaults off independently of mouth results. To receive both eyes, send `EYES\n` on a new TCP connection to the advertised `eye_left` port. Turning the switch off disconnects the result subscriber without interrupting image or mouth streams. One eye-result subscriber is supported at a time.
+
+Each little-endian 320-byte record has Python layout `<4sHHII6Q64f`. Its 64-byte header contains magic `PSE1`, version `1`, header size `64`, record size `320`, flags, capture session, verified service generation, result sequence, left and right inference-input timestamps in ns, and production monotonic time in ns. Flags 0/1 mark a new left/right observation; bits 2/3 mark that observation valid. The timestamp is zero for a side not updated; ignore its values.
+
+The payload contains `raw24` (20 expression and four original quality values), `post20` (before clamping), and `final20` (after temporal filtering). Each expression vector is left then right, ten values each: brow down, inner brow up, outer brow up, blink, look down/in/out/up, squint, wide. PSE1 is not a gaze-ray or pupil-position stream. Eye timestamps describe inference inputs; they do not assert a match to individual camera images or independent exposure times. The Python reader is `pc-tongue/stock.py:read_eye`.
+
 ## Source lifecycle
 
 The adapter performs a synchronous protection copy only for subscribed lanes. Each stream has its own two-slot IPC queue, encoder and consumers. The transport daemon owns network sockets; the vendor camera callback does no JPEG encoding or network writes.
 
-The adapter, shim and daemon must be rebuilt together for **PTJIPC4**. PTJ1, PTC1 and PSL1 wire layouts are unchanged. Turning **LAN cameras** off ends all three streams, joins encoders/writers, releases the source's tracking lease and checks acknowledgements for every raw-slot return. Closing the companion app leaves sharing available. The standalone developer `device.py stop` performs the same transport shutdown for its own session; do not use its session state to control the module-managed source.
+Update the main hook, adapter, shim, controller and daemon together for **PTJIPC5**. PTJ1, PTC1 and PSL1 wire layouts are unchanged. Turning **LAN cameras** off ends all subscriptions, joins encoders/writers, releases the source's tracking lease and checks acknowledgements for every raw-slot return. Closing the companion app leaves sharing available. The standalone developer `device.py stop` performs the same shutdown for its own session; do not use its session state to control the module-managed source.

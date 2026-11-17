@@ -13,7 +13,8 @@ final class PanelChannel {
         switch (action) {
             case "read": case "defaults": case "balanced": case "responsive": case "raw": case "apply":
             case "camera-status": case "camera-on": case "camera-off":
-            case "camera-results-on": case "camera-results-off": configuration = ""; break;
+            case "camera-results-on": case "camera-results-off":
+            case "camera-eyes-on": case "camera-eyes-off": configuration = ""; break;
             case "write": case "check": break;
             default: throw new IOException("Unknown action");
         }

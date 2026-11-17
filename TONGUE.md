@@ -76,7 +76,7 @@ python tongue-source/build.py android --ndk <NDK-directory> --cmake <cmake-execu
 
 The outputs are in `tongue-source/build-android/`: `picoet-inject`, `libpicoet_camera_jpeg.so`, `libptj_source.so`, `ptj_ipc_daemon` and the module controller `picoet-camera`. No device libraries or old compiled objects are build inputs. An existing libjpeg-turbo 3.1.2 source checkout can be selected with `--jpeg-source` for an offline build.
 
-For the matching main payload, build the `picoet_hook` target separately in the configured build directory; its output is `tongue-source/build-android/hook/libpicoet_hook.so`. The three-camera adapter, shim and daemon use PTJIPC4 and must be rebuilt together; the PTJ1 image layout is unchanged.
+For the matching main payload, build the `picoet_hook` target separately in the configured build directory; its output is `tongue-source/build-android/hook/libpicoet_hook.so`. Update it with the camera adapter, shim, controller and daemon for PTJIPC5. See [eye result subscriptions](CAMERA-PROTOCOL.md#eye-expression-results-pse1); the mouth workbench does not record PSE1.
 
 Stop all headset eye/face clients before the first injection. Use your own ADB serial:
 

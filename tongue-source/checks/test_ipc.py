@@ -816,7 +816,7 @@ if __name__ == '__main__':
     result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
     report = {'scope': 'Windows actual mapped shim + separate daemon, localhost TCP, no device/GPU work',
               'passed': result.wasSuccessful(), 'tests_run': result.testsRun, 'repeat': args.repeat,
-              'channel_version': 4, 'wire_bytes': WIRE.size, 'stats_bytes': C.sizeof(Stats),
+              'channel_version': 5, 'wire_bytes': WIRE.size, 'stats_bytes': C.sizeof(Stats),
               'case_names': [n for n in dir(IPCTests) if n.startswith('test_')],
                'build_artifacts': {name: hashlib.sha256((BUILD / name).read_bytes()).hexdigest()
                                   for name in ['ptj_source.dll', 'ptj_ipc_daemon.exe', 'ipc_test_probe.dll']},

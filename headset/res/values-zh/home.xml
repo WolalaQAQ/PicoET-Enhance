@@ -8,6 +8,8 @@
     <string name="camera_hint">向同一网络的应用提供嘴和双眼相机。有人订阅时才启动相机；关闭会断开三路传输，退出本应用不会停止后台。开关会记住上次选择。</string>
     <string name="camera_privacy">开启期间，同一网络上的其他人也能查看这些图像。请在可信的私人网络中使用。</string>
     <string name="camera_results_title">共享嘴部结果</string>
+    <string name="camera_eyes_title">共享眼部结果</string>
+    <string name="camera_eyes_hint">开启局域网相机后，允许同网设备接收双眼表情追踪数值。不影响相机画面或 Facial Bridge。</string>
     <string name="camera_results_hint">开启局域网相机后，允许同网设备接收嘴部追踪数值。不影响相机画面或 Facial Bridge。</string>
     <string name="camera_results_off">未共享</string>
     <string name="camera_results_pending_on">已允许 · 等待相机共享就绪</string>

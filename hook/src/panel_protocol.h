@@ -10,7 +10,8 @@ inline bool action_allowed(const std::string& action) {
         action == "responsive" || action == "raw" || action == "check" ||
         action == "write" || action == "apply" || action == "camera-status" ||
         action == "camera-on" || action == "camera-off" ||
-        action == "camera-results-on" || action == "camera-results-off";
+        action == "camera-results-on" || action == "camera-results-off" ||
+        action == "camera-eyes-on" || action == "camera-eyes-off";
 }
 inline bool parse(const std::string& text, Request& out) {
     if (text.size() > max_request || text.compare(0, 5, "PPC1\n") != 0) return false;

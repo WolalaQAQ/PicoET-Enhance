@@ -59,10 +59,10 @@ struct alignas(64) Slot {
     uint64_t copy_mono_ns = 0, subscription = 0;
     uint8_t pixels[PTJ_PIXELS]{};
 };
-struct alignas(64) StockSlot {
+template<class Record> struct alignas(64) ResultSlot {
     std::atomic<uint32_t> state{Free};
     uint64_t subscription = 0;
-    PTJStockRecord record;
+    Record record;
 };
 // A subscription, producer gate and two-slot raw lease belong to one stream.
 struct alignas(64) ImageChannel {
@@ -77,10 +77,9 @@ struct alignas(64) ImageChannel {
 };
 struct alignas(64) Channel {
     char magic[8]{};
-    uint32_t version = 4, bytes = sizeof(Channel);
+    uint32_t version = 5, bytes = sizeof(Channel);
     uint64_t session = 0, daemon_pid = 0, daemon_birth = 0;
     uint64_t daemon_nonce[2]{}; // Immutable root challenge, published with READY.
-    // Use the padding before state without changing the PTJIPC4 layout.
     // 0 = unmanaged/not implemented; 1 = blocked; 2 = allowed.
     std::atomic<uint32_t> results_request{0}, results_applied{0};
     alignas(64) std::atomic<uint32_t> state{Initializing}, stop_request{0}, stop_ack{0};
@@ -98,13 +97,16 @@ struct alignas(64) Channel {
     std::atomic<uint64_t> stock_subscription{0};
     std::atomic<uint64_t> stock_calls{0}, stock_enqueued{0}, stock_full{0};
     std::atomic<uint64_t> stock_unsubscribed{0}, stock_cancelled{0}, stock_dispatched{0};
-    StockSlot labels[16];
+    ResultSlot<PTJStockRecord> labels[16];
+    std::atomic<uint32_t> eye_request{1}, eye_applied{1};
+    std::atomic<uint64_t> eye_subscription{0};
+    ResultSlot<PTJEyeRecord> eyes[16];
 };
 static_assert(alignof(Channel) == 64 && alignof(Slot) == 64, "Channel alignment");
 static_assert(offsetof(Channel, results_request) == 56 && offsetof(Channel, results_applied) == 60 &&
-              offsetof(Channel, state) == 64, "PTJIPC4 result gate layout");
+              offsetof(Channel, state) == 64, "PTJIPC5 mouth result gate layout");
 inline bool valid_header(const Channel& c) {
-    return !std::memcmp(c.magic, "PTJIPC4", 8) && c.version == 4 && c.bytes == sizeof(Channel) &&
+    return !std::memcmp(c.magic, "PTJIPC5", 8) && c.version == 5 && c.bytes == sizeof(Channel) &&
            c.session && c.daemon_pid && c.daemon_birth && (c.daemon_nonce[0] || c.daemon_nonce[1]);
 }
 }

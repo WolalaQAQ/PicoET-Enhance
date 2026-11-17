@@ -274,6 +274,27 @@ extern "C" int ptj_submit_stream(PTJSource* source, uint32_t stream, const uint8
 extern "C" int ptj_submit(PTJSource* source, const uint8_t* pixels, uint32_t stride, const PTJMeta* meta) {
     return ptj_submit_stream(source, PTJ_MOUTH, pixels, stride, meta);
 }
+extern "C" int ptj_submit_eye(PTJSource* source, const PTJEyeRecord* record) {
+    if (!source || !record) return PTJ_INVALID;
+    auto& s = *source;
+    Lease lease(s);
+    if (!lease.valid || !peer(s)) return PTJ_STOPPED;
+    auto& c = *s.channel;
+    if (c.state != Ready || c.stop_request) return PTJ_STOPPED;
+    const uint64_t subscription = c.eye_subscription.load(std::memory_order_acquire);
+    if (!subscription) return PTJ_NO_SUBSCRIBER;
+    for (auto& slot : c.eyes) {
+        uint32_t free = Free;
+        if (!slot.state.compare_exchange_strong(free, Writing, std::memory_order_acq_rel)) continue;
+        slot.record = *record;
+        slot.record.capture_session_id = s.session;
+        slot.record.service_generation = s.own_birth;
+        slot.subscription = subscription;
+        slot.state.store(Pending, std::memory_order_release);
+        return PTJ_ACCEPTED;
+    }
+    return PTJ_FULL;
+}
 extern "C" int ptj_get_stream_stats(const PTJSource* source, uint32_t stream, PTJStats* out) {
     if (!source || !out || stream >= PTJ_STREAMS) return -1;
     PTJSource& s = *const_cast<PTJSource*>(source);

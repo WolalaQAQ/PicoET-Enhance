@@ -2,9 +2,10 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
-## [Unreleased] - 2026-11-18
+## [2.6.0-dev.2] - 2026-11-18
 
 ### Features
+- Add a separate, default-off eye expression result switch and PSE1 subscription carrying both eyes' stages, validity and inference timestamps.
 - Add a default-off headset switch for sharing mouth results and a per-recording PC option to receive them. Turning result sharing off disconnects PSL1 without interrupting images.
 - Let managed Capture use an existing LAN camera service; closing the workbench's subscription leaves other consumers and the service running.
 - Expose independent mouth, left-eye and right-eye LAN streams, a broadcast/multicast camera catalog and HTTP MJPEG endpoints, with a reusable discovery CLI and protocol reference.
@@ -50,7 +51,7 @@ English | [简体中文](CHANGELOG_zh.md)
 - Preserve raw, gated instant and final filtered values separately; a gated TongueOut zero is not an automatic negative label. Split training/validation by person and headset-fit session.
 
 ### Notes & Caveats
-- Rebuild the camera adapter, shim and daemon together for PTJIPC4. Existing PTJ1/PTC1/PSL1 layouts remain unchanged; camera5 timestamps describe a shared parent frame.
+- Rebuild the main hook, adapter, shim, controller and daemon together for PTJIPC5. PTJ1/PTC1/PSL1 wire layouts are unchanged; camera5 timestamps describe a shared parent frame, not PSE1 image associations.
 - Preset selection and practice do not begin recording or approve labels. Guided recording stops automatically; free recording is stopped manually. Pausing the guide retains the raw stream.
 - Model loading and the final runtime merge enforce `validated_channels` and `valid_mask`; legacy training-only manifests no longer enable output.
 - DINOv3 requires its matching local source and authorized weights under the DINOv3 License. DINOv2 remains the CLI default; select v3 B, L or H+ with `--teacher-backbone dinov3`, `dinov3-large` or `dinov3-huge`.

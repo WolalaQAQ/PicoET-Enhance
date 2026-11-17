@@ -4,7 +4,7 @@ English | [简体中文](README_zh.md)
 
 An eye-tracking enhancement Magisk module for the PICO 4 Pro: it opens the eye-tracking service's per-eye gate for real pupil data, decouples the facial expression model so each eye is processed on its own, and targets 90 Hz for both eye and mouth expressions by default instead of the stock rate of about 24 Hz. Use it with [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) and [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule).
 
-> v2.6.0-dev.1 (development branch) · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
+> v2.6.0-dev.2 (development branch) · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
 
 **End-to-end mouth tracking development:** `feat/tongue-pc` follows [MouthLink](https://github.com/UndefinedSignal/MouthLink)-style whole-mouth regression: the headset captures images, the PC handles configuration, recording, training and inference, and the matching UnifiedPicoModule branch merges the outputs. Personal images, teacher predictions and student weights stay on the user's PC. Follow the [source-build and testing guide](TONGUE.md); this branch's module includes optional LAN cameras, but no validated general-purpose mouth model.
 
@@ -70,8 +70,8 @@ The installer verifies the SHA-256 of the device's eye-tracking libraries and st
 2. Flash it in the Magisk app under Install from storage, or from a command line:
 
    ```sh
-    adb push magisk-picoet-enhance-v2.6.0-dev.1.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.0-dev.1.zip'
+    adb push magisk-picoet-enhance-v2.6.0-dev.2.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.0-dev.2.zip'
    ```
 
 3. Reboot the headset.
@@ -83,6 +83,8 @@ Fresh installs enable enhanced mode (`dual/on`) at 90/90 Hz after reboot. If you
 Open **PicoET-Enhance** from the application library. **LAN cameras** on its home screen is the master switch for mouth, left-eye and right-eye images, with actual module status, addresses and client counts. **Expression tuning** opens the complete existing parameter panel.
 
 **Share mouth results** separately allows LAN clients to subscribe to mouth tracking values. It defaults off and does not affect image streams or Facial Bridge.
+
+**Share eye results** allows [PSE1 subscribers](CAMERA-PROTOCOL.md#eye-expression-results-pse1) to receive eye expression values. It also defaults off.
 
 Sharing defaults off and remembers your choice. Clients can discover and independently subscribe to all three streams; cameras run only while subscribed. Switching off disconnects every stream; closing the app leaves the service running. Close other eye/face clients once before the first attachment so the adapter can initialize while tracking is idle. Images are unencrypted and unauthenticated, for trusted private networks. The switch does not change processing settings; ordinary expression forwarding still uses Bridge.
 

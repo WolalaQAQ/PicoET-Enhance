@@ -2,9 +2,10 @@
 
 [English](CHANGELOG.md) | 简体中文
 
-## [Unreleased] - 2026-11-18
+## [2.6.0-dev.2] - 2026-11-18
 
 ### 新功能
+- 新增默认关闭的独立眼部结果开关；PSE1 提供双眼各阶段表情、有效位和推理时间戳。
 - 头显可独立开关嘴部结果共享，默认关闭；PC 可按次选择是否接收。关闭共享时断开 PSL1，三路图像不中断。
 - 自主采集可使用已运行的局域网相机服务；工作台结束自己的订阅后，其他消费者及服务继续可用。
 - 提供独立的嘴、左眼和右眼局域网图像流，支持广播／多播相机目录、HTTP MJPEG，并附可复用的发现CLI及协议说明。
@@ -50,7 +51,7 @@
 - raw、已门控instant与最终滤波值分层保存，不将门控TongueOut=0自动当无舌头真值；训练与验证按人物／佩戴会话分开。
 
 ### 注意事项
-- 相机adapter、shim与daemon须成套重建为PTJIPC4。PTJ1／PTC1／PSL1布局保持不变；camera5时间戳描述同一父帧。
+- 主 hook、相机 adapter、shim、控制器与 daemon 须成套重建为 PTJIPC5。PTJ1／PTC1／PSL1 线协议不变；camera5 时间戳描述同一父帧，不证明与 PSE1 逐图配对。
 - 选择预设和练习不开始录制、不批准标签。引导完成后自动停录，自由录制手动结束；暂停引导时保留原始流。
 - 模型加载和最终运行合并均约束`validated_channels`及`valid_mask`；旧版只有训练覆盖的manifest不再自动启用输出。
 - DINOv3需提供配套本地源码与按DINOv3许可取得的权重。CLI保留DINOv2默认值，分别使用`--teacher-backbone dinov3`、`dinov3-large`及`dinov3-huge`选择v3的B、L及H+教师。

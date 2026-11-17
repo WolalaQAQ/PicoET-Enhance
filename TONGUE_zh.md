@@ -76,7 +76,7 @@ python tongue-source/build.py android --ndk <NDK目录> --cmake <cmake可执行�
 
 输出在`tongue-source/build-android/`：`picoet-inject`、`libpicoet_camera_jpeg.so`、`libptj_source.so`、`ptj_ipc_daemon`及模块控制器`picoet-camera`，不以设备库或旧编译对象为输入。已有libjpeg-turbo 3.1.2源码可用`--jpeg-source`选择，离线构建。
 
-需要配套主payload时，在配置好的build目录另构建`picoet_hook`目标，产出`tongue-source/build-android/hook/libpicoet_hook.so`。三路相机adapter、shim与daemon使用PTJIPC4，须一起重建；图像PTJ1保持不变。
+需要配套主 payload 时，在配置好的构建目录另构建 `picoet_hook` 目标，产出 `tongue-source/build-android/hook/libpicoet_hook.so`。PTJIPC5 需要与相机 adapter、shim、控制器和 daemon 成套更新。眼部结果订阅见[协议](CAMERA-PROTOCOL.md#eye-expression-results-pse1)；整嘴工作台不录制 PSE1。
 
 首次注入前停止所有头显眼／面部客户端，使用自己的ADB序列号：
 
