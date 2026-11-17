@@ -58,6 +58,7 @@ elseif(ANDROID)
   target_link_libraries(ptj_ipc_daemon PRIVATE binder_ndk dl)
   target_link_options(ptj_source PRIVATE -Wl,--exclude-libs,ALL
     "-Wl,--version-script,${CMAKE_CURRENT_SOURCE_DIR}/shim.exports.map")
+  set_property(TARGET ptj_source APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shim.exports.map")
   target_link_options(ptj_ipc_daemon PRIVATE -Wl,--exclude-libs,ALL)
   add_executable(picoet-camera camera_service.cpp platform.cpp)
   target_link_libraries(picoet-camera PRIVATE dl)
