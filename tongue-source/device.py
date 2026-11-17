@@ -190,6 +190,7 @@ def source_capabilities(value):
     stock_available = jpeg_available and stock.get('sink_registered') is True and stock.get('available') is True
     enqueued = (daemon.get('stock') or {}).get('enqueued')
     return dict(jpeg_available=jpeg_available, stock_labels_available=stock_available,
+                camera_streams=camera.get('streams', []),
                 stock_state=stock.get('state', 'unknown_adapter_capability'),
                 stock_ipc_enqueued=enqueued,
                 stock_observed_in_ipc=bool(stock_available and enqueued and enqueued > 0),
@@ -223,6 +224,9 @@ def validate_ipc(value, state, stopped):
                     daemon['stop_ack_session'] != identity['session'] or
                     daemon['stop_client_nonce'] != daemon['client_nonce']):
         raise RuntimeError('Stop was not acknowledged after join; preserve the mapping and do not retry attach')
+    if stopped and any(s['in_use'] or s['borrow_active'] or s['subscription']
+                       for s in daemon.get('streams', [])):
+        raise RuntimeError('A camera stream still owns an IPC lease after stop')
 
 
 def main():

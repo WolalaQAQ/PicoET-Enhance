@@ -1,4 +1,5 @@
 {
   global: ptj_start; ptj_session_id; ptj_submit; ptj_get_stats; ptj_stop; ptj_destroy; ptj_submit_stock;
+          ptj_submit_stream; ptj_get_stream_stats;
   local: *;
 };

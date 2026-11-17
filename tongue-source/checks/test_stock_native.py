@@ -14,7 +14,7 @@ import test_camera as camera
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'pc-tongue'))
 from stock import (StockRecord, STOCK_BYTES, read_stock, CaptureContext,
                     CaptureContextUnavailable, read_capture_context)
-from discovery import DISCOVER, discover_sources
+from discovery import DISCOVER, discover_cameras, discover_sources
 
 Record = C.c_ubyte * STOCK_BYTES
 LIB = C.CDLL(str(ipc.BUILD / 'stock_test.dll'))
@@ -266,6 +266,13 @@ class StockNativeTests(ipc.IPCTests):
         self.assertEqual(device['port'], rt.port)
         self.assertEqual(device['session_id'], str(context.capture_session_id))
         self.assertEqual(device['service_generation'], str(context.service_generation))
+        self.assertEqual([s['id'] for s in device['streams']], ['mouth', 'eye_left', 'eye_right'])
+        self.assertEqual([s['port'] for s in device['streams']], [rt.port, rt.port + 1, rt.port + 2])
+        self.assertEqual([s['source_lane'] for s in device['streams']], [2, 0, 1])
+        self.assertEqual(len(discover_cameras(.03, [('127.0.0.1', rt.port)])['devices']), 1)
+        for stream in range(3):
+            self.assertEqual(rt.module.probe(stream)['subscription'], 0)
+            self.assertEqual(source.stats(stream)['copy_count'], 0)
         self.assertEqual(source.submit(address=1), 1)
         self.assertEqual(rt.module.probe()['stock_subscription'], 0)
 

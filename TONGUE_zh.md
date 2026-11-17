@@ -12,7 +12,9 @@ PICO camera5嘴图lane（400×400灰度、目标90Hz真实新源）
   → 本机UDP45682／MFR1＋逐字段有效位 → UnifiedPicoModule → VRCFT
 ```
 
-相机服务不监听TCP、不运行舌头模型。编码器借用共享槽直到编码／发送结束，省掉第二次整图暂存复制；第一次相机保护复制保留。不用回调计数替换真实帧身份或sensor时间。camera5只有一个合成父图sensor时间，不是三路独立测得的曝光时间。
+原厂相机服务不监听TCP、不运行舌头模型。编码器借用共享槽直到最后一次像素读取结束，省掉第二次整图暂存复制；第一次相机保护复制保留。不用回调计数替换真实帧身份或sensor时间。camera5只有一个合成父图sensor时间，不是三路独立测得的曝光时间。
+
+来源同时提供独立的左眼和右眼图像流。其他客户端可使用同一套[局域网相机协议](CAMERA-PROTOCOL.md)发现和订阅，支持PTJ1及标准HTTP MJPEG。默认端口为嘴45681、左眼45682、右眼45683，每路支持八个图像消费者并发。
 
 ## 1. 准备PC App
 
@@ -28,7 +30,7 @@ pc-tongue/start.cmd
 
 侧栏切换四个独立页面：**追踪**选择头显和模型后开始追踪；**采集**打开画面、跟随示范，勾选同意后录制；**训练**说明素材准备流程并提供高级训练工具；**设置**包含结果输出、连接参数、回放与诊断。切换页面会保留未保存的输入和正在进行的运行。
 
-主界面自动查找同一局域网内的配套嘴部图像源。只找到一台时自动选中，找到多台时从列表中选择，也可以点击“重新查找”再搜一次。查找使用UDP45681广播，再通过TCP的PTC1上下文核对同一服务身份，不订阅图像或标签。头显需要运行本分支的新版图像源，旧版没有发现接口。网络隔离广播时，在设置页的“连接与性能”中填写地址和端口。
+主界面自动查找同一局域网内的配套来源，并选择其嘴部图像流。只找到一台时自动选中，找到多台时从列表中选择，也可以点击“重新查找”再搜一次。查找使用UDP45681广播和多播，通过HTTP复核相机目录、PTC1核对来源身份，不订阅图像或标签；旧版单嘴发现仍可使用。网络隔离发现流量时，在设置页的“连接与性能”中填写地址和端口。
 
 点击“选择文件”打开本机文件窗口，选取整嘴`.onnx`，同名`.json`描述文件放在同一目录。界面显示文件名和完整路径，取消选择会保留原来的模型。选择设备或文件只更新草稿，点击开始或保存后才写入设置。
 
@@ -68,7 +70,7 @@ python tongue-source/build.py android --ndk <NDK目录> --cmake <cmake可执行�
 
 四个输出在`tongue-source/build-android/`：`picoet-inject`、`libpicoet_camera_jpeg.so`、`libptj_source.so`、`ptj_ipc_daemon`，不以设备库或旧编译对象为输入。已有libjpeg-turbo 3.1.2源码可用`--jpeg-source`选择，离线构建。
 
-需要配套主payload时，在配置好的build目录另构建`picoet_hook`目标，产出`tongue-source/build-android/hook/libpicoet_hook.so`。新shim与daemon使用PTJIPC3，必须成套使用；图像PTJ1保持不变。
+需要配套主payload时，在配置好的build目录另构建`picoet_hook`目标，产出`tongue-source/build-android/hook/libpicoet_hook.so`。三路相机adapter、shim与daemon使用PTJIPC4，须一起重建；图像PTJ1保持不变。
 
 首次注入前停止所有头显眼／面部客户端，使用自己的ADB序列号：
 
@@ -76,7 +78,7 @@ python tongue-source/build.py android --ndk <NDK目录> --cmake <cmake可执行�
 python tongue-source/device.py start --serial <serial> --state pc-tongue/user-data/source-session.json
 ```
 
-ADB不在PATH时用`--adb <可执行文件>`。命令上传到本轮唯一root私有目录，仅将两份DSO标为`system_file`，通过现有PicoET控制锁注入，启动daemon，发送绑定owner的start命令并核对IPC身份／nonce ACK。不安装模块、不改SELinux策略、不重启服务、不启动追踪客户端；没有JPEG订阅者时源不复制图像。LAN TCP没有加密或认证，只在可信私网使用，不向外网暴露或转发端口。
+ADB不在PATH时用`--adb <可执行文件>`。命令上传到本轮唯一root私有目录，仅将两份DSO标为`system_file`，通过现有PicoET控制锁注入，启动daemon，发送绑定owner的start命令并核对IPC身份／nonce ACK。不安装模块、不改SELinux策略、不重启服务。Android端在第一个图像或标签订阅到来时取得本服务的原生追踪租约，最后一个退订后释放；未被订阅的图像通道不复制、不编码。LAN TCP没有加密或认证，只在可信私网使用，不向外网暴露或转发端口。
 
 保留state文件，其中绑定设备、boot、服务实例和远端目录。查询及停止使用同一个文件，不沿用记忆中的PID：
 

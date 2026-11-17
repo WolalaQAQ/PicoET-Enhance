@@ -7,6 +7,7 @@
 #include <mutex>
 
 using CameraSubmit = int (*)(PTJSource*, const uint8_t*, uint32_t, const PTJMeta*);
+using CameraSubmitStream = int (*)(PTJSource*, uint32_t, const uint8_t*, uint32_t, const PTJMeta*);
 using StockSubmit = int (*)(PTJSource*, const PTJStockRecord*);
 #define CAMERA_COUNTERS(X) \
     X(callbacks) X(disarmed) X(stale_epoch) X(gate_busy) X(other_camera) \
@@ -38,11 +39,12 @@ class CameraBridge {
     bool audited_camera5 = false;
     PTJSource* source = nullptr;
     CameraSubmit submit = nullptr;
+    CameraSubmitStream submit_stream = nullptr;
     StockSubmit stock_submit = nullptr;
     StockAssociation association;
 public:
     void arm(PTJSource* owner, uint64_t owner_session, CameraSubmit function, StockSubmit labels = nullptr,
-             uint64_t generation = 0, bool audited = false);
+             uint64_t generation = 0, bool audited = false, CameraSubmitStream streams = nullptr);
     void on_stock(const PTJStockRecord&);
     uint64_t ticket() const { return accepting.load(std::memory_order_acquire); }
     // All borrowed frame access and the synchronous submit finish before this returns.

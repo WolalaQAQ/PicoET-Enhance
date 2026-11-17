@@ -274,7 +274,7 @@ static void jpeg_writer(PTJSource& s, Client& client) {
             cancel_jpeg_client(client);
             break;
         }
-        ++s.stats.sent_sources; s.stats.last_sent_seq = frame->header.source_seq;
+        ++s.stats.sent_sources; atomic_max(s.stats.last_sent_seq, frame->header.source_seq);
     }
     // Only a complete frame may be followed by END. A partial write closes instead.
     if (!s.running && !client.closed && !client.mjpeg) {
@@ -472,7 +472,9 @@ static std::string camera_catalog(PTJSource& s) {
     static const unsigned lanes[] = {2, 0, 1};
     std::ostringstream json;
     json << "{\"service\":\"pico-camera\",\"version\":1,\"session_id\":\"" << s.session
-         << "\",\"service_generation\":\"" << s.service_generation << "\",\"streams\":[";
+         << "\",\"service_generation\":\"" << s.service_generation
+         << "\",\"timestamp_semantics\":\"camera5_parent_sensor_ns\",\"independent_eye_exposures\":false"
+            ",\"protocols\":[\"ptj1\",\"http-mjpeg\"],\"max_clients_per_stream\":8,\"streams\":[";
     for (size_t i = 0; i < s.camera_ports.size(); ++i) {
         if (i) json << ',';
         json << "{\"id\":\"" << names[i] << "\",\"source_lane\":" << lanes[i]
@@ -506,6 +508,19 @@ static bool http_response(PTJSource& s, Socket fd, const char* code, const char*
 }
 static void subscribe_jpeg(PTJSource& s, Socket fd, bool http) {
     auto client = std::make_shared<Client>(fd, false, http);
+    if (http) {
+        bool available;
+        { std::lock_guard<std::mutex> lock(s.mutex);
+          available = s.running && !s.client && s.jpeg_clients.size() < 8; }
+        if (!available) {
+            http_response(s, fd, "503 Service Unavailable", "text/plain", "Camera subscriber limit reached\n");
+            return;
+        }
+        static const char response[] =
+            "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=pico-camera\r\n"
+            "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+        if (write_all(s, fd, response, sizeof(response)-1, mono_ns()+100000000ULL) != IOResult::Ok) return;
+    }
     std::lock_guard<std::mutex> lock(s.mutex);
     if (!s.running || s.client || s.jpeg_clients.size() >= 8) return;
     if (s.jpeg_clients.empty()) ++s.image_generation;
@@ -574,12 +589,7 @@ static void server_loop(PTJSource& s) {
         if (!std::strncmp(command, "GET ", 4)) {
             if (!http_headers(s, fd)) { close_socket(fd); continue; }
             if (!std::strncmp(command, "GET /stream.mjpg HTTP/1.", sizeof("GET /stream.mjpg HTTP/1.")-1)) {
-                static const char response[] =
-                    "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=pico-camera\r\n"
-                    "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
-                if (write_all(s, fd, response, sizeof(response)-1, mono_ns()+100000000ULL) == IOResult::Ok)
-                    subscribe_jpeg(s, fd, true);
-                else close_socket(fd);
+                subscribe_jpeg(s, fd, true);
             } else if (!std::strncmp(command, "GET /cameras HTTP/1.", 20) ||
                        !std::strncmp(command, "GET / HTTP/1.", 13)) {
                 const std::string catalog = camera_catalog(s);
@@ -615,7 +625,7 @@ static void server_loop(PTJSource& s) {
             if (s.running && !s.client && s.jpeg_clients.empty()) {
                 s.client = std::move(client); ++s.stats.connections; ++s.image_generation;
             }
-        } else if (!std::strcmp(command, "LABELS")) {
+        } else if (!s.stream_id && !std::strcmp(command, "LABELS")) {
             auto client = std::make_shared<Client>(fd, false);
             std::lock_guard<std::mutex> lock(s.mutex);
             if (s.running && !s.stock_client) { s.stock_client = std::move(client); ++s.stock_connection; }
@@ -767,14 +777,14 @@ extern "C" uint64_t core_ptj_image_subscription(const PTJSource* s) {
     std::lock_guard<std::mutex> lock(s->mutex);
     return s->client || !s->jpeg_clients.empty() ? s->image_generation : 0;
 }
-extern "C" void core_ptj_bind_camera_catalog(PTJSource* s, uint16_t mouth, uint16_t left, uint16_t right) {
+extern "C" int core_ptj_bind_camera_catalog(PTJSource* s, uint16_t mouth, uint16_t left, uint16_t right) {
     std::lock_guard<std::mutex> lock(s->mutex);
     s->camera_ports = {mouth, left, right};
     ip_mreq group{};
     inet_pton(AF_INET, "239.255.255.250", &group.imr_multiaddr);
     group.imr_interface.s_addr = htonl(INADDR_ANY);
-    setsockopt(s->discovery, IPPROTO_IP, IP_ADD_MEMBERSHIP,
-               reinterpret_cast<const char*>(&group), sizeof(group));
+    return setsockopt(s->discovery, IPPROTO_IP, IP_ADD_MEMBERSHIP,
+               reinterpret_cast<const char*>(&group), sizeof(group)) ? socket_error() : 0;
 }
 extern "C" int ptj_get_stats(const PTJSource* s, PTJStats* stats) {
     if (!s || !stats) return -1;

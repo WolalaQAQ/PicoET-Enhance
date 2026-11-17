@@ -2,10 +2,22 @@
 #include "guard_spec.h"
 #include "control_message.h"
 #include "stock_input.h"
+#include "tracking_demand.h"
 #define EXPORT extern "C" __declspec(dllexport)
 EXPORT CameraBridge* camtest_create() { return new CameraBridge; }
 EXPORT void camtest_destroy(CameraBridge* b) { b->detach_and_drain(); delete b; }
 EXPORT void camtest_arm(CameraBridge* b, PTJSource* s, uint64_t session, CameraSubmit fn) { b->arm(s, session, fn); }
+EXPORT void camtest_arm_streams(CameraBridge* b, PTJSource* s, uint64_t session, CameraSubmitStream fn) {
+    b->arm(s, session, nullptr, nullptr, 0, false, fn);
+}
+using TestTracking = int (*)(uint32_t);
+EXPORT TrackingDemand* demandtest_create(TestTracking fn) {
+    return new TrackingDemand([fn](bool start) { return TrackingResult{fn(start), 0, 0}; });
+}
+EXPORT void demandtest_want(TrackingDemand* d, uint32_t wanted) { d->want(wanted != 0); }
+EXPORT void demandtest_snapshot(TrackingDemand* d, TrackingSnapshot* s) { *s = d->snapshot(); }
+EXPORT void demandtest_stop(TrackingDemand* d) { d->stop(); }
+EXPORT void demandtest_destroy(TrackingDemand* d) { delete d; }
 EXPORT void camtest_arm_stock(CameraBridge* b, PTJSource* s, uint64_t session, uint64_t generation,
                                CameraSubmit images, StockSubmit labels, int audited) {
     b->arm(s, session, images, labels, generation, audited != 0);

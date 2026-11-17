@@ -12,7 +12,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from backend import make_server
-from discovery import DISCOVER, discover_sources
+from discovery import CAMERA_DISCOVER, DISCOVER, discover_sources
 from file_dialog import select_model
 from runtime import Runtime, ROOT
 from stock import CaptureContext
@@ -71,7 +71,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(result['devices'], [dict(name='PICO Mouth', host='127.0.0.1',
                                                   port=source.endpoint[1], session_id='123', service_generation='456')])
         self.assertEqual(source.commands.count(b'CONTEXT\n'), 1)
-        self.assertTrue(all(command in (DISCOVER, b'CONTEXT\n') for command in source.commands))
+        self.assertTrue(all(command in (DISCOVER, CAMERA_DISCOVER, b'CONTEXT\n') for command in source.commands))
 
     def test_wrong_generation_and_malformed_replies_are_not_devices(self):
         for advertised in [CaptureContext(123, 999).pack(), b'PTC1', bytes(24)]:

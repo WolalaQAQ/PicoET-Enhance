@@ -64,25 +64,31 @@ struct alignas(64) StockSlot {
     uint64_t subscription = 0;
     PTJStockRecord record;
 };
+// A subscription, producer gate and two-slot raw lease belong to one stream.
+struct alignas(64) ImageChannel {
+    std::atomic<uint32_t> producer_lock{0}, pending{0}; // 3 reserves the pending position.
+    std::atomic<uint64_t> subscription{0};
+    std::atomic<uint64_t> in_use{0}, peak{0}, last_seen_seq{0}, has_seq{0};
+    std::atomic<uint64_t> dispatched{0}, completed{0}, cancel_disconnect{0}, cancel_stop{0}, dispatch_dropped{0};
+    std::atomic<uint64_t> last_capture_copy_ns{0}, last_dispatch_ns{0};
+    alignas(64) AtomicStats producer, core;
+    Slot slots[2];
+};
 struct alignas(64) Channel {
     char magic[8]{};
-    uint32_t version = 3, bytes = sizeof(Channel);
+    uint32_t version = 4, bytes = sizeof(Channel);
     uint64_t session = 0, daemon_pid = 0, daemon_birth = 0;
     uint64_t daemon_nonce[2]{}; // Immutable root challenge, published with READY.
-    alignas(64) std::atomic<uint32_t> state{Initializing}, stop_request{0}, stop_ack{0}, producer_lock{0};
-    std::atomic<uint32_t> pending{0}; // 0=none, 1/2=slot+1, 3=producer's reserved pending position.
+    alignas(64) std::atomic<uint32_t> state{Initializing}, stop_request{0}, stop_ack{0};
     std::atomic<uint32_t> client_ready{0};
-    std::atomic<uint64_t> daemon_heartbeat{0}, subscription{0}, client_pid{0}, client_birth{0}, client_heartbeat{0};
+    std::atomic<uint64_t> daemon_heartbeat{0}, client_pid{0}, client_birth{0}, client_heartbeat{0};
     std::atomic<uint64_t> request_session{0}, client_nonce[2]{}, client_root_echo[2]{};
     std::atomic<uint32_t> attach_ack{0};
     std::atomic<uint64_t> attach_ack_session{0}, attach_client_nonce[2]{}, attach_root_nonce[2]{};
     std::atomic<uint64_t> stop_ack_session{0}, stop_client_nonce[2]{};
     std::atomic<uint32_t> error_stage{None}, error_code{0};
-    std::atomic<uint64_t> in_use{0}, peak{0}, last_seen_seq{0}, has_seq{0};
-    std::atomic<uint64_t> dispatched{0}, completed{0}, cancel_disconnect{0}, cancel_stop{0}, dispatch_dropped{0};
-    std::atomic<uint64_t> peer_rejected{0}, last_capture_copy_ns{0}, last_dispatch_ns{0};
-    alignas(64) AtomicStats producer, core;
-    Slot slots[2];
+    std::atomic<uint64_t> peer_rejected{0};
+    ImageChannel images[3]; // PTJ_MOUTH, PTJ_EYE_LEFT, PTJ_EYE_RIGHT.
     // Labels have no ownership relationship with either image slot.
     std::atomic<uint64_t> stock_subscription{0};
     std::atomic<uint64_t> stock_calls{0}, stock_enqueued{0}, stock_full{0};
@@ -91,7 +97,7 @@ struct alignas(64) Channel {
 };
 static_assert(alignof(Channel) == 64 && alignof(Slot) == 64, "Channel alignment");
 inline bool valid_header(const Channel& c) {
-    return !std::memcmp(c.magic, "PTJIPC3", 8) && c.version == 3 && c.bytes == sizeof(Channel) &&
+    return !std::memcmp(c.magic, "PTJIPC4", 8) && c.version == 4 && c.bytes == sizeof(Channel) &&
            c.session && c.daemon_pid && c.daemon_birth && (c.daemon_nonce[0] || c.daemon_nonce[1]);
 }
 }

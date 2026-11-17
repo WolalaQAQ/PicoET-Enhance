@@ -5,6 +5,8 @@ English | [简体中文](CHANGELOG_zh.md)
 ## [Unreleased] - 2026-11-17
 
 ### Features
+- Expose independent mouth, left-eye and right-eye LAN streams, a broadcast/multicast camera catalog and HTTP MJPEG endpoints, with a reusable discovery CLI and protocol reference.
+- Acquire one native tracking lease on Android for the union of camera/label subscribers and release it after the last consumer leaves.
 - Support concurrent JPEG and standard HTTP MJPEG subscribers with one encoding per source frame and independent, bounded latest-frame delivery.
 - Make Capture self-operated: timed preparation and holds, automatic demonstration changes and recording completion, pause/resume and skip, plus an optional managed source lifecycle behind one recording action.
 - Add a persistent current-step counter/progress bar, four ordered capture presets (12/11/13/73 steps) and an expandable action list to Capture. Guided recording uses the selected preset and locks it for the session.
@@ -25,6 +27,7 @@ English | [简体中文](CHANGELOG_zh.md)
 - Send whole-mouth controls through 256-byte MFR1 with per-field validity on local UDP45682 for the matching UnifiedPicoModule to merge, retaining ORT backend selection and the bilingual app.
 
 ### Design Rationale
+- Give each camera its own bounded raw slots and encoder; perform Binder startup/shutdown on a separate worker so camera demand does not block the IPC heartbeat.
 - Keep image subscription generations stable while any consumer remains; a slow or disconnected client does not hold the raw shared-slot lease or stop other consumers.
 - Advance only with fresh continuous input and a current, visible, loaded-and-painted demonstration. Keep recording controls beside the existing reference images and preserve unknown training targets.
 - Derive the guide length and order from the preset's action list; freeze the selected plan in the recording manifest before frames arrive, while reusing the existing demonstration assets.
@@ -39,6 +42,7 @@ English | [简体中文](CHANGELOG_zh.md)
 - Preserve raw, gated instant and final filtered values separately; a gated TongueOut zero is not an automatic negative label. Split training/validation by person and headset-fit session.
 
 ### Notes & Caveats
+- Rebuild the camera adapter, shim and daemon together for PTJIPC4. Existing PTJ1/PTC1/PSL1 layouts remain unchanged; camera5 timestamps describe a shared parent frame.
 - Preset selection and practice do not begin recording or approve labels. Guided recording stops automatically; free recording is stopped manually. Pausing the guide retains the raw stream.
 - Model loading and the final runtime merge enforce `validated_channels` and `valid_mask`; legacy training-only manifests no longer enable output.
 - DINOv3 requires its matching local source and authorized weights under the DINOv3 License. DINOv2 remains the CLI default; select v3 B, L or H+ with `--teacher-backbone dinov3`, `dinov3-large` or `dinov3-huge`.

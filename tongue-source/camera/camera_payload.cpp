@@ -19,7 +19,7 @@
 #include <unistd.h>
 
 extern "C" __attribute__((visibility("default")))
-const char picoet_camera_jpeg_version[] = "camera5-jpeg95-r1-20261027";
+const char picoet_camera_jpeg_version[] = "camera5-lan-jpeg95-r2-20261117";
 
 namespace {
 #define U(x) static_cast<unsigned long long>(x)
@@ -28,14 +28,17 @@ struct API {
     int (*start)(const PTJConfig*, PTJSource**) = nullptr;
     uint64_t (*session_id)(const PTJSource*) = nullptr;
     CameraSubmit submit = nullptr;
+    CameraSubmitStream submit_stream = nullptr;
     StockSubmit stock = nullptr;
     int (*stats)(const PTJSource*, PTJStats*) = nullptr;
+    int (*stream_stats)(const PTJSource*, uint32_t, PTJStats*) = nullptr;
     void (*stop)(PTJSource*) = nullptr;
     void (*destroy)(PTJSource*) = nullptr;
 } api;
 void* video_library = nullptr;
 PTJSource* video = nullptr;
 PTJStats video_stats{};
+PTJStats stream_stats[PTJ_STREAMS]{};
 void (*set_stock_sink)(PTJStockSink, void*) = nullptr;
 bool stock_sink_registered = false;
 bool stock_input_identity_supported = false;
@@ -102,7 +105,12 @@ bool publish(const Json& json) {
     return ok;
 }
 void status() {
-    if (video) api.stats(video, &video_stats);
+    if (video) {
+        for (uint32_t i = 0; i < PTJ_STREAMS; ++i) api.stream_stats(video, i, &stream_stats[i]);
+        video_stats = stream_stats[PTJ_MOUTH];
+    }
+    bool any_subscribed = false;
+    for (const auto& stream : stream_stats) any_subscribed |= stream.connected != 0;
     CameraStats camera = bridge().snapshot();
     Json j;
     j.add("{\"schema_version\":1,\"version\":\"%s\",\"pid\":%ld,\"start_ticks\":%llu,"
@@ -123,7 +131,7 @@ void status() {
           "\"independent_eye_times_available\":false,\"exposure_synchronization_proven\":false,"
           "\"inactive_until_subscribed\":%s,\"camera\":{\"armed\":%llu,\"epoch\":%llu,"
           "\"in_flight\":%llu,\"identity_fault\":%llu",
-          CameraGuard::ENTRY, video && !video_stats.connected ? "true" : "false",
+          CameraGuard::ENTRY, video && !any_subscribed ? "true" : "false",
           U(camera.armed), U(camera.epoch), U(camera.in_flight), U(camera.identity_fault));
 #define CAMERA_JSON(n) j.add(",\"" #n "\":%llu", U(camera.n));
     CAMERA_COUNTERS(CAMERA_JSON)
@@ -138,11 +146,22 @@ void status() {
     j.add("},\"stock\":{\"protocol\":\"PSL1\",\"sink_registered\":%s,\"available\":%s,"
           "\"state\":\"%s\",\"association_ready\":%s,\"device_verified\":false,"
           "\"input_identity_version\":%u,\"required_main_payload_export\":\"picoet_set_stock_sink\","
-          "\"required_identity_export\":\"picoet_stock_input_identity_version\"}}\n",
+          "\"required_identity_export\":\"picoet_stock_input_identity_version\"}",
           stock_sink_registered ? "true" : "false", stock_available ? "true" : "false",
           stock_capability_state(video != nullptr, stock_sink_registered, camera.armed != 0,
                                  video_stats.running != 0, stock_input_identity_supported),
-          association_ready ? "true" : "false", stock_input_identity_supported ? 1u : 0u);
+           association_ready ? "true" : "false", stock_input_identity_supported ? 1u : 0u);
+    j.add(",\"streams\":[");
+    static const char* names[] = {"mouth", "eye_left", "eye_right"};
+    static constexpr unsigned lanes[] = {2, 0, 1};
+    for (uint32_t i = 0; i < PTJ_STREAMS; ++i) {
+        const auto& stream = stream_stats[i];
+        j.add("%s{\"id\":\"%s\",\"lane\":%u,\"port\":%u,\"running\":%llu,\"connected\":%llu,"
+              "\"queue_in_use\":%llu,\"copy_count\":%llu,\"encoded\":%llu,\"sent_sources\":%llu}",
+              i ? "," : "", names[i], lanes[i], 45681 + i, U(stream.running), U(stream.connected),
+              U(stream.queue_in_use), U(stream.copy_count), U(stream.encoded), U(stream.sent_sources));
+    }
+    j.add("]}\n");
     if (!publish(j)) ++status_failures;
 }
 uint64_t process_start_ticks() {
@@ -257,8 +276,10 @@ bool load_video() {
     RESOLVE(start, "ptj_start") RESOLVE(session_id, "ptj_session_id") RESOLVE(submit, "ptj_submit")
     RESOLVE(stats, "ptj_get_stats") RESOLVE(stop, "ptj_stop") RESOLVE(destroy, "ptj_destroy")
     RESOLVE(stock, "ptj_submit_stock")
+    RESOLVE(submit_stream, "ptj_submit_stream") RESOLVE(stream_stats, "ptj_get_stream_stats")
 #undef RESOLVE
-    if (!api.start || !api.session_id || !api.submit || !api.stats || !api.stop || !api.destroy || !api.stock) {
+    if (!api.start || !api.session_id || !api.submit || !api.stats || !api.stop || !api.destroy ||
+        !api.stock || !api.submit_stream || !api.stream_stats) {
         set_error(-2, "video C ABI exports missing"); dlclose(video_library); video_library = nullptr; return false;
     }
     return true;
@@ -270,7 +291,10 @@ void stop_video(const char* stopped_state = "stopped") {
     stock_input_identity_supported = false;
     bridge().detach_and_drain();
     if (video) {
-        api.stop(video); api.stats(video, &video_stats); api.destroy(video); video = nullptr;
+        api.stop(video);
+        for (uint32_t i = 0; i < PTJ_STREAMS; ++i) api.stream_stats(video, i, &stream_stats[i]);
+        video_stats = stream_stats[PTJ_MOUTH];
+        api.destroy(video); video = nullptr;
     }
     // Keep the video DSO and disabled hook resident. Never dlclose from a callback.
     state = stopped_state;
@@ -282,7 +306,9 @@ void start_video() {
     PTJConfig config{}; config.struct_bytes = sizeof(config);
     int rc = api.start(&config, &video);
     if (rc) { set_error(-2, "ptj_start rc=%d", rc); state = "error"; return; }
-    video_stats = {}; ++starts;
+    video_stats = {};
+    for (auto& stream : stream_stats) stream = {};
+    ++starts;
     // Existing main payload owns inference; no second inference/camera tool.
     void* main_payload = dlopen("libpicoet_hook.so", RTLD_NOW | RTLD_NOLOAD);
     if (main_payload) {
@@ -292,7 +318,7 @@ void start_video() {
         dlclose(main_payload); // The installed main payload remains resident.
     }
     bridge().arm(video, api.session_id(video), api.submit, api.stock, start_ticks,
-                 hook_status == 1 && stock_input_identity_supported);
+                 hook_status == 1 && stock_input_identity_supported, api.submit_stream);
     if (set_stock_sink) {
         set_stock_sink(stock_callback, nullptr);
         stock_sink_registered = true;

@@ -8,9 +8,10 @@ template<class T> T load(const void* p, size_t offset) {
 constexpr uint32_t PREFIX_BYTES = 640000, MAX_BYTES = 2 * 1024 * 1024;
 }
 void CameraBridge::arm(PTJSource* owner, uint64_t owner_session, CameraSubmit function, StockSubmit labels,
-                       uint64_t generation, bool audited) {
+                        uint64_t generation, bool audited, CameraSubmitStream streams) {
     std::lock_guard<std::mutex> lock(gate);
     source = owner; session = owner_session; submit = function;
+    submit_stream = streams;
     stock_submit = labels; service_generation = generation; audited_camera5 = audited;
     association.reset_context(session, service_generation);
     counts.last_identity = 0; counts.last_sensor_ns = 0; counts.first_identity = 0;
@@ -65,19 +66,25 @@ void CameraBridge::on_frame(uint64_t entry_epoch, const void* listener, const vo
     association.observe(meta);
     PTJSource* target = source;
     CameraSubmit function = submit;
+    CameraSubmitStream streams = submit_stream;
     ++flight;
     lock.unlock();
-    // Lane2 == rows 2,6,...1598 of 400-byte rows. Native owns its synchronous copy.
-    const int result = function(target, pixels + 800, 1600, &meta);
-    ++counts.submitted;
-    switch (result) {
-        case PTJ_ACCEPTED: ++counts.accepted; break;
-        case PTJ_NO_SUBSCRIBER: ++counts.no_subscriber; break;
-        case PTJ_DUPLICATE: ++counts.native_duplicate; break;
-        case PTJ_BUSY: ++counts.native_busy; break;
-        case PTJ_FULL: ++counts.native_full; break;
-        case PTJ_STOPPED: ++counts.native_stopped; break;
-        default: ++counts.native_error; break;
+    // Native synchronously protects only subscribed lanes; none escape this callback.
+    static constexpr uint32_t lanes[] = {2, 0, 1};
+    for (uint32_t stream = 0; stream < (streams ? PTJ_STREAMS : 1u); ++stream) {
+        const uint8_t* lane = pixels + lanes[stream] * PTJ_WIDTH;
+        const int result = streams ? streams(target, stream, lane, 1600, &meta)
+                                   : function(target, lane, 1600, &meta);
+        ++counts.submitted;
+        switch (result) {
+            case PTJ_ACCEPTED: ++counts.accepted; break;
+            case PTJ_NO_SUBSCRIBER: ++counts.no_subscriber; break;
+            case PTJ_DUPLICATE: ++counts.native_duplicate; break;
+            case PTJ_BUSY: ++counts.native_busy; break;
+            case PTJ_FULL: ++counts.native_full; break;
+            case PTJ_STOPPED: ++counts.native_stopped; break;
+            default: ++counts.native_error; break;
+        }
     }
     // The control thread NEVER holds this lock across hook, dlopen, network, stop or destroy.
     // Predicate update under the same mutex prevents lost wakeups in detach_and_drain.
@@ -105,7 +112,7 @@ void CameraBridge::detach_and_drain() {
     accepting.store(0, std::memory_order_release);
     std::unique_lock<std::mutex> lock(gate);
     drained.wait(lock, [&] { return flight.load(std::memory_order_relaxed) == 0; });
-    source = nullptr; submit = nullptr; session = 0;
+    source = nullptr; submit = nullptr; submit_stream = nullptr; session = 0;
     stock_submit = nullptr; service_generation = 0; audited_camera5 = false; association.clear();
 }
 CameraStats CameraBridge::snapshot() const {

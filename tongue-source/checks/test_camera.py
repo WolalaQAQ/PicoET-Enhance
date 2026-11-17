@@ -41,10 +41,12 @@ class Stats(C.Structure):
 
 
 Submit = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_void_p, C.c_uint32, C.POINTER(Meta))
+SubmitStream = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_uint32, C.c_void_p, C.c_uint32, C.POINTER(Meta))
 DLL = C.CDLL(str(BUILD / 'camera_bridge_test.dll'))
 DLL.camtest_create.restype = C.c_void_p
 DLL.camtest_destroy.argtypes = [C.c_void_p]
 DLL.camtest_arm.argtypes = [C.c_void_p, C.c_void_p, C.c_uint64, Submit]
+DLL.camtest_arm_streams.argtypes = [C.c_void_p, C.c_void_p, C.c_uint64, SubmitStream]
 DLL.camtest_ticket.argtypes = [C.c_void_p]
 DLL.camtest_ticket.restype = C.c_uint64
 DLL.camtest_frame.argtypes = [C.c_void_p, C.c_uint64, C.c_void_p, C.c_void_p]
@@ -433,12 +435,95 @@ class CameraTests(unittest.TestCase):
         self.assertEqual(command_id.value, 5)
 
 
+class DemandState(C.Structure):
+    _fields_ = [(n, C.c_uint64) for n in ['wanted', 'active', 'busy', 'transitions']] + [
+        (n, C.c_int32) for n in ['transport', 'binder', 'service']]
+
+
+TrackingCall = C.CFUNCTYPE(C.c_int, C.c_uint32)
+DLL.demandtest_create.argtypes = [TrackingCall]
+DLL.demandtest_create.restype = C.c_void_p
+DLL.demandtest_want.argtypes = [C.c_void_p, C.c_uint32]
+DLL.demandtest_snapshot.argtypes = [C.c_void_p, C.POINTER(DemandState)]
+DLL.demandtest_stop.argtypes = [C.c_void_p]
+DLL.demandtest_destroy.argtypes = [C.c_void_p]
+
+
+class TrackingDemandTests(unittest.TestCase):
+    def controller(self, operation):
+        callback = TrackingCall(operation)
+        handle = DLL.demandtest_create(callback)
+        self.addCleanup(lambda: DLL.demandtest_destroy(handle))
+        self.callback = callback
+        def state():
+            result = DemandState()
+            DLL.demandtest_snapshot(handle, C.byref(result))
+            return result
+        return handle, state
+
+    def test_union_demand_has_one_start_and_one_stop(self):
+        events = []
+        handle, state = self.controller(lambda start: events.append(start) or 0)
+        DLL.demandtest_want(handle, 1)
+        wait(lambda: state().active == 1)
+        for _ in range(100):
+            DLL.demandtest_want(handle, 1)
+        self.assertEqual(events, [1])
+        DLL.demandtest_want(handle, 0)
+        wait(lambda: state().transitions == 2)
+        self.assertEqual((state().active, events), (0, [1, 0]))
+
+    def test_cancel_during_cold_start_is_nonblocking_and_releases_lease(self):
+        entered, release = threading.Event(), threading.Event()
+        events = []
+        def operation(start):
+            events.append(start)
+            if start:
+                entered.set()
+                release.wait(3)
+            return 0
+        handle, state = self.controller(operation)
+        self.addCleanup(release.set)
+        DLL.demandtest_want(handle, 1)
+        self.assertTrue(entered.wait(1))
+        begin = time.perf_counter()
+        DLL.demandtest_want(handle, 0)
+        self.assertLess(time.perf_counter() - begin, .1)
+        self.assertEqual((state().wanted, state().busy), (0, 1))
+        release.set()
+        wait(lambda: state().transitions == 2)
+        self.assertEqual((state().active, events), (0, [1, 0]))
+
+    def test_failed_start_waits_for_new_demand_instead_of_retry_loop(self):
+        events = []
+        handle, state = self.controller(lambda start: events.append(start) or -12)
+        DLL.demandtest_want(handle, 1)
+        wait(lambda: state().transitions == 1)
+        for _ in range(100):
+            DLL.demandtest_want(handle, 1)
+        self.assertEqual((state().active, state().transport, events), (0, -12, [1]))
+        DLL.demandtest_want(handle, 0)
+        DLL.demandtest_want(handle, 1)
+        wait(lambda: state().transitions == 2)
+        DLL.demandtest_stop(handle)
+        self.assertEqual(events, [1, 1])
+
+    def test_shutdown_stops_own_active_lease_and_is_idempotent(self):
+        events = []
+        handle, state = self.controller(lambda start: events.append(start) or 0)
+        DLL.demandtest_want(handle, 1)
+        wait(lambda: state().active == 1)
+        DLL.demandtest_stop(handle)
+        DLL.demandtest_stop(handle)
+        self.assertEqual((state().active, events), (0, [1, 0]))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--repeat', type=int, default=1)
     args = parser.parse_args()
-    suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(CameraTests)
-                               for _ in range(args.repeat))
+    suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls)
+                               for _ in range(args.repeat) for cls in [CameraTests, TrackingDemandTests])
     started = time.perf_counter()
     result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
     report = {'scope': 'Windows rebuilt C++ callback bridge, independent lane reference, same-core DLL loopback integration',

@@ -6,6 +6,7 @@ import io
 import json
 import os
 import pathlib
+import secrets
 import shutil
 import socket
 import struct
@@ -61,6 +62,7 @@ class Probe(C.Structure):
 PROBE = C.CDLL(str(BUILD / 'ipc_test_probe.dll'))
 PROBE.ipc_test_probe.argtypes = [C.c_char_p, C.POINTER(Probe)]
 PROBE.ipc_test_probe.restype = C.c_int
+PROBE.ipc_test_probe_stream.argtypes = [C.c_char_p, C.c_uint32, C.POINTER(Probe)]
 PROBE.ipc_test_fixture.argtypes = [C.c_char_p, C.c_uint32]
 PROBE.ipc_test_fixture.restype = C.c_int
 
@@ -73,10 +75,21 @@ def wait(predicate, seconds=3):
         time.sleep(.001)
 
 
-def free_port():
-    with socket.socket() as sock:
-        sock.bind(('127.0.0.1', 0))
-        return sock.getsockname()[1]
+def free_port(count=1):
+    while True:
+        port = 20000 + secrets.randbelow(20000 - count)
+        sockets = [socket.socket(socket.AF_INET, kind) for _ in range(count)
+                   for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM)]
+        try:
+            for i, sock in enumerate(sockets):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                sock.bind(('0.0.0.0', port + i // 2))
+            return port
+        except OSError:
+            continue
+        finally:
+            for sock in sockets:
+                sock.close()
 
 
 def exact(sock, n):
@@ -110,8 +123,10 @@ class Module:
         self.lib.ptj_session_id.restype = C.c_uint64
         self.lib.ptj_submit.argtypes = [C.c_void_p, C.c_void_p, C.c_uint32, C.POINTER(Meta)]
         self.lib.ptj_submit.restype = C.c_int
+        self.lib.ptj_submit_stream.argtypes = [C.c_void_p, C.c_uint32, C.c_void_p, C.c_uint32, C.POINTER(Meta)]
         self.lib.ptj_get_stats.argtypes = [C.c_void_p, C.POINTER(Stats)]
         self.lib.ptj_get_stats.restype = C.c_int
+        self.lib.ptj_get_stream_stats.argtypes = [C.c_void_p, C.c_uint32, C.POINTER(Stats)]
         self.lib.ptj_stop.argtypes = [C.c_void_p]
         self.lib.ptj_destroy.argtypes = [C.c_void_p]
         self.sources = []
@@ -126,9 +141,9 @@ class Module:
         self.sources.append(source)
         return 0, source
 
-    def probe(self):
+    def probe(self, stream=0):
         p = Probe()
-        result = PROBE.ipc_test_probe(str(self.root).encode(), C.byref(p))
+        result = PROBE.ipc_test_probe_stream(str(self.root).encode(), stream, C.byref(p))
         assert result == 0, result
         return {n: getattr(p, n) for n, _ in p._fields_}
 
@@ -153,17 +168,19 @@ class Source:
                     4560000000 + seq * 11111111, 111 + seq, 222 + seq, 333 + seq,
                     0xABC00000 + seq, 0, 0)
 
-    def submit(self, data=None, meta=None, stride=400, address=None):
+    def submit(self, data=None, meta=None, stride=400, address=None, stream=0):
         meta = meta or self.meta()
         if address is None:
             data = data if data is not None else bytes([meta.source_seq % 256]) * 160000
             buf = (C.c_uint8 * len(data)).from_buffer_copy(data)
             address = C.addressof(buf)
+        if stream:
+            return self.module.lib.ptj_submit_stream(self.handle, stream, address, stride, C.byref(meta))
         return self.module.lib.ptj_submit(self.handle, address, stride, C.byref(meta))
 
-    def stats(self):
+    def stats(self, stream=0):
         s = Stats()
-        assert self.module.lib.ptj_get_stats(self.handle, C.byref(s)) == 0
+        assert self.module.lib.ptj_get_stream_stats(self.handle, stream, C.byref(s)) == 0
         return {n: getattr(s, n) for n, _ in s._fields_}
 
     def stop(self):
@@ -180,7 +197,7 @@ class Source:
 class Runtime:
     def __init__(self, root, daemon=True, port=None):
         self.module = Module(root)
-        self.port = port or free_port()
+        self.port = port or free_port(3)
         self.process = None
         self.sockets = []
         self.responder = None
@@ -207,16 +224,16 @@ class Runtime:
         self.responder = FixtureResponder(self.module, action)
         return self.source()
 
-    def connect(self, mode=b'JPEG\n', receive_buffer=None, wait_subscription=True):
+    def connect(self, mode=b'JPEG\n', receive_buffer=None, wait_subscription=True, stream=0):
         sock = socket.socket()
         if receive_buffer:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, receive_buffer)
         sock.settimeout(3)
-        sock.connect(('127.0.0.1', self.port))
+        sock.connect(('127.0.0.1', self.port + stream))
         sock.sendall(mode)
         self.sockets.append(sock)
         if wait_subscription and mode in (b'JPEG\n', b'PAIR\n'):
-            wait(lambda: self.module.probe()['subscription'] != 0)
+            wait(lambda: self.module.probe(stream)['subscription'] != 0)
         return sock
 
     def close(self):
@@ -785,7 +802,7 @@ if __name__ == '__main__':
     result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
     report = {'scope': 'Windows actual mapped shim + separate daemon, localhost TCP, no device/GPU work',
               'passed': result.wasSuccessful(), 'tests_run': result.testsRun, 'repeat': args.repeat,
-              'channel_version': 3, 'wire_bytes': WIRE.size, 'stats_bytes': C.sizeof(Stats),
+              'channel_version': 4, 'wire_bytes': WIRE.size, 'stats_bytes': C.sizeof(Stats),
               'case_names': [n for n in dir(IPCTests) if n.startswith('test_')],
                'build_artifacts': {name: hashlib.sha256((BUILD / name).read_bytes()).hexdigest()
                                   for name in ['ptj_source.dll', 'ptj_ipc_daemon.exe', 'ipc_test_probe.dll']},

@@ -12,7 +12,9 @@ PICO camera5 mouth lane (400×400 grayscale, fresh-source target 90 Hz)
   → local UDP45682 / MFR1 with per-field validity → UnifiedPicoModule → VRCFT
 ```
 
-The camera service does not listen on TCP or run the tongue model. The encoder borrows the protected shared slot until encoding/sending finishes, avoiding a second full-image staging copy. The first camera protection copy is retained. Real frame identity and sensor timestamps are not replaced by callback counters. Camera5 supplies one composite parent sensor time, not three independently measured exposure times.
+The vendor camera service does not listen on TCP or run the tongue model. The encoder borrows the protected shared slot until its last pixel read, avoiding a second full-image staging copy. The first camera protection copy is retained. Real frame identity and sensor timestamps are not replaced by callback counters. Camera5 supplies one composite parent sensor time, not three independently measured exposure times.
+
+The source also exposes independent left-eye and right-eye streams. Other clients can discover and subscribe through the same [LAN camera protocol](CAMERA-PROTOCOL.md), using PTJ1 or standard HTTP MJPEG. The default ports are mouth45681, left45682 and right45683; each stream supports eight concurrent image consumers.
 
 ## 1. Prepare the PC app
 
@@ -28,7 +30,7 @@ Open `http://127.0.0.1:8787`. The default Windows environment uses ONNX Runtime 
 
 The sidebar switches between four task pages: **Tracking** selects a headset and model and starts tracking; **Capture** opens the camera, shows the expression guide and records after you tick the consent box; **Train** explains how to prepare data and provides advanced training tools; **Settings** holds output, connection, replay and diagnostics. Switching pages keeps unsaved input and any running session.
 
-The main page looks for matching mouth sources on the local network. A single result is selected automatically; choose from the list when several are found, or click **Find again** to search again. Discovery broadcasts on UDP45681, then checks the service identity over TCP with the PTC1 context, without subscribing to images or labels. The headset needs this branch's updated source; older sources do not answer discovery. If your network blocks broadcasts, enter the address and port under Settings → Connection and performance.
+The main page looks for matching sources on the local network and selects their mouth stream. A single result is selected automatically; choose from the list when several are found, or click **Find again** to search again. Discovery uses broadcast and multicast on UDP45681, verifies the camera catalog over HTTP and checks the owner through PTC1, without subscribing to images or labels. Legacy mouth-only discovery remains supported. If your network isolates discovery traffic, enter the address and port under Settings → Connection and performance.
 
 Click **Choose file** to open the PC's file dialog and select a whole-mouth `.onnx`; its same-name `.json` manifest goes in the same folder. The page shows the file name and full path, and cancelling keeps the previous model. Choosing a device or file updates the draft; settings are saved when you start or click Save.
 
@@ -68,7 +70,7 @@ python tongue-source/build.py android --ndk <NDK-directory> --cmake <cmake-execu
 
 The four outputs are in `tongue-source/build-android/`: `picoet-inject`, `libpicoet_camera_jpeg.so`, `libptj_source.so`, `ptj_ipc_daemon`. No device libraries or old compiled objects are build inputs. An existing libjpeg-turbo 3.1.2 source checkout can be selected with `--jpeg-source` for an offline build.
 
-For the matching main payload, build the `picoet_hook` target separately in the configured build directory; its output is `tongue-source/build-android/hook/libpicoet_hook.so`. The new shim and daemon use PTJIPC3 and must be used together; the PTJ1 image layout is unchanged.
+For the matching main payload, build the `picoet_hook` target separately in the configured build directory; its output is `tongue-source/build-android/hook/libpicoet_hook.so`. The three-camera adapter, shim and daemon use PTJIPC4 and must be rebuilt together; the PTJ1 image layout is unchanged.
 
 Stop all headset eye/face clients before the first injection. Use your own ADB serial:
 
@@ -76,7 +78,7 @@ Stop all headset eye/face clients before the first injection. Use your own ADB s
 python tongue-source/device.py start --serial <serial> --state pc-tongue/user-data/source-session.json
 ```
 
-`--adb <executable>` selects an ADB outside PATH. The command uploads into a unique root-private session directory, labels only its two DSOs `system_file`, serializes injection with the existing PicoET control lock, starts the daemon, sends an owner-bound start command and verifies IPC identity/nonce ACKs. It does not install a module, change SELinux policy, restart the service or start a tracking client. The source remains inactive until a JPEG subscriber connects. The LAN TCP stream is unencrypted and unauthenticated: use a trusted private network, not an exposed interface/port-forward.
+`--adb <executable>` selects an ADB outside PATH. The command uploads into a unique root-private session directory, labels only its two DSOs `system_file`, serializes injection with the existing PicoET control lock, starts the daemon, sends an owner-bound start command and verifies IPC identity/nonce ACKs. It does not install a module, change SELinux policy or restart the service. On Android, the first image or label subscription starts this source's native tracking lease; the last unsubscribe releases it. Unsubscribed lanes are not copied or encoded. The LAN TCP stream is unencrypted and unauthenticated: use a trusted private network, not an exposed interface/port-forward.
 
 Keep the state file. It identifies the device, boot, service instance and remote directory; subsequent commands use it rather than a remembered PID. For status and stop:
 

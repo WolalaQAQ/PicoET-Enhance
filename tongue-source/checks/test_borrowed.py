@@ -256,6 +256,22 @@ class CoreBorrowTests(unittest.TestCase):
 
 
 class CameraServiceTests(unittest.TestCase):
+    def test_subscriber_limit_rejects_http_with_503_and_keeps_existing_clients(self):
+        core = Core(self)
+        receivers = [core.connect(pair=False) for _ in range(8)]
+        connection = http.client.HTTPConnection('127.0.0.1', core.port, timeout=2)
+        self.addCleanup(connection.close)
+        connection.request('GET', '/stream.mjpg')
+        response = connection.getresponse()
+        self.assertEqual(response.status, 503)
+        response.read()
+        self.assertEqual(core.stats()['connected'], 8)
+        pages = core.pages_for(bytes([91]) * 160000)
+        self.assertEqual(core.borrow(pages, 1), 0)
+        for receiver in receivers:
+            self.assertEqual(T.packet(receiver)[0]['source_seq'], 1)
+        self.assertEqual(core.stats()['encoded'], 1)
+
     def test_clean_stop_delivers_end_before_socket_runtime_cleanup(self):
         core = Core(self)
         sock = core.connect(pair=False)
@@ -394,7 +410,9 @@ class BridgeBorrowTests(unittest.TestCase):
         if borrow['admissions']:
             self.assertEqual(borrow['last_admitted_address'], borrow['last_slot_address'])
             self.assertEqual(borrow['last_completed_address'], borrow['last_slot_address'])
-            self.assertIn(borrow['last_slot_offset'], [1216 + 96, 1216 + 160128 + 96])
+            T.PROBE.ipc_test_slot_offset.argtypes = [C.c_uint32, C.c_uint32]
+            T.PROBE.ipc_test_slot_offset.restype = C.c_uint64
+            self.assertIn(borrow['last_slot_offset'], [T.PROBE.ipc_test_slot_offset(0, slot) for slot in range(2)])
         OBSERVATIONS.append({'bridge_final': saved})
         return saved
 
@@ -415,6 +433,69 @@ class BridgeBorrowTests(unittest.TestCase):
         saved = self.final(rt, source)
         self.assertEqual(saved['peak'], 2)
         self.assertEqual(saved['stop_ack'], 1)
+
+    def test_10_camera_callback_to_three_real_daemon_streams_and_independent_unsubscribe(self):
+        import test_camera as Camera
+        rt = self.runtime()
+        source = rt.source()
+        bridge = Camera.Bridge(session=source.session)
+        self.addCleanup(bridge.close)
+        submit = Camera.SubmitStream(C.cast(rt.module.lib.ptj_submit_stream, C.c_void_p).value)
+        Camera.DLL.camtest_arm_streams(bridge.handle, source.handle, source.session, submit)
+        sockets = [rt.connect(b'PAIR\n', stream=i) for i in range(3)]
+        frame = Camera.Frame(identity=456)
+        expected = Camera.split_lanes(frame.image)
+        bridge.frame(frame)
+        C.memset(frame.buffer, 0xEE, len(frame.image))  # The callback's borrow has ended.
+        for stream, lane in enumerate([2, 0, 1]):
+            h, raw = T.packet(sockets[stream])
+            jh, jpeg = T.packet(sockets[stream])
+            self.assertEqual(raw, expected[lane])
+            self.assertEqual(h['raw_crc32'], zlib.crc32(expected[lane]))
+            self.assertEqual((h['source_seq'], h['sensor_ns'], h['session_id']),
+                             (456, frame.sensor, source.session))
+            self.assertEqual((h['eye0_sensor_ns'], h['eye1_sensor_ns'], h['mouth_sensor_ns']),
+                             (frame.sensor,) * 3)
+            self.assertEqual(jh['raw_crc32'], h['raw_crc32'])
+            self.assertEqual(Image.open(io.BytesIO(jpeg)).size, (400, 400))
+            T.wait(lambda: rt.module.probe(stream)['in_use'] == 0)
+            self.assertEqual(source.stats(stream)['copy_count'], 1)
+        sockets[0].close()
+        T.wait(lambda: rt.module.probe()['subscription'] == 0)
+        self.assertEqual(source.submit(address=1, meta=source.meta(457)), 1)
+        bridge.frame(Camera.Frame(identity=457))
+        for stream in [1, 2]:
+            self.assertEqual(T.packet(sockets[stream])[0]['source_seq'], 457)
+            T.packet(sockets[stream])
+            self.assertEqual(source.stats(stream)['copy_count'], 2)
+        self.assertEqual(source.stats()['copy_count'], 1)
+        bridge.detach()
+        source.stop()
+        rt.process.wait(timeout=4)
+        saved = json.loads((rt.module.root / 'ipc-daemon-status.json').read_text())
+        self.assertEqual(saved['stop_ack'], 1)
+        for stream in saved['streams']:
+            self.assertEqual((stream['in_use'], stream['borrow_active']), (0, 0))
+            self.assertEqual(stream['dispatched'], stream['completed'])
+
+    def test_11_adding_second_real_client_does_not_invalidate_first_subscription(self):
+        rt = self.runtime()
+        source = rt.source()
+        first = rt.connect()
+        before = rt.module.probe()['subscription']
+        second = rt.connect()
+        T.wait(lambda: source.stats()['connected'] == 2)
+        self.assertEqual(rt.module.probe()['subscription'], before)
+        self.assertEqual(source.submit(), 0)
+        h1, jpeg1 = T.packet(first)
+        h2, jpeg2 = T.packet(second)
+        self.assertEqual(h1['source_seq'], h2['source_seq'])
+        self.assertEqual(jpeg1, jpeg2)
+        first.close()
+        T.wait(lambda: source.stats()['connected'] == 1)
+        self.assertEqual(rt.module.probe()['subscription'], before)
+        self.assertEqual(source.submit(), 0)
+        self.assertEqual(T.packet(second)[0]['source_seq'], 2)
 
     def test_07_real_daemon_pair_reads_the_shared_slot_address(self):
         rt = self.runtime()

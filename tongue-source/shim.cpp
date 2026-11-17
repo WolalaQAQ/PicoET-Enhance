@@ -17,7 +17,7 @@ struct PTJSource {
     std::atomic<uint32_t> error_stage{None}, error_code{0};
     uint32_t cleanup_stage = None;
     int cleanup_code = 0;
-    AtomicStats local;
+    AtomicStats local[PTJ_STREAMS];
     std::mutex stop_mutex;
     bool stopped = false;
 };
@@ -102,16 +102,17 @@ bool peer(PTJSource& s) {
     if (!heartbeat(c)) { peer_error(s, Heartbeat, ETIMEDOUT); return false; }
     return true;
 }
-void transport_snapshot(PTJSource& s) {
-    const Channel& c = *s.channel;
-#define TRANSPORT(n) s.local.n = c.core.n.load(std::memory_order_relaxed)
+void transport_snapshot(PTJSource& s, uint32_t stream) {
+    const ImageChannel& image = s.channel->images[stream];
+    AtomicStats& local = s.local[stream];
+#define TRANSPORT(n) local.n = image.core.n.load(std::memory_order_relaxed)
     TRANSPORT(encoded); TRANSPORT(encode_errors); TRANSPORT(sent_sources); TRANSPORT(sent_packets);
     TRANSPORT(sent_payload_bytes); TRANSPORT(send_errors); TRANSPORT(send_timeouts);
     TRANSPORT(connections); TRANSPORT(pings); TRANSPORT(encode_total_ns); TRANSPORT(encode_max_ns);
     TRANSPORT(last_sent_seq);
 #undef TRANSPORT
-    s.local.cancel_disconnect = c.cancel_disconnect.load() + c.core.cancel_disconnect.load();
-    s.local.cancel_stop = c.cancel_stop.load() + c.core.cancel_stop.load();
+    local.cancel_disconnect = image.cancel_disconnect.load() + image.core.cancel_disconnect.load();
+    local.cancel_stop = image.cancel_stop.load() + image.core.cancel_stop.load();
 }
 }
 extern "C" int ptj_start(const PTJConfig* config, PTJSource** out) {
@@ -171,7 +172,7 @@ extern "C" int ptj_start(const PTJConfig* config, PTJSource** out) {
         c.client_heartbeat = mono_ns(); pause_us(1000);
     }
     if (!attached) return registered_fail(AttachAck, ETIMEDOUT);
-    s->local.session_id = c.session; s->local.running = 1;
+    for (auto& local : s->local) { local.session_id = c.session; local.running = 1; }
     report(root, "attached", None, 0, s.get());
     *out = s.release(); return 0;
 }
@@ -202,14 +203,18 @@ extern "C" int ptj_submit_stock(PTJSource* source, const PTJStockRecord* record)
     ++c.stock_full;
     return PTJ_FULL;
 }
-extern "C" int ptj_submit(PTJSource* source, const uint8_t* pixels, uint32_t stride, const PTJMeta* meta) {
-    if (!source) return PTJ_INVALID;
+extern "C" int ptj_submit_stream(PTJSource* source, uint32_t stream, const uint8_t* pixels,
+                                  uint32_t stride, const PTJMeta* meta) {
+    if (!source || stream >= PTJ_STREAMS) return PTJ_INVALID;
     PTJSource& s = *source;
-    ++s.local.submit_calls;
+    AtomicStats& local = s.local[stream];
+    ++local.submit_calls;
     Lease lease(s);
-    if (!lease.valid) { ++s.local.drop_stopped; return PTJ_STOPPED; }
-    Channel& c = *s.channel; ++c.producer.submit_calls;
-#define DROP(counter, result) do { ++s.local.counter; ++c.producer.counter; return result; } while (0)
+    if (!lease.valid) { ++local.drop_stopped; return PTJ_STOPPED; }
+    Channel& c = *s.channel;
+    ImageChannel& image = c.images[stream];
+    ++image.producer.submit_calls;
+#define DROP(counter, result) do { ++local.counter; ++image.producer.counter; return result; } while (0)
     if (!pixels || !meta || stride < PTJ_WIDTH || (meta->flags & ~uint32_t(PTJ_REPLAY))) DROP(drop_invalid, PTJ_INVALID);
     if (!peer(s) || c.state.load(std::memory_order_acquire) != Ready || c.stop_request) {
         ++c.peer_rejected; DROP(drop_stopped, PTJ_STOPPED);
@@ -217,23 +222,23 @@ extern "C" int ptj_submit(PTJSource* source, const uint8_t* pixels, uint32_t str
     c.client_heartbeat = mono_ns();
     if (meta->session_id != s.session) DROP(drop_session, PTJ_WRONG_SESSION);
     uint32_t unlocked = 0;
-    if (!c.producer_lock.compare_exchange_strong(unlocked, 1, std::memory_order_acquire)) DROP(drop_busy, PTJ_BUSY);
-    struct Unlock { Channel& c; ~Unlock() { c.producer_lock.store(0, std::memory_order_release); } } unlock{c};
-    if (c.has_seq && meta->source_seq <= c.last_seen_seq.load()) DROP(drop_duplicate, PTJ_DUPLICATE);
-    c.last_seen_seq = meta->source_seq; c.has_seq = 1;
-    const uint64_t subscription = c.subscription.load(std::memory_order_acquire);
+    if (!image.producer_lock.compare_exchange_strong(unlocked, 1, std::memory_order_acquire)) DROP(drop_busy, PTJ_BUSY);
+    struct Unlock { ImageChannel& image; ~Unlock() { image.producer_lock.store(0, std::memory_order_release); } } unlock{image};
+    if (image.has_seq && meta->source_seq <= image.last_seen_seq.load()) DROP(drop_duplicate, PTJ_DUPLICATE);
+    image.last_seen_seq = meta->source_seq; image.has_seq = 1;
+    const uint64_t subscription = image.subscription.load(std::memory_order_acquire);
     if (!subscription) DROP(drop_no_subscriber, PTJ_NO_SUBSCRIBER);
     uint32_t none = 0;
-    if (!c.pending.compare_exchange_strong(none, 3, std::memory_order_acq_rel)) DROP(drop_full, PTJ_FULL);
+    if (!image.pending.compare_exchange_strong(none, 3, std::memory_order_acq_rel)) DROP(drop_full, PTJ_FULL);
     int chosen = -1;
     for (int i = 0; i < 2; ++i) {
         uint32_t free = Free;
-        if (c.slots[i].state.compare_exchange_strong(free, Writing, std::memory_order_acq_rel)) { chosen = i; break; }
+        if (image.slots[i].state.compare_exchange_strong(free, Writing, std::memory_order_acq_rel)) { chosen = i; break; }
     }
-    if (chosen < 0) { c.pending.store(0, std::memory_order_release); DROP(drop_full, PTJ_FULL); }
-    Slot& slot = c.slots[chosen];
-    const uint64_t used = c.in_use.fetch_add(1) + 1;
-    maximum(c.peak, used); maximum(s.local.queue_peak, used); maximum(c.producer.queue_peak, used);
+    if (chosen < 0) { image.pending.store(0, std::memory_order_release); DROP(drop_full, PTJ_FULL); }
+    Slot& slot = image.slots[chosen];
+    const uint64_t used = image.in_use.fetch_add(1) + 1;
+    maximum(image.peak, used); maximum(local.queue_peak, used); maximum(image.producer.queue_peak, used);
     const uint64_t begin = mono_ns();
     if (stride == PTJ_WIDTH) std::memcpy(slot.pixels, pixels, PTJ_PIXELS);
     else for (size_t row = 0; row < PTJ_HEIGHT; ++row)
@@ -241,36 +246,43 @@ extern "C" int ptj_submit(PTJSource* source, const uint8_t* pixels, uint32_t str
     slot.meta = *meta; slot.subscription = subscription;
     slot.copy_mono_ns = mono_ns(); // CAMERA-domain completed ownership-protected copy, before IPC publish.
     uint64_t elapsed = slot.copy_mono_ns - begin;
-    ++s.local.copy_count; ++c.producer.copy_count;
-    s.local.copy_total_ns += elapsed; c.producer.copy_total_ns += elapsed;
-    s.local.copy_last_ns = elapsed; c.producer.copy_last_ns = elapsed;
-    maximum(s.local.copy_max_ns, elapsed); maximum(c.producer.copy_max_ns, elapsed);
-    c.last_capture_copy_ns = slot.copy_mono_ns;
+    ++local.copy_count; ++image.producer.copy_count;
+    local.copy_total_ns += elapsed; image.producer.copy_total_ns += elapsed;
+    local.copy_last_ns = elapsed; image.producer.copy_last_ns = elapsed;
+    maximum(local.copy_max_ns, elapsed); maximum(image.producer.copy_max_ns, elapsed);
+    image.last_capture_copy_ns = slot.copy_mono_ns;
     if (!peer(s) || c.state.load(std::memory_order_acquire) != Ready || c.stop_request) {
-        --c.in_use; slot.state.store(Free, std::memory_order_release);
-        c.pending.store(0, std::memory_order_release); DROP(drop_stopped, PTJ_STOPPED);
+        --image.in_use; slot.state.store(Free, std::memory_order_release);
+        image.pending.store(0, std::memory_order_release); DROP(drop_stopped, PTJ_STOPPED);
     }
-    ++s.local.enqueued; ++c.producer.enqueued;
+    ++local.enqueued; ++image.producer.enqueued;
     slot.state.store(Pending, std::memory_order_release);
-    c.pending.store(uint32_t(chosen + 1), std::memory_order_release);
+    image.pending.store(uint32_t(chosen + 1), std::memory_order_release);
     return PTJ_ACCEPTED;
 #undef DROP
 }
-extern "C" int ptj_get_stats(const PTJSource* source, PTJStats* out) {
-    if (!source || !out) return -1;
+extern "C" int ptj_submit(PTJSource* source, const uint8_t* pixels, uint32_t stride, const PTJMeta* meta) {
+    return ptj_submit_stream(source, PTJ_MOUTH, pixels, stride, meta);
+}
+extern "C" int ptj_get_stream_stats(const PTJSource* source, uint32_t stream, PTJStats* out) {
+    if (!source || !out || stream >= PTJ_STREAMS) return -1;
     PTJSource& s = *const_cast<PTJSource*>(source);
+    AtomicStats& local = s.local[stream];
     Lease lease(s);
     if (lease.valid) {
         Channel& c = *s.channel;
         if (c.state == Failed && c.error_stage) peer_error(s, c.error_stage, int(c.error_code.load()));
         const bool alive = peer(s);
-        c.client_heartbeat = mono_ns(); transport_snapshot(s);
-        s.local.running = alive && c.state == Ready && !c.stop_request;
-        s.local.connected = s.local.running && c.subscription.load(std::memory_order_acquire) != 0;
-        s.local.queue_in_use = c.in_use.load();
+        c.client_heartbeat = mono_ns(); transport_snapshot(s, stream);
+        local.running = alive && c.state == Ready && !c.stop_request;
+        local.connected = local.running ? c.images[stream].core.connected.load() : 0;
+        local.queue_in_use = c.images[stream].in_use.load();
         report(s.root, alive ? "attached" : "peer_failed", s.error_stage, int(s.error_code), &s);
     }
-    *out = load_stats(s.local); return 0;
+    *out = load_stats(local); return 0;
+}
+extern "C" int ptj_get_stats(const PTJSource* source, PTJStats* out) {
+    return ptj_get_stream_stats(source, PTJ_MOUTH, out);
 }
 extern "C" void ptj_stop(PTJSource* source) {
     if (!source) return;
@@ -286,10 +298,13 @@ extern "C" void ptj_stop(PTJSource* source) {
     else {
         c.stop_request.store(1, std::memory_order_release);
         retained = !wait_stop_ack(s, deadline, stage, error);
-        transport_snapshot(s);
-        s.local.queue_in_use = c.in_use.load();
+        for (uint32_t stream = 0; stream < PTJ_STREAMS; ++stream) {
+            transport_snapshot(s, stream);
+            s.local[stream].queue_in_use = c.images[stream].in_use.load();
+        }
     }
-    s.local.running = 0; s.local.connected = 0; s.peer_alive = false;
+    for (auto& local : s.local) { local.running = 0; local.connected = 0; }
+    s.peer_alive = false;
     s.error_stage = stage; s.error_code = uint32_t(error);
     report(s.root, stage ? "stop_failed" : "stopped_acknowledged", stage, error, &s, retained);
     if (!retained) unmap_file(s.mapping);

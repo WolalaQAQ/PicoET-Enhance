@@ -18,6 +18,7 @@ extern "C" {
 
 enum { PTJ_WIDTH = 400, PTJ_HEIGHT = 400, PTJ_PIXELS = 160000,
        PTJ_JPEG = 1, PTJ_RAW = 2, PTJ_END = 4, PTJ_REPLAY = 8 };
+enum { PTJ_MOUTH = 0, PTJ_EYE_LEFT = 1, PTJ_EYE_RIGHT = 2, PTJ_STREAMS = 3 };
 typedef struct PTJHeader {
     char magic[4];
     uint16_t version, header_bytes;
@@ -74,6 +75,9 @@ PTJ_API uint64_t ptj_session_id(const PTJSource* source);
  */
 PTJ_API int ptj_submit(PTJSource* source, const uint8_t* pixels,
                        uint32_t stride, const PTJMeta* meta);
+/* IPC shim: independently subscribed streams; ptj_submit/get_stats select mouth. */
+PTJ_API int ptj_submit_stream(PTJSource*, uint32_t stream, const uint8_t*, uint32_t stride, const PTJMeta*);
+PTJ_API int ptj_get_stream_stats(const PTJSource*, uint32_t stream, PTJStats*);
 PTJ_API int ptj_get_stats(const PTJSource* source, PTJStats* stats);
 /* Idempotent, control-thread only. Joins both owned threads before returning.
  * May overlap submit; the handle remains valid until destroy. */
