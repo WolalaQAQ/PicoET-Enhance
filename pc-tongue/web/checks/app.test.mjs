@@ -315,7 +315,46 @@ test("managed capture starts from one recording click without a separate camera 
   const request=f.server.calls.find(c=>c.path==="/api/recording");
   assert.equal(JSON.parse(request.body).automatic,true);
   assert.ok(!f.server.calls.some(c=>c.path==="/api/start"));
-  assert.equal(f.el("connection-setup").hidden,true);
+  assert.equal(f.el("connection-setup").hidden,false);
+  assert.equal(f.el("capture").hidden,false);
+});
+test("managed recording saves a discovered headset draft before beginning without a separate save",async t=>{
+  const f=setup(t);f.server.status.managed_capture=true;f.server.status.capture_control={state:"idle",error:""};
+  f.server.config.headset_host="";f.server.config.model_path="";
+  f.server.discovered=[{name:"PICO",host:"192.0.2.10",port:45681}];
+  await f.app.init();f.app.navigate("recording");
+  assert.equal(f.app.state.dirty,true);
+  assert.equal(f.server.config.headset_host,"");
+  f.el("record-consent").checked=true;f.el("record-consent").emit("change");
+  assert.equal(f.el("record-start").disabled,false);
+  await f.app.record("begin");
+  const posts=f.server.calls.filter(c=>c.method==="POST");
+  assert.deepEqual(posts.map(c=>c.path),["/api/config","/api/recording"]);
+  assert.equal(JSON.parse(posts[0].body).headset_host,"192.0.2.10");
+  assert.equal(f.app.state.dirty,false);
+  assert.equal(f.server.config.model_path,"");
+});
+test("managed recording keeps multiple headsets selectable and saves the user's choice",async t=>{
+  const f=setup(t);f.server.status.managed_capture=true;f.server.status.capture_control={state:"idle"};
+  f.server.config.headset_host="";
+  f.server.discovered=[{name:"First",host:"192.0.2.10",port:45681},{name:"Second",host:"192.0.2.11",port:45681}];
+  await f.app.init();f.app.navigate("recording");
+  assert.equal(f.el("headset-select").disabled,false);
+  f.el("headset-select").value="192.0.2.11:45681";f.el("headset-select").emit("change");
+  f.el("record-consent").checked=true;f.el("record-consent").emit("change");
+  await f.app.record("begin");
+  assert.equal(f.server.config.headset_host,"192.0.2.11");
+});
+test("managed capture records existing preview or live tracking but does not treat replay as a live source",async t=>{
+  const f=setup(t);f.server.status.managed_capture=true;f.server.status.capture_control={state:"idle"};
+  await f.app.init();await f.app.start("capture");f.app.navigate("recording");
+  f.el("record-consent").checked=true;f.el("record-consent").emit("change");
+  assert.equal(f.el("record-start").disabled,false);
+  Object.assign(f.server.status,{capture_only:false});await f.app.pollStatus();
+  assert.equal(f.el("record-start").disabled,false);
+  Object.assign(f.server.status,{capture_only:true,source_mode:"replay"});await f.app.pollStatus();
+  assert.equal(f.el("record-start").disabled,true);
+  assert.equal(f.el("record-next").textContent,messages.en.recordCloseInput);
 });
 test("automatic capture shows countdown and animated preparation, then a still hold with real paint receipts",async t=>{
   let paints=0;
@@ -390,7 +429,8 @@ test("automatic text steps acknowledge visible painted instructions without load
 test("managed startup locks the chosen plan and recording options before frames arrive",async t=>{
   const f=setup(t);f.server.status.managed_capture=true;f.server.status.capture_control={state:"starting"};
   await f.app.init();
-  for(const id of ["capture-preset","person_id","record-consent","guide-enabled","label-stage"])
+  for(const id of ["capture-preset","person_id","record-consent","guide-enabled","label-stage",
+    "headset-select","discover","capture","headset_host","save","start","replay"])
     assert.equal(f.el(id).disabled,true,id);
   assert.equal(f.el("record-state").textContent,messages.en.captureStarting);
 });

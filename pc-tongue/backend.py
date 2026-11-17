@@ -11,6 +11,7 @@ from runtime import DEFAULT_CONFIG, ROOT, Runtime
 from discovery import discover_sources
 from file_dialog import select_model
 from face_presets import capture_presets
+from capture_control import CaptureControl, LANCameraSource
 
 
 def make_guide_server(store, port=57102):
@@ -212,7 +213,7 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
     return ThreadingHTTPServer((host, port), Handler)
 
 
-if __name__ == '__main__':
+def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8787)
     parser.add_argument('--config', type=Path)
@@ -220,11 +221,12 @@ if __name__ == '__main__':
     parser.add_argument('--device', default='auto')
     parser.add_argument('--record-input', action='store_true', help='Keep complete live JPEG frames in the owned run directory')
     parser.add_argument('--runs', type=Path)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     runtime = Runtime(args.config, run_root=args.runs, record_input=args.record_input)
     if args.model:
         runtime.configure({'model_path': args.model, 'device': args.device})
-    server = make_server(runtime, port=args.port)
+    capture = CaptureControl(runtime, LANCameraSource(runtime))
+    server = make_server(runtime, port=args.port, capture=capture)
     print(f'Mouth control: http://127.0.0.1:{server.server_port}', flush=True)
     try:
         server.serve_forever()
@@ -232,6 +234,10 @@ if __name__ == '__main__':
         pass
     finally:
         runtime.train('cancel')
-        runtime.stop()
+        capture.close()
         runtime.udp.close()
         server.server_close()
+
+
+if __name__ == '__main__':
+    main()

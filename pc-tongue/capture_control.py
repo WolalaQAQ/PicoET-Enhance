@@ -44,13 +44,14 @@ class CaptureControl:
                 raise ValueError('Confirm local recording and enter an anonymous recording name')
             if self.thread is not None and self.thread.is_alive():
                 raise ValueError('A capture session is already active')
-            if self.runtime.running:
+            reuse_input = self.runtime.running and self.runtime.mode == 'live' and self.runtime.config['model_kind'] == 'face50'
+            if self.runtime.running and not reuse_input:
                 raise ValueError('Close the current input before starting managed capture')
             if options.get('guide', True):
                 capture_preset(options.get('preset_id', 'complete'))
             self.stop_event.clear()
             self.cancelled, self.error, self.state = False, '', 'starting'
-            self.thread = threading.Thread(target=self._run, args=(options,), name='guided-capture', daemon=False)
+            self.thread = threading.Thread(target=self._run, args=(options, reuse_input), name='guided-capture', daemon=False)
             self.thread.start()
             return self.status()
         if action in ('stop', 'cancel'):
@@ -67,14 +68,15 @@ class CaptureControl:
             self.runtime.stop()
         return self.status()
 
-    def _run(self, options):
+    def _run(self, options, reuse_input):
         try:
-            endpoint = self.source.start()
-            if self.stop_event.is_set():
-                return
-            self.runtime.configure(dict(headset_host=endpoint['host'], headset_port=endpoint['port'],
-                                        model_kind='face50'))
-            self.runtime.start('capture')
+            if not reuse_input:
+                endpoint = self.source.start()
+                if self.stop_event.is_set():
+                    return
+                self.runtime.configure(dict(headset_host=endpoint['host'], headset_port=endpoint['port'],
+                                            model_kind='face50'))
+                self.runtime.start('capture')
             deadline = time.monotonic()+10
             while not self.runtime.connected:
                 if self.stop_event.wait(.02):

@@ -199,7 +199,8 @@ export function createApp(doc, options = {}) {
     const record = state.status?.recording, active = record?.state === "recording" || record?.state === "collecting";
     const managed = state.status?.managed_capture, control = state.status?.capture_control;
     const pending = ["starting","recording","stopping"].includes(control?.state);
-    get("record-start").disabled = !current.current || !managed && (!current.running || state.status?.connected !== true || state.status?.source_mode !== "live") || active || pending || Boolean(state.busy) || state.dirty || !get("record-consent").checked || !get("person_id").value.trim();
+    const incompatibleInput = managed && current.running && state.status?.source_mode !== "live";
+    get("record-start").disabled = !current.current || incompatibleInput || !managed && (!current.running || state.status?.connected !== true || state.status?.source_mode !== "live") || active || pending || Boolean(state.busy) || state.dirty && !managed || !get("record-consent").checked || !get("person_id").value.trim();
     get("record-stop").disabled = !current.current || !(active || pending) || control?.state==="stopping" || Boolean(state.busy); get("record-cancel").disabled = get("record-stop").disabled;
     get("record-start").hidden = active || pending; get("record-stop").hidden = !(active || pending); get("record-cancel").hidden = !(active || pending);
     get("record-consent").disabled = active || pending || Boolean(state.busy); get("person_id").disabled = active || pending || Boolean(state.busy);
@@ -208,7 +209,7 @@ export function createApp(doc, options = {}) {
     const controlText = {starting:"captureStarting",stopping:"captureSaving",completed:"captureComplete",error:"captureError"};
     get("record-state").textContent = current.current ? t(controlText[control?.state] ?? record?.state ?? "idle") : t("offline");
     get("capture-stop").disabled = get("stop").disabled;
-    const next = managed ? "captureSelfService" : !get("headset_host").value.trim() ? "recordNeedHeadset" : !current.running ? "recordOpenCamera" :
+    const next = incompatibleInput ? "recordCloseInput" : managed ? "captureSelfService" : !get("headset_host").value.trim() ? "recordNeedHeadset" : !current.running ? "recordOpenCamera" :
       !current.video ? "recordWaitCamera" : !get("record-consent").checked ? "recordNeedConsent" : "recordReady";
     get("record-next").textContent = active ? "" : t(next);
     get("record-path").textContent = display(record?.directory ?? record?.path);
@@ -442,8 +443,11 @@ export function createApp(doc, options = {}) {
     doc.documentElement.setAttribute?.("data-guiding",String(Boolean(focused)));
     renderCapturePlan(current); renderRecord(current); renderReference(current); renderTraining(current); renderReview(current);
     if(state.status?.managed_capture && state.page==="recording") {
-      get("connection-setup").hidden=true; get("capture").hidden=true; get("capture-stop").hidden=true;
       get("page-intro").textContent=t("captureSelfService");
+    }
+    if (["starting","recording","stopping"].includes(state.status?.capture_control?.state)) {
+      for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled", "start", "capture", "replay", "save", "discover", "headset-select", "model-browse"])
+        get(id).disabled = true;
     }
     if (state.status?.read_only) {
       get("status").textContent = t("visualReadonly");
@@ -568,8 +572,9 @@ export function createApp(doc, options = {}) {
   async function stop() { if (!get("stop").disabled) await control("stopping", () => requestJson(fetcher, "/api/stop", {}, 20000)); }
   async function record(action) {
     const button = {begin: "record-start", stop: "record-stop", cancel: "record-cancel", ready: "guide-ready", finish: "guide-finish", confirm: "guide-confirm", skip: "guide-skip", pause:"guide-pause",resume:"guide-pause"}[action]; if (!button || get(button).disabled) return;
-    if (action === "begin" && !state.status?.managed_capture && !validate("live", false)) return;
+    if (action === "begin" && !validate(state.status?.managed_capture ? "capture" : "live", false)) return;
     await control("working", async () => {
+      if (action === "begin" && state.status?.managed_capture && state.dirty) await persistConfig();
       await requestJson(fetcher, "/api/recording", {action, ...(action === "begin" ? {person_id: get("person_id").value.trim(), confirmed: get("record-consent").checked, guide: get("guide-enabled").checked, stage: get("label-stage").value,
         ...(get("guide-enabled").checked ? {preset_id:state.selectedPreset,automatic:true} : {})} : {})}, 20000);
       if(action==="begin")state.presetPreview=false;

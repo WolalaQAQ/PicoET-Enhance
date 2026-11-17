@@ -2,7 +2,7 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
-## [Unreleased] - 2026-11-17
+## [Unreleased] - 2026-11-18
 
 ### Features
 - Let managed Capture use an existing LAN camera service; closing the workbench's subscription leaves other consumers and the service running.
@@ -28,6 +28,7 @@ English | [简体中文](CHANGELOG_zh.md)
 - Send whole-mouth controls through 256-byte MFR1 with per-field validity on local UDP45682 for the matching UnifiedPicoModule to merge, retaining ORT backend selection and the bilingual app.
 
 ### Fixes
+- Enable self-operated Capture in the normal PC entrypoint, save a discovered or selected headset when recording begins, and reuse an already-open capture preview without reconnecting. Keep headset selection and optional preview available on Capture.
 - Send discovery from each local IPv4 interface, including explicit multicast interface selection, so a VPN default route does not hide LAN cameras.
 - Allow ten seconds for the first camera frame during native cold start, then retain the one-second established-stream timeout.
 - Scope vendor frame-counter resets to verified native capture epochs so a new subscription works after the last consumer disconnects. Keep raw identities and timestamps unchanged, with strict sensor-time and same-epoch regression checks.
