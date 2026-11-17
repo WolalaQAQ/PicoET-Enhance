@@ -94,6 +94,19 @@ class FaceRuntimeTests(unittest.TestCase):
         finally:
             r.stop(); r.udp.close()
 
+    def test_image_only_recording_does_not_start_stock_reader(self):
+        self.start()
+        with self.assertRaisesRegex(ValueError, 'Instant labels'):
+            self.runtime.recording('begin', person_id='fixture', confirmed=True,
+                                   stage='instant', receive_results=False)
+        self.runtime.recording('begin', person_id='fixture', confirmed=True, guide=False,
+                               receive_results=False)
+        self.assertIsNone(self.runtime.stock_thread)
+        self.submit()
+        wait_for(lambda: self.runtime.recorder.status()['images'] == 1)
+        self.runtime.recording('stop')
+        self.assertEqual(self.runtime.recorder.status()['stocks'], 0)
+
     def test_named_values_are_direct_and_manifest_mask_wins_over_random_heads(self):
         with patch('runtime.apply_calibration', side_effect=AssertionError('mask geometry used')):
             self.start(); self.submit(); wait_for(lambda: self.runtime.counts['inferred'] == 1)
@@ -227,7 +240,7 @@ class FaceRuntimeTests(unittest.TestCase):
         worker = threading.Thread(target=server.serve_forever); worker.start()
         try:
             body = dict(action='begin', person_id='fixture', confirmed=True, guide=False,
-                        stage='raw_only', role='C', evaluation_only=True)
+                        stage='raw_only', role='C', evaluation_only=True, receive_results=False)
             request = Request(f'http://127.0.0.1:{server.server_port}/api/recording',
                               json.dumps(body).encode(), {'Content-Type': 'application/json'})
             with patch.object(self.runtime, 'recording', return_value={}) as recording:
@@ -235,7 +248,7 @@ class FaceRuntimeTests(unittest.TestCase):
                     self.assertEqual(response.status, 200)
                 recording.assert_called_once_with('begin', person_id='fixture', confirmed=True,
                     guide=False, stage='raw_only', role='C', evaluation_only=True, preset_id='complete',
-                    automatic=False)
+                     automatic=False, receive_results=False)
         finally:
             server.shutdown(); worker.join(); server.server_close()
 

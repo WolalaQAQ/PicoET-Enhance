@@ -268,7 +268,8 @@ class RootlessPanelContract(unittest.TestCase):
         home = (SOURCE/'MainActivity.java').read_text()
         for fragment in ('"control/camera"', 'ProcessingActivity.class', '"camera-on"', '"camera-off"',
                          'CameraState.parse(reply[1])', 'camera.enabled', 'camera.clients[i]', 'camera.online',
-                         '"/stream.mjpg"', 'handler.removeCallbacks(poll)', '"camera_retry_off"'):
+                         '"/stream.mjpg"', 'handler.removeCallbacks(poll)', '"camera_retry_off"',
+                         '"camera-results-on"', '"camera-results-off"', 'camera.resultsOnline', 'camera.resultsSupported'):
             self.assertIn(fragment, home)
         self.assertNotIn('ProcessingSettings', home)
         self.assertNotIn('putBoolean(', home)
@@ -288,8 +289,8 @@ class RootlessPanelContract(unittest.TestCase):
         for name in ('BG', 'CARD', 'LINE', 'TEXT', 'MUTED', 'ACCENT', 'INK', 'TECH'):
             with self.subTest(color=name):
                 self.assertEqual(colors(home)[name], colors(tuning)[name])
-        self.assertIn('toggle.setTextSize(17)', home)
-        self.assertIn('toggle.setMinHeight(dp(52))', home)
+        self.assertIn('view.setTextSize(17)', home)
+        self.assertIn('view.setMinHeight(dp(52))', home)
 
     def test_camera_switch_is_bundled_opt_in_and_uses_existing_control_lock(self):
         service = (ROOT/'magisk-picoet-enhance/service.sh').read_text()

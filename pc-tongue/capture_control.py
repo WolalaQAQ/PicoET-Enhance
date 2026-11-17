@@ -42,6 +42,9 @@ class CaptureControl:
         if action == 'begin':
             if options.get('confirmed') is not True or not options.get('person_id', '').strip():
                 raise ValueError('Confirm local recording and enter an anonymous recording name')
+            receive_results = options.get('receive_results', True)
+            if type(receive_results) is not bool or (options.get('stage') == 'instant' and not receive_results):
+                raise ValueError('Instant labels require receiving mouth results')
             if self.thread is not None and self.thread.is_alive():
                 raise ValueError('A capture session is already active')
             reuse_input = self.runtime.running and self.runtime.mode == 'live' and self.runtime.config['model_kind'] == 'face50'

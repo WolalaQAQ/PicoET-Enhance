@@ -426,12 +426,14 @@ class Runtime:
             self.stock_socket = None
 
     def recording(self, action, *, person_id='', confirmed=False, guide=True, stage='raw_only',
-                  role=None, evaluation_only=None, preset_id='complete', automatic=False):
+                  role=None, evaluation_only=None, preset_id='complete', automatic=False, receive_results=True):
         if action == 'begin':
             if confirmed is not True:
                 raise ValueError('Confirm local image/stock recording and local training first')
             if not isinstance(person_id, str) or not person_id.strip():
                 raise ValueError('person_id must be a nonempty anonymous string')
+            if type(receive_results) is not bool or (stage == 'instant' and not receive_results):
+                raise ValueError('Instant labels require receiving mouth results')
             if self.record_thread is not None and not self.record_thread.is_alive():
                 self._stop_recording()
             if self.record_thread is not None:
@@ -452,9 +454,10 @@ class Runtime:
             self.stock_stop.clear()
             self.stock_status = dict(active=False, records=0, associated=0, unassociated=0, error=None)
             self.record_thread = threading.Thread(target=self._record_worker, name='mouth-recording', daemon=True)
-            self.stock_thread = threading.Thread(target=self._stock_receive, name='mouth-stock', daemon=True)
+            self.stock_thread = threading.Thread(target=self._stock_receive, name='mouth-stock', daemon=True) if receive_results else None
             self.record_thread.start()
-            self.stock_thread.start()
+            if self.stock_thread is not None:
+                self.stock_thread.start()
         elif action in ('ready', 'finish', 'confirm', 'skip', 'pause', 'resume'):
             if self.recorder is None:
                 raise ValueError('Begin a recording first')

@@ -110,6 +110,7 @@ void camera_command(const char* verb) {
     if(!std::strcmp(verb,"start") && std::strcmp(current.state,"armed"))throw std::runtime_error("camera_failed");
 }
 bool enabled(){return read(state_root+"/camera.enabled")=="1\n";}
+bool results_enabled(){return read(state_root+"/camera.results")=="1\n";}
 std::string address() {
     ifaddrs* entries=nullptr;if(getifaddrs(&entries))return {};
     std::string result;
@@ -121,7 +122,7 @@ std::string address() {
     freeifaddrs(entries);return result;
 }
 std::string status(const std::string& operation_error={}) {
-    const bool wanted=enabled();bool online=false;uint64_t clients[3]{};
+    const bool wanted=enabled();bool online=false,results_online=false;uint64_t clients[3]{},results_clients=0;
     std::string error=operation_error,phase=wanted?"waiting":"off";
     if(error.empty()) {
         const std::string failure=read(state_root+"/camera.failure");
@@ -134,6 +135,8 @@ std::string status(const std::string& operation_error={}) {
     if(owner(current) && c && camera_service::attached(*c,instance.pid,instance.birth) && c->state==ipc::Ready && fresh(*c)) {
         online=!std::strcmp(current.state,"armed");
         if(online) {
+            results_online=c->results_applied==2;
+            results_clients=c->stock_subscription ? 1 : 0;
             uint64_t total=0;
             for(unsigned i=0;i<3;++i){clients[i]=c->images[i].core.connected;total+=clients[i];}
             phase=total || c->stock_subscription?"connected":"idle";
@@ -146,6 +149,8 @@ std::string status(const std::string& operation_error={}) {
         <<"\naddress="<<address()<<"\nerror="<<error<<"\n";
     const char* names[]={"mouth","eye_left","eye_right"};
     for(unsigned i=0;i<3;++i)out<<names[i]<<".clients="<<clients[i]<<"\n";
+    out<<"results.enabled="<<results_enabled()<<"\nresults.online="<<results_online
+        <<"\nresults.clients="<<results_clients<<"\n";
     return out.str();
 }
 void copy_library(const char* name) {
@@ -158,6 +163,7 @@ void copy_library(const char* name) {
         throw std::runtime_error("camera_file_label");
 }
 void start_daemon() {
+    const char* results=results_enabled()?"results-on":"results-off";
     const pid_t child=fork();if(child<0)throw std::runtime_error("daemon_start");
     if(child==0) {
         setsid();const int log=open((instance.stage+"/daemon.log").c_str(),O_WRONLY|O_CREAT|O_APPEND,0600);
@@ -167,9 +173,17 @@ void start_daemon() {
         if(input>2)close(input);
         if(log>2)close(log);
         const std::string binary=module+"/bin/ptj_ipc_daemon";
-        execl(binary.c_str(),binary.c_str(),instance.stage.c_str(),"45681",nullptr);_exit(127);
+        execl(binary.c_str(),binary.c_str(),instance.stage.c_str(),"45681",results,nullptr);_exit(127);
     }
     wait([]{Channel channel;auto* c=channel.get();return c && fresh(*c) && c->state==ipc::Ready;},"daemon_start");
+}
+void sync_results(bool allowed) {
+    Channel channel;auto* c=channel.get();
+    if(!c || c->state!=ipc::Ready || !fresh(*c) || !camera_service::attached(*c,instance.pid,instance.birth))return;
+    if(!c->results_applied)throw std::runtime_error("results_unavailable");
+    const uint32_t policy=allowed?2:1;
+    c->results_request.store(policy,std::memory_order_release);
+    wait([&]{return c->state==ipc::Ready && c->results_applied==policy && fresh(*c);},"results_timeout");
 }
 void retire_dead_instance() {
     const std::string saved=read(state_root+"/camera.instance");
@@ -246,7 +260,8 @@ void stop() {
 int main(int argc,char** argv) {
     if(getuid()!=0 || argc!=2)return 2;
     const std::string action=argv[1];
-    if(action!="on"&&action!="off"&&action!="status"&&action!="reconcile"&&action!="halt")return 2;
+    const bool results_action=action=="results-on"||action=="results-off";
+    if(action!="on"&&action!="off"&&action!="status"&&action!="reconcile"&&action!="halt"&&!results_action)return 2;
     int lock=-1;std::string error;
     try {
         if(action!="status") {
@@ -255,12 +270,16 @@ int main(int argc,char** argv) {
             if(action=="on" || action=="off")write(state_root+"/camera.enabled",action=="on"?"1\n":"0\n");
         }
         identify();
-        if(action!="status") {
+        if(results_action) {
+            const bool allowed=action=="results-on";
+            write(state_root+"/camera.results",allowed?"1\n":"0\n");
+            sync_results(allowed);
+        } else if(action!="status") {
             const std::string failed=read(state_root+"/camera.failure");
             if(action=="reconcile" && failed.compare(0,instance.key.size()+1,instance.key+"\n")==0) {
                 // A failed instance requires an explicit user action, not another ptrace attempt.
             } else {
-                if(action=="halt" || !enabled())stop();else start();
+                if(action=="halt" || !enabled())stop();else {start();sync_results(results_enabled());}
                 unlink((state_root+"/camera.failure").c_str());
             }
         }
@@ -270,7 +289,7 @@ int main(int argc,char** argv) {
            (action=="off" || action=="halt" || (action=="reconcile" && !enabled()))) {
             try { retire_dead_instance(); error.clear(); } catch(const std::exception& retired) {error=retired.what();}
         }
-        if(lock>=0 && !error.empty() && error!="control_busy" && error!="tracking_busy" && error!="service_unavailable")
+        if(lock>=0 && !results_action && !error.empty() && error!="control_busy" && error!="tracking_busy" && error!="service_unavailable")
             try{write(state_root+"/camera.failure",instance.key+"\n"+error);}catch(const std::exception&){}
     }
     std::printf("%s",status(error).c_str());

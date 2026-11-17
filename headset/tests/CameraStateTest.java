@@ -6,6 +6,9 @@ public final class CameraStateTest {
     public static void main(String[] args) {
         String base="version=1\nenabled=1\nonline=1\nstate=idle\naddress=192.0.2.1\nerror=\nmouth.clients=0\neye_left.clients=0\neye_right.clients=0\n";
         CameraState idle=CameraState.parse(base);check(idle.enabled&&idle.online&&idle.clients[0]==0);
+        check(!idle.resultsSupported);
+        CameraState results=CameraState.parse(base+"results.enabled=1\nresults.online=1\nresults.clients=1\n");
+        check(results.resultsSupported&&results.resultsEnabled&&results.resultsOnline&&results.resultsClients==1);
         check(CameraState.parse(base.replace("state=idle","state=connected").replace("mouth.clients=0","mouth.clients=8")).clients[0]==8);
         CameraState failed=CameraState.parse(base.replace("enabled=1","enabled=0").replace("state=idle","state=error").replace("error=\n","error=stop_pending\n"));
         check(!failed.enabled&&failed.online&&failed.error.equals("stop_pending"));

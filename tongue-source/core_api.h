@@ -5,6 +5,8 @@
 #include "capture_context.h"
 extern "C" {
 int core_ptj_start(const PTJConfig*, PTJSource**);
+int core_ptj_start_with_results(const PTJConfig*, PTJSource**, bool allowed);
+void core_ptj_allow_results(PTJSource*, bool allowed);
 uint64_t core_ptj_session_id(const PTJSource*);
 int core_ptj_submit_capture(PTJSource*, const uint8_t*, uint32_t, const PTJMeta*, uint64_t);
 int core_ptj_get_stats(const PTJSource*, PTJStats*);

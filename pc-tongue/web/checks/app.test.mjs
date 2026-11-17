@@ -19,7 +19,7 @@ class Element {
 }
 function setup(t, options = {}) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [id, new Element()]));
-  elements.get("preview-enabled").checked = true; elements.get("guide-enabled").checked = true; elements.get("label-stage").value = "raw_only"; elements.get("person_id").value = "me";
+  elements.get("preview-enabled").checked = true; elements.get("guide-enabled").checked = true; elements.get("label-stage").value = "raw_only"; elements.get("person_id").value = "me"; elements.get("receive-results").checked = true;
   const doc = {documentElement: {}, hidden: false, title: "", createElement: () => new Element(), getElementById: id => { assert.ok(elements.has(id), id); return elements.get(id); }};
   const config = {headset_host: "headset.example", headset_port: 45681, model_path: "D:/models/student.onnx", model_kind: "face50", device: "auto", stale_ms: 350, preview_fps: 10,
     replay_path: "D:/data/reference.npz", enabled: false, output_enabled: false, output_host: "127.0.0.1", output_port: 45682};
@@ -296,13 +296,22 @@ test("record requires separate consent and a person ID, not an existing model", 
   const {app, server, el} = setup(t); server.config.model_path = ""; await app.init(); await app.record("begin");
   assert.ok(!server.calls.some(c => c.path === "/api/recording")); await app.start("capture"); el("person_id").value = "local-person"; el("record-consent").checked = true; el("person_id").emit("change"); await app.record("begin");
   const body = JSON.parse(server.calls.find(c => c.path === "/api/recording").body);
-  assert.deepEqual(body, {action: "begin", person_id: "local-person", confirmed: true, guide: true, stage: "raw_only",preset_id:"complete",automatic:true});
+  assert.deepEqual(body, {action: "begin", person_id: "local-person", confirmed: true, guide: true, stage: "raw_only",receive_results:true,preset_id:"complete",automatic:true});
   assert.equal(el("record-consent").checked, false); assert.equal(el("guide").hidden, false); assert.equal(el("guide-step").textContent, "Relax your mouth");
 });
 test("guide phase controls use real ready/finish/confirm/skip API, never auto-approve labels", async t => {
   const {app, el, server} = setup(t); await app.init(); await app.start("capture"); el("person_id").value = "local"; el("record-consent").checked = true; el("person_id").emit("change"); await app.record("begin");
   assert.equal(el("guide-ready").disabled, false); assert.equal(el("guide-confirm").disabled, true); await app.record("ready");
   assert.equal(el("guide-step").textContent, "Hold"); assert.ok(!server.calls.some(c => c.path.includes("review")));
+});
+test("image-only recording sends an explicit result opt-out and locks it after start", async t => {
+  const {app, server, el} = setup(t);
+  await app.init(); await app.start("capture");
+  el("record-consent").checked = true; el("record-consent").emit("change");
+  el("receive-results").checked = false;
+  await app.record("begin");
+  assert.equal(JSON.parse(server.calls.find(c=>c.path==="/api/recording").body).receive_results,false);
+  assert.equal(el("receive-results").disabled,true);
 });
 test("managed capture starts from one recording click without a separate camera or agent step",async t=>{
   const f=setup(t);f.server.status.managed_capture=true;f.server.status.capture_control={state:"idle",error:""};

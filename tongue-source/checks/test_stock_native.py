@@ -2,6 +2,7 @@
 import ctypes as C
 import json
 import math
+import mmap
 import pathlib
 import struct
 import subprocess
@@ -119,6 +120,36 @@ class StockNativeTests(ipc.IPCTests):
         self.assertEqual(read_stock(labels).capture_session_id, h['session_id'])
         ipc.wait(lambda: source.stats()['queue_in_use'] == 0)
         self.assertEqual(rt.module.probe()['in_use'], 0)
+
+    def test_stock_managed_gate_closes_active_client_without_restarting_images(self):
+        rt = self.runtime(daemon=False)
+        rt.launch('results-off')
+        source = rt.source()
+        images = rt.connect()
+        blocked = rt.connect(b'LABELS\n', wait_subscription=False)
+        self.assertEqual(blocked.recv(1), b'')
+        self.assertEqual(self.submit(source, stock(session=source.session)), 1)
+        with (rt.module.root / 'video-channel.bin').open('r+b') as file, mmap.mmap(file.fileno(), 64) as channel:
+            def policy(value):
+                struct.pack_into('<I', channel, 56, value)
+                ipc.wait(lambda: struct.unpack_from('<I', channel, 60)[0] == value)
+            policy(2)
+            labels = self.labels(rt)
+            self.assertEqual(self.submit(source, stock(session=source.session)), 0)
+            self.assertEqual(read_stock(labels).capture_session_id, source.session)
+            self.assertEqual(source.submit(), 0)
+            self.assertEqual(ipc.packet(images)[0]['source_seq'], 1)
+            ipc.wait(lambda: source.stats()['queue_in_use'] == 0)
+            policy(1)
+            self.assertEqual(labels.recv(1), b'')
+            self.assertEqual(rt.module.probe()['stock_subscription'], 0)
+            self.assertEqual(self.submit(source, stock(session=source.session)), 1)
+            self.assertEqual(source.submit(), 0)
+            self.assertEqual(ipc.packet(images)[0]['source_seq'], 2)
+            policy(2)
+            fresh = self.labels(rt)
+            self.assertEqual(self.submit(source, stock(seq=2, session=source.session)), 0)
+            self.assertEqual(read_stock(fresh).label_seq, 2)
 
     def test_stock_no_subscriber_wrong_session_and_stop(self):
         rt = self.runtime(); source = rt.source()

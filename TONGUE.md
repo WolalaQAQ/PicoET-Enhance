@@ -60,6 +60,8 @@ Run that environment's Python against `pc-tongue/backend.py`. `auto` tries insta
 
 With this branch's complete module and companion installed, enable **PicoET-Enhance → LAN cameras**. It defaults off and remembers your choice; the home screen reports actual status, stream addresses and client counts. Close other eye/face clients once before first attachment, then let clients subscribe as needed. **Expression tuning** opens the original parameter panel.
 
+To include headset mouth results, also turn on **Share mouth results** in the companion. In the PC workbench, **Recording → More recording options → Receive headset mouth results** controls the subscription for that recording. Turn the PC option off for image-only recording; preview never subscribes to results.
+
 The standalone `device.py` path below is for development diagnostics; do not run it alongside the module-managed camera service.
 
 Use rooted PICO 4 Pro / PICO OS 5.13.7. This branch includes the PicoET-Enhance 2.5.2 base, including its saved postprocessing settings. The adapter checks its supported system-library file and instruction window before hooking. Build inputs are Android NDK 26.1.10909125, CMake 3.22.1 and Ninja. libjpeg-turbo 3.1.2 is fetched and built as a separate static-library project; ShadowHook is compiled from this repository's existing vendored source.

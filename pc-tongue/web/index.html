@@ -78,11 +78,14 @@
           <p id="record-next" class="hint"></p>
           <div id="guide" hidden><h2 id="guide-step"></h2><output id="guide-countdown" hidden></output><p id="guide-hint"></p><progress id="guide-progress" max="1" value="0"></progress><div class="actions"><button id="guide-pause" type="button" hidden>Pause</button><button id="guide-ready" type="button">Start holding</button><button id="guide-finish" type="button">Finish holding</button><button id="guide-confirm" type="button">Confirm action done</button><button id="guide-skip" type="button">Skip</button></div></div>
           <p id="record-error" role="alert" hidden></p>
+          <p id="receive-results-warning" class="hint" role="status" hidden></p>
         </div>
         <details id="record-options" class="disclosure-panel"><summary id="record-options-title">More recording options</summary>
           <label><span id="person-label">Who is this recording for?</span><input id="person_id" value="me" autocomplete="off" spellcheck="false"></label>
           <label class="check"><input id="guide-enabled" type="checkbox" checked><span id="guided-label">Guide me step by step</span></label>
           <label><span id="label-stage-label">Training label stage</span><select id="label-stage"><option id="raw-only-option" value="raw_only">Raw only · label after review</option><option id="instant-option" value="instant">Instant labels · match stock behavior</option></select></label>
+          <label class="check"><input id="receive-results" type="checkbox" checked><span id="receive-results-label">Receive headset mouth results</span></label>
+          <p id="receive-results-hint">Applies only to this recording. The headset must allow mouth result sharing.</p>
           <p id="record-path" class="hint"></p>
         </details>
         <details id="review" class="panel disclosure-panel"><summary id="review-title">Review recorded images</summary>

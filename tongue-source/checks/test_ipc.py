@@ -204,9 +204,9 @@ class Runtime:
         if daemon:
             self.launch()
 
-    def launch(self):
+    def launch(self, *options):
         self.process = subprocess.Popen([str(BUILD / 'ptj_ipc_daemon.exe'),
-                                         str(self.module.root), str(self.port)],
+                                         str(self.module.root), str(self.port), *options],
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         ready = self.process.stdout.readline()
         if not ready.startswith('READY '):

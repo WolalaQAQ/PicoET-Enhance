@@ -6,12 +6,17 @@ import java.util.*;
 final class CameraState {
     static final String[] STREAMS = {"mouth", "eye_left", "eye_right"};
     final boolean enabled, online;
+    final boolean resultsSupported, resultsEnabled, resultsOnline;
+    final int resultsClients;
     final String state, address, error;
     final int[] clients;
 
-    private CameraState(boolean enabled, boolean online, String state, String address, String error, int[] clients) {
+    private CameraState(boolean enabled, boolean online, String state, String address, String error, int[] clients,
+                        boolean resultsSupported, boolean resultsEnabled, boolean resultsOnline, int resultsClients) {
         this.enabled = enabled; this.online = online; this.state = state;
         this.address = address; this.error = error; this.clients = clients;
+        this.resultsSupported = resultsSupported; this.resultsEnabled = resultsEnabled;
+        this.resultsOnline = resultsOnline; this.resultsClients = resultsClients;
     }
 
     static CameraState parse(String text) {
@@ -32,8 +37,11 @@ final class CameraState {
             clients[i] = Integer.parseInt(values.get(STREAMS[i] + ".clients"));
             if (clients[i] < 0 || clients[i] > 8) throw new IllegalArgumentException("Invalid camera client count");
         }
+        boolean supported = values.containsKey("results.enabled");
         return new CameraState(bit(values.get("enabled")), bit(values.get("online")), state,
-                Objects.requireNonNull(values.get("address")), Objects.requireNonNull(values.get("error")), clients);
+                Objects.requireNonNull(values.get("address")), Objects.requireNonNull(values.get("error")), clients,
+                supported, supported && bit(values.get("results.enabled")), supported && bit(values.get("results.online")),
+                supported && bit(values.get("results.clients")) ? 1 : 0);
     }
 
     private static boolean bit(String value) {

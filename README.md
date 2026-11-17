@@ -82,6 +82,8 @@ Fresh installs enable enhanced mode (`dual/on`) at 90/90 Hz after reboot. If you
 
 Open **PicoET-Enhance** from the application library. **LAN cameras** on its home screen is the master switch for mouth, left-eye and right-eye images, with actual module status, addresses and client counts. **Expression tuning** opens the complete existing parameter panel.
 
+**Share mouth results** separately allows LAN clients to subscribe to mouth tracking values. It defaults off and does not affect image streams or Facial Bridge.
+
 Sharing defaults off and remembers your choice. Clients can discover and independently subscribe to all three streams; cameras run only while subscribed. Switching off disconnects every stream; closing the app leaves the service running. Close other eye/face clients once before the first attachment so the adapter can initialize while tracking is idle. Images are unencrypted and unauthenticated, for trusted private networks. The switch does not change processing settings; ordinary expression forwarding still uses Bridge.
 
 Run as root on the headset:

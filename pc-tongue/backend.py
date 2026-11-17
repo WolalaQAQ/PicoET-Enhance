@@ -176,7 +176,8 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                                                    stage=body.get('stage', 'raw_only'),
                                                     role=body.get('role'), evaluation_only=body.get('evaluation_only'),
                                                      preset_id=body.get('preset_id', 'complete'),
-                                                     automatic=body.get('automatic', False))
+                                                      automatic=body.get('automatic', False),
+                                                      receive_results=body.get('receive_results', True))
                     return self.respond(200, result)
                 if path == '/api/recording/display':
                     if capture and capture.display_viewer and body.get('viewer') != capture.display_viewer:

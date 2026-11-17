@@ -80,6 +80,9 @@ struct alignas(64) Channel {
     uint32_t version = 4, bytes = sizeof(Channel);
     uint64_t session = 0, daemon_pid = 0, daemon_birth = 0;
     uint64_t daemon_nonce[2]{}; // Immutable root challenge, published with READY.
+    // Use the padding before state without changing the PTJIPC4 layout.
+    // 0 = unmanaged/not implemented; 1 = blocked; 2 = allowed.
+    std::atomic<uint32_t> results_request{0}, results_applied{0};
     alignas(64) std::atomic<uint32_t> state{Initializing}, stop_request{0}, stop_ack{0};
     std::atomic<uint32_t> client_ready{0};
     std::atomic<uint64_t> daemon_heartbeat{0}, client_pid{0}, client_birth{0}, client_heartbeat{0};
@@ -98,6 +101,8 @@ struct alignas(64) Channel {
     StockSlot labels[16];
 };
 static_assert(alignof(Channel) == 64 && alignof(Slot) == 64, "Channel alignment");
+static_assert(offsetof(Channel, results_request) == 56 && offsetof(Channel, results_applied) == 60 &&
+              offsetof(Channel, state) == 64, "PTJIPC4 result gate layout");
 inline bool valid_header(const Channel& c) {
     return !std::memcmp(c.magic, "PTJIPC4", 8) && c.version == 4 && c.bytes == sizeof(Channel) &&
            c.session && c.daemon_pid && c.daemon_birth && (c.daemon_nonce[0] || c.daemon_nonce[1]);

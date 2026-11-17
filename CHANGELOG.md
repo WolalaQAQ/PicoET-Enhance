@@ -5,6 +5,7 @@ English | [简体中文](CHANGELOG_zh.md)
 ## [Unreleased] - 2026-11-18
 
 ### Features
+- Add a default-off headset switch for sharing mouth results and a per-recording PC option to receive them. Turning result sharing off disconnects PSL1 without interrupting images.
 - Let managed Capture use an existing LAN camera service; closing the workbench's subscription leaves other consumers and the service running.
 - Expose independent mouth, left-eye and right-eye LAN streams, a broadcast/multicast camera catalog and HTTP MJPEG endpoints, with a reusable discovery CLI and protocol reference.
 - Acquire one native tracking lease on Android for the union of camera/label subscribers and release it after the last consumer leaves.

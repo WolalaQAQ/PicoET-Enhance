@@ -7,6 +7,15 @@
     <string name="camera_title">局域网相机</string>
     <string name="camera_hint">向同一网络的应用提供嘴和双眼相机。有人订阅时才启动相机；关闭会断开三路传输，退出本应用不会停止后台。开关会记住上次选择。</string>
     <string name="camera_privacy">开启期间，同一网络上的其他人也能查看这些图像。请在可信的私人网络中使用。</string>
+    <string name="camera_results_title">共享嘴部结果</string>
+    <string name="camera_results_hint">开启局域网相机后，允许同网设备接收嘴部追踪数值。不影响相机画面或 Facial Bridge。</string>
+    <string name="camera_results_off">未共享</string>
+    <string name="camera_results_pending_on">已允许 · 等待相机共享就绪</string>
+    <string name="camera_results_pending_off">仍在共享 · 等待关闭</string>
+    <string name="camera_results_on">可订阅 · {0} / 1 个客户端</string>
+    <string name="camera_results_updating">正在更新结果共享…</string>
+    <string name="camera_error_results_unavailable">当前相机服务不支持此开关。安装配套模块后，关闭再开启局域网相机。</string>
+    <string name="camera_error_results_timeout">未收到结果开关回执，请检查实际状态后再试。</string>
     <string name="camera_mouth">嘴相机</string>
     <string name="camera_eye_left">左眼相机</string>
     <string name="camera_eye_right">右眼相机</string>

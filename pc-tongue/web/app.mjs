@@ -14,6 +14,7 @@ const LABELS = {title: "title", "host-label": "host", "model-label": "model", "m
   "record-start": "recordStart", "record-stop": "recordStop", "record-cancel": "cancel", "training-title": "trainingTitle", "training-help": "trainingHelp",
   "guide-ready": "guideReady", "guide-finish": "guideFinish", "guide-confirm": "guideConfirm", "guide-skip": "guideSkip",
   "label-stage-label": "labelStage", "raw-only-option": "rawOnly", "instant-option": "instantLabels",
+  "receive-results-label": "receiveResults", "receive-results-hint": "receiveResultsHint",
   "review-title": "reviewTitle", "review-help": "reviewHelp", "review-all-label": "reviewAll", "review-load": "reviewLoad", "review-prev": "previous", "review-next": "next", "review-select-page": "selectPage",
   "review-proposal": "reviewProposal", "review-targets-label": "reviewTargets", "reviewer-label": "reviewer", "observation-label": "observation", "visible-option": "visible", "uncertain-option": "uncertain", "occluded-option": "occluded", "no-mouth-option": "noMouth", "review-consent-label": "reviewConsent", "review-apply": "reviewApply",
   "train-action-label": "trainAction", "train-start": "trainStart", "train-cancel": "cancel", "engine-label": "engine", "providers-label": "providers",
@@ -206,6 +207,8 @@ export function createApp(doc, options = {}) {
     get("record-consent").disabled = active || pending || Boolean(state.busy); get("person_id").disabled = active || pending || Boolean(state.busy);
     get("guide-enabled").disabled = active || pending || Boolean(state.busy);
     get("label-stage").disabled = active || pending || Boolean(state.busy);
+    get("receive-results").disabled = get("label-stage").disabled || get("label-stage").value === "instant";
+    if (get("label-stage").value === "instant") get("receive-results").checked = true;
     const controlText = {starting:"captureStarting",stopping:"captureSaving",completed:"captureComplete",error:"captureError"};
     get("record-state").textContent = current.current ? t(controlText[control?.state] ?? record?.state ?? "idle") : t("offline");
     get("capture-stop").disabled = get("stop").disabled;
@@ -215,6 +218,8 @@ export function createApp(doc, options = {}) {
     get("record-path").textContent = display(record?.directory ?? record?.path);
     get("record-error").hidden = !(record?.error || control?.error);
     get("record-error").textContent = record?.error || control?.error ? errorMessage(state.language, record?.error || control.error) : "";
+    get("receive-results-warning").hidden = !active || !state.status?.stock?.error;
+    get("receive-results-warning").textContent = t("receiveResultsWarning");
     const guide = record?.guide, step = guide?.current ?? guide?.step;
     const phase = guide?.phase === "review" ? "confirm" : guide?.phase;
     const auto = guide?.automatic === true;
@@ -576,6 +581,7 @@ export function createApp(doc, options = {}) {
     await control("working", async () => {
       if (action === "begin" && state.status?.managed_capture && state.dirty) await persistConfig();
       await requestJson(fetcher, "/api/recording", {action, ...(action === "begin" ? {person_id: get("person_id").value.trim(), confirmed: get("record-consent").checked, guide: get("guide-enabled").checked, stage: get("label-stage").value,
+        receive_results: get("receive-results").checked,
         ...(get("guide-enabled").checked ? {preset_id:state.selectedPreset,automatic:true} : {})} : {})}, 20000);
       if(action==="begin")state.presetPreview=false;
       get("record-consent").checked = false;
@@ -623,7 +629,7 @@ export function createApp(doc, options = {}) {
   get("language").addEventListener("change", () => setLanguage(get("language").value));
   get("guide-pause").addEventListener("click",()=>record(state.status?.recording?.guide?.paused?"resume":"pause"));
   for (const [id, fn] of [["save", save], ["stop", stop], ["capture-stop", stop], ["capture", () => start("capture")], ["replay", () => start("replay")], ["record-start", () => record("begin")], ["record-stop", () => record("stop")], ["record-cancel", () => record("cancel")], ["train-start", () => train()], ["train-cancel", () => train("cancel")], ...["ready", "finish", "confirm", "skip"].map(action => [`guide-${action}`, () => record(action)])]) get(id).addEventListener("click", fn);
-  for (const id of ["preview-enabled", "record-consent", "voice-enabled", "person_id"]) get(id).addEventListener("change", render);
+  for (const id of ["preview-enabled", "record-consent", "voice-enabled", "person_id", "label-stage"]) get(id).addEventListener("change", render);
   for (const id of ["review-confirmed", "reviewer"]) get(id).addEventListener("change", render);
   get("review-load").addEventListener("click", () => loadReviews()); get("review-prev").addEventListener("click", () => loadReviews(Math.max(0, state.reviews.offset-24)));
   get("review-next").addEventListener("click", () => loadReviews(state.reviews.offset+24));

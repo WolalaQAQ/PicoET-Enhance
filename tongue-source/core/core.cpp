@@ -115,6 +115,7 @@ struct PTJSource {
     std::array<uint16_t, 3> camera_ports{};
     uint32_t stream_id = 0;
     Counters stats;
+    bool results_allowed = true;
     std::shared_ptr<Client> stock_client;
     std::array<PTJStockRecord, 16> stock_records;
     size_t stock_head = 0, stock_size = 0;
@@ -628,7 +629,9 @@ static void server_loop(PTJSource& s) {
         } else if (!s.stream_id && !std::strcmp(command, "LABELS")) {
             auto client = std::make_shared<Client>(fd, false);
             std::lock_guard<std::mutex> lock(s.mutex);
-            if (s.running && !s.stock_client) { s.stock_client = std::move(client); ++s.stock_connection; }
+            if (s.running && s.results_allowed && !s.stock_client) {
+                s.stock_client = std::move(client); ++s.stock_connection;
+            }
         } else close_socket(fd);
     }
 }
@@ -638,13 +641,14 @@ static const char* start_failure_stage = "none";
 static int start_failure_code = 0;
 extern "C" const char* core_start_stage() { return start_failure_stage; }
 extern "C" int core_start_errno() { return start_failure_code; }
-extern "C" int ptj_start(const PTJConfig* config, PTJSource** out) {
+extern "C" int core_ptj_start_with_results(const PTJConfig* config, PTJSource** out, bool allowed) {
     start_failure_stage = "none"; start_failure_code = 0;
     if (!out) return -1;
     *out = nullptr;
     PTJConfig c{};
     if (config) { if (config->struct_bytes != sizeof(c)) return -1; c = *config; }
     auto s = std::make_unique<PTJSource>();
+    s->results_allowed = allowed;
     s->session = c.session_id ? c.session_id : (mono_ns() ^ (process_id() << 32));
     s->stream_id = c.reserved;
     s->timeout_ms = c.send_timeout_ms ? c.send_timeout_ms : 100;
@@ -689,7 +693,24 @@ extern "C" int ptj_start(const PTJConfig* config, PTJSource** out) {
     }
     *out = s.release(); return 0;
 }
+extern "C" int ptj_start(const PTJConfig* config, PTJSource** out) {
+    return core_ptj_start_with_results(config, out, true);
+}
 extern "C" uint64_t ptj_session_id(const PTJSource* s) { return s ? s->session : 0; }
+extern "C" void core_ptj_allow_results(PTJSource* s, bool allowed) {
+    std::lock_guard<std::mutex> lock(s->mutex);
+    s->results_allowed = allowed;
+    if (!allowed && s->stock_client) {
+        // send_stock can still hold a reference; shut down before reporting the gate closed.
+#if defined(_WIN32)
+        shutdown(s->stock_client->fd, SD_BOTH);
+#else
+        shutdown(s->stock_client->fd, SHUT_RDWR);
+#endif
+        s->stock_client.reset();
+        s->stock_size = 0;
+    }
+}
 extern "C" PTJ_API int core_ptj_bind_capture_context(PTJSource* s, uint64_t session, uint64_t generation) {
     if (!s || !generation) return PTJ_INVALID;
     std::lock_guard<std::mutex> lock(s->mutex);

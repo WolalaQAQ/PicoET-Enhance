@@ -22,9 +22,10 @@ public final class MainActivity extends Activity {
     private Context localized;
     private PanelChannel channel;
     private CameraState camera;
-    private Switch toggle;
+    private Switch toggle, resultsToggle;
     private Button retry;
-    private TextView status, error;
+    private TextView status, error, resultsStatus;
+    private LinearLayout resultsCard;
     private final TextView[] clients = new TextView[3], addresses = new TextView[3];
     private String pending="", pendingAction="", issue="";
     private boolean rendering;
@@ -55,6 +56,13 @@ public final class MainActivity extends Activity {
         LinearLayout box = column(); box.setPadding(dp(22), dp(18), dp(22), dp(20)); box.setBackground(shape(CARD, LINE, 16));
         into.addView(box, new LinearLayout.LayoutParams(-1, -2)); gap(into, 14); return box;
     }
+    private Switch cameraSwitch(String label, String tag) {
+        Switch view=new Switch(this); view.setText(s(label)); view.setTextSize(17); view.setTextColor(TEXT); view.setMinHeight(dp(52)); view.setTag(tag);
+        int[][] states={new int[]{android.R.attr.state_checked},new int[]{}};
+        view.setThumbTintList(new ColorStateList(states,new int[]{ACCENT,0xffa4b0c3}));
+        view.setTrackTintList(new ColorStateList(states,new int[]{0xff438e78,0xff4a566b}));
+        return view;
+    }
 
     @Override public void onCreate(Bundle bundle) {
         super.onCreate(bundle);
@@ -83,10 +91,7 @@ public final class MainActivity extends Activity {
         LinearLayout content=column(); scroll.addView(content); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
 
         LinearLayout transport=card(content);
-        toggle=new Switch(this); toggle.setText(s("camera_title")); toggle.setTextSize(17); toggle.setTextColor(TEXT); toggle.setMinHeight(dp(52)); toggle.setTag("camera_toggle");
-        int[][] states={new int[]{android.R.attr.state_checked},new int[]{}};
-        toggle.setThumbTintList(new ColorStateList(states,new int[]{ACCENT,0xffa4b0c3}));
-        toggle.setTrackTintList(new ColorStateList(states,new int[]{0xff438e78,0xff4a566b}));
+        toggle=cameraSwitch("camera_title","camera_toggle");
         toggle.setOnCheckedChangeListener((view,checked)->{if(!rendering)request(checked?"camera-on":"camera-off");}); transport.addView(toggle);
         gap(transport,5); status=text("",14,ACCENT,true); status.setTag("camera_state"); transport.addView(status); gap(transport,10);
         transport.addView(text(s("camera_hint"),14,MUTED,false)); gap(transport,12);
@@ -102,6 +107,13 @@ public final class MainActivity extends Activity {
         retry=button("",false); retry.setTag("camera_retry");
         retry.setOnClickListener(v->request(camera.enabled?"camera-on":"camera-off")); transport.addView(retry);
 
+        resultsCard=card(content);
+        resultsToggle=cameraSwitch("camera_results_title","camera_results_toggle");
+        resultsToggle.setOnCheckedChangeListener((view,checked)->{if(!rendering)request(checked?"camera-results-on":"camera-results-off");});
+        resultsCard.addView(resultsToggle);
+        resultsStatus=text("",14,ACCENT,true); resultsCard.addView(resultsStatus); gap(resultsCard,10);
+        resultsCard.addView(text(s("camera_results_hint"),14,MUTED,false));
+
         LinearLayout processing=card(content);
         processing.addView(text(s("processing_title"),18,TEXT,true)); gap(processing,10);
         processing.addView(text(s("processing_hint"),14,MUTED,false)); gap(processing,18);
@@ -113,8 +125,17 @@ public final class MainActivity extends Activity {
     private void render() {
         rendering=true;
         toggle.setChecked(camera!=null && camera.enabled); toggle.setEnabled(camera!=null && pending.isEmpty());
-        String phase=!pending.isEmpty() && !pendingAction.equals("camera-status") ? pendingAction.equals("camera-on")?"starting":"stopping" : camera==null?"loading":camera.state;
+        String phase=pendingAction.equals("camera-on")?"starting":pendingAction.equals("camera-off")?"stopping":camera==null?"loading":camera.state;
         status.setText(s("camera_state_"+phase));
+        boolean supportsResults=camera!=null && camera.resultsSupported;
+        resultsCard.setVisibility(supportsResults?View.VISIBLE:View.GONE);
+        resultsToggle.setChecked(supportsResults && camera.resultsEnabled);
+        resultsToggle.setEnabled(supportsResults && pending.isEmpty());
+        if(supportsResults) {
+            String resultKey=pendingAction.startsWith("camera-results-")?"updating":
+                camera.resultsOnline?(camera.resultsEnabled?"on":"pending_off"):camera.resultsEnabled?"pending_on":"off";
+            resultsStatus.setText(s("camera_results_"+resultKey).replace("{0}",String.valueOf(camera.resultsClients)));
+        }
         for(int i=0;i<3;++i) {
             clients[i].setText(camera==null?"—":s("camera_clients").replace("{0}",String.valueOf(camera.clients[i])));
             addresses[i].setText(camera!=null && camera.online && !camera.address.isEmpty()

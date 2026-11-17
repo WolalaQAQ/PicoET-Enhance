@@ -143,7 +143,11 @@ uint32_t core_failure_stage() {
 }
 }
 int main(int argc, char** argv) {
-    if (argc < 2 || argc > 3) { std::fprintf(stderr, "Usage: ptj_ipc_daemon <private-root0700> [port=45681]\n"); return 2; }
+    if (argc < 2 || argc > 4 || (argc == 4 && std::strcmp(argv[3], "results-off") && std::strcmp(argv[3], "results-on"))) {
+        std::fprintf(stderr, "Usage: ptj_ipc_daemon <private-root0700> [port=45681 [results-off|results-on]]\n"); return 2;
+    }
+    const bool managed = argc == 4;
+    const bool allow_results = !managed || !std::strcmp(argv[3], "results-on");
     const std::string root = argv[1];
     int error = private_directory(root);
     if (error) { std::fprintf(stderr, "FAIL stage=private_directory errno=%d\n", error); return 1; }
@@ -159,13 +163,13 @@ int main(int argc, char** argv) {
     c.daemon_heartbeat = mono_ns();
     for (auto& image : c.images) { image.producer.session_id = c.session; image.producer.running = 1; }
     PTJConfig config{}; config.struct_bytes = sizeof(config); config.session_id = c.session;
-    config.port = argc == 3 ? uint16_t(std::atoi(argv[2])) : 45681;
+    config.port = argc >= 3 ? uint16_t(std::atoi(argv[2])) : 45681;
     PTJSource* cores[PTJ_STREAMS]{};
     if (!config.port || config.port > 65533) failure(c, CoreBind, EINVAL);
     for (uint32_t stream = 0; stream < PTJ_STREAMS && c.state != Failed; ++stream) {
         PTJConfig stream_config = config;
         stream_config.port = uint16_t(config.port + stream); stream_config.reserved = uint16_t(stream);
-        if (core_ptj_start(&stream_config, &cores[stream]))
+        if (core_ptj_start_with_results(&stream_config, &cores[stream], allow_results))
             failure(c, core_failure_stage(), core_start_errno());
     }
     if (c.state != Failed) {
@@ -189,6 +193,10 @@ int main(int argc, char** argv) {
     });
     tracking = &demand;
     std::signal(SIGINT, signal_stop); std::signal(SIGTERM, signal_stop);
+    if (managed) {
+        c.results_request = allow_results ? 2 : 1;
+        c.results_applied = c.results_request.load();
+    }
     c.state.store(Ready, std::memory_order_release);
     std::printf("READY session=%llu pid=%llu birth=%llu channel_bytes=%zu port=%u\n",
                 (unsigned long long)c.session, (unsigned long long)c.daemon_pid,
@@ -222,11 +230,15 @@ int main(int argc, char** argv) {
         }
         if (registered && !request.matches(c)) { failure(c, OwnerEcho, EPROTO); break; }
         const bool stopping = c.stop_request || interrupted || c.state == Failed;
+        const uint32_t results_request = c.results_request.load();
+        const bool change_results = managed && !stopping && results_request != c.results_applied;
+        if (change_results) core_ptj_allow_results(core, results_request == 2);
         for (uint32_t stream = 0; stream < PTJ_STREAMS; ++stream)
             c.images[stream].subscription.store(!stopping && validated
                 ? core_ptj_image_subscription(cores[stream]) : 0, std::memory_order_release);
         const uint64_t stock_subscription = !stopping && validated ? core_ptj_stock_subscription(core) : 0;
         c.stock_subscription.store(stock_subscription, std::memory_order_release);
+        if (change_results) c.results_applied.store(results_request, std::memory_order_release);
 #if defined(__ANDROID__)
         bool wanted = stock_subscription != 0;
         for (const auto& image : c.images) wanted |= image.subscription.load() != 0;

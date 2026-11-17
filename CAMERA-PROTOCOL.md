@@ -111,7 +111,9 @@ The existing `PICO_MOUTH_DISCOVER_V1\n` / PTC1 discovery and mouth-only `LABELS\
 
 PSL1 carries 33 mouth channels at four stages (raw, action-postprocessed before clamping, clamped instant, and final filtered output), two quality values, validity, classification and source identity. It does not contain eye-expression vectors; ordinary eye/face result forwarding remains the Bridge path. A JPEG or MJPEG subscription receives images, not these result records.
 
-The PC workbench opens its label subscription when recording begins and closes it when recording ends. Preview alone does not subscribe to labels. The companion's LAN-camera switch controls the whole service, including labels; there is currently no separate result-transmission switch in either GUI. **Training label stage** selects how recorded data supplies training labels, not whether results are transmitted.
+On the module-managed source, enable **Share mouth results** in the companion to allow `LABELS` subscriptions while **LAN cameras** is on. Result sharing defaults off and remembers your choice. Turning it off rejects new label connections and closes the current one without interrupting images. Third-party clients may reconnect when it is enabled again; one label client can subscribe at a time.
+
+The PC workbench opens a label subscription at the start of a recording only if **Receive headset mouth results** is selected. Preview never opens it. **Training label stage** still controls how training labels are derived. If the label connection is unavailable, images continue and missing labels remain unknown.
 
 ## Source lifecycle
 
