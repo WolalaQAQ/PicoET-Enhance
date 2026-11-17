@@ -2,7 +2,7 @@
 
 [English](TONGUE.md) | 简体中文
 
-本仓库与[UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule/tree/feat/tongue-pc)配套使用`feat/tongue-pc`。直接从源码构建相机传输、运行PC App、构建配套接收器即可内测；原Magisk ZIP及其构建流程不变，不会安装这组附加组件。
+本仓库与[UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule/tree/feat/tongue-pc)配套使用`feat/tongue-pc`。本分支模块打包可选的三路局域网相机，由配套应用首页启停；PC App和配套接收器仍从源码单独准备。
 
 ```text
 PICO camera5嘴图lane（400×400灰度、目标90Hz真实新源）
@@ -58,6 +58,10 @@ python -m pip install -r pc-tongue/requirements-cuda.txt
 
 ## 2. 构建并启动头显源
 
+安装本分支的完整模块与配套GUI后，在 **PicoET-Enhance → 局域网相机** 开启共享即可。默认关闭，模块记住选择；首页显示真实状态、三路地址和订阅数。首次开启前退出其他眼追／面捕客户端一次，之后客户端按需订阅。原参数面板从 **参数调节** 进入。
+
+以下独立`device.py`入口用于开发诊断，不要与模块管理的相机服务同时启动。
+
 需要已Root的PICO 4 Pro／PICO OS 5.13.7。本分支已合入PicoET-Enhance 2.5.2基线，保留其已保存后处理配置。适配器在hook前检查支持的系统库文件及指令窗口。工具链为NDK 26.1.10909125、CMake 3.22.1、Ninja；libjpeg-turbo 3.1.2独立构建静态库，ShadowHook直接编译仓库内已有vendored源码。
 
 正式2.5.2主payload没有原厂标签回调。它可以提供JPEG，但要采集原厂表情标签，还需另行部署本分支构建的配套主payload；便携`device.py start`不会替换日常模块。状态明确区分JPEG可用、标签回调可用，以及实际观察到标签，不能把连接成功当作已经录到表情。
@@ -68,7 +72,7 @@ python -m pip install -r pc-tongue/requirements-cuda.txt
 python tongue-source/build.py android --ndk <NDK目录> --cmake <cmake可执行文件> --ninja <ninja可执行文件>
 ```
 
-四个输出在`tongue-source/build-android/`：`picoet-inject`、`libpicoet_camera_jpeg.so`、`libptj_source.so`、`ptj_ipc_daemon`，不以设备库或旧编译对象为输入。已有libjpeg-turbo 3.1.2源码可用`--jpeg-source`选择，离线构建。
+输出在`tongue-source/build-android/`：`picoet-inject`、`libpicoet_camera_jpeg.so`、`libptj_source.so`、`ptj_ipc_daemon`及模块控制器`picoet-camera`，不以设备库或旧编译对象为输入。已有libjpeg-turbo 3.1.2源码可用`--jpeg-source`选择，离线构建。
 
 需要配套主payload时，在配置好的build目录另构建`picoet_hook`目标，产出`tongue-source/build-android/hook/libpicoet_hook.so`。三路相机adapter、shim与daemon使用PTJIPC4，须一起重建；图像PTJ1保持不变。
 

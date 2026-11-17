@@ -70,6 +70,13 @@ jobs:
           -Ndk "$env:ANDROID_HOME/ndk/26.1.10909125"
           -CmakeBin "$env:ANDROID_HOME/cmake/3.22.1/bin"
 
+      - name: Build LAN camera components
+        run: >-
+          python -B -X utf8 tongue-source/build.py android
+          --ndk "$env:ANDROID_HOME/ndk/26.1.10909125"
+          --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe"
+          --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
+
       - name: Package Magisk module
         env:
           PANEL_KEYSTORE_BASE64: ${{ secrets.PICOET_PANEL_KEYSTORE_BASE64 }}

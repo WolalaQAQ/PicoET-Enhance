@@ -8,7 +8,7 @@ public final class PanelChannelTest {
     static void check(boolean condition) { ++checks; if (!condition) throw new AssertionError(); }
     public static void main(String[] args) throws Exception {
         String id = "12345678-abcd-1234-abcd-123456789abc";
-        for (String action : new String[]{"read", "defaults", "balanced", "responsive", "raw", "apply"})
+        for (String action : new String[]{"read", "defaults", "balanced", "responsive", "raw", "apply", "camera-status", "camera-on", "camera-off"})
             check(PanelChannel.encode(id, action, "ignored").equals("PPC1\n"+id+"\n"+action+"\n"));
         for (String action : new String[]{"write", "check"})
             check(PanelChannel.encode(id, action, "version=1\neye.enabled=1\n").endsWith("\nversion=1\neye.enabled=1\n"));
@@ -27,6 +27,12 @@ public final class PanelChannelTest {
         Files.write(reply.toPath(), ("PPR1\n"+id+"\n0\nstale").getBytes(StandardCharsets.UTF_8));
         check(channel.response(request) == null);
         Files.write(reply.toPath(), ("PPR1\n"+request+"\n0\nversion=1\n").getBytes(StandardCharsets.UTF_8));
+        check(channel.response(request)[1].equals("version=1\n"));
+        PanelChannel camera=new PanelChannel(new File(directory,"camera"));
+        String cameraRequest=camera.submit("camera-on","");
+        check(new String(Files.readAllBytes(new File(directory,"request.txt").toPath()),StandardCharsets.UTF_8).equals(wire));
+        check(new File(directory,"camera/request.txt").isFile());
+        check(camera.response(cameraRequest)==null);
         check(channel.response(request)[1].equals("version=1\n"));
         System.out.println(checks+" rootless panel channel checks passed");
     }

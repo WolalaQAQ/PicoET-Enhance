@@ -20,6 +20,10 @@ set_perm "$MODPATH/uninstall.sh" 0 0 0755
 set_perm "$MODPATH/bin/picoet-inject" 0 0 0755
 set_perm "$MODPATH/bin/picoet-config" 0 0 0755
 set_perm "$MODPATH/bin/picoet-panel" 0 0 0755
+set_perm "$MODPATH/bin/picoet-camera" 0 0 0755
+set_perm "$MODPATH/bin/ptj_ipc_daemon" 0 0 0755
+set_perm "$MODPATH/lib/libpicoet_camera_jpeg.so" 0 0 0644
+set_perm "$MODPATH/lib/libptj_source.so" 0 0 0644
 set_perm_recursive "$MODPATH/system/app/PicoETEnhance" 0 0 0755 0644
 set_perm "$MODPATH/lib/libpicoet_hook.so" 0 0 0644
 set_perm "$MODPATH/hashes.sh" 0 0 0644

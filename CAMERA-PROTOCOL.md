@@ -1,6 +1,6 @@
 # LAN camera service
 
-The optional headset source exposes the mouth, wearer's left eye and wearer's right eye to independent LAN clients. The PC workbench uses the same service as other clients. Build and start the source using [TONGUE.md](TONGUE.md#2-build-and-start-the-headset-source).
+The optional headset source exposes the mouth, wearer's left eye and wearer's right eye to independent LAN clients. The PC workbench uses the same service as other clients. With this branch's module and companion installed, enable **PicoET-Enhance → LAN cameras**. Sharing defaults off and remembers your choice. See [TONGUE.md](TONGUE.md#2-build-and-start-the-headset-source) for setup and standalone developer diagnostics.
 
 | Stream ID | Camera5 lane | Default TCP port | HTTP stream |
 |---|---:|---:|---|
@@ -113,4 +113,4 @@ The existing `PICO_MOUTH_DISCOVER_V1\n` / PTC1 discovery and mouth-only `LABELS\
 
 The adapter performs a synchronous protection copy only for subscribed lanes. Each stream has its own two-slot IPC queue, encoder and consumers. The transport daemon owns network sockets; the vendor camera callback does no JPEG encoding or network writes.
 
-The adapter, shim and daemon must be rebuilt together for **PTJIPC4**. PTJ1, PTC1 and PSL1 wire layouts are unchanged. The developer `device.py stop` ends all three streams, joins encoders/writers, releases its tracking lease and acknowledges all raw-slot returns.
+The adapter, shim and daemon must be rebuilt together for **PTJIPC4**. PTJ1, PTC1 and PSL1 wire layouts are unchanged. Turning **LAN cameras** off ends all three streams, joins encoders/writers, releases the source's tracking lease and checks acknowledgements for every raw-slot return. Closing the companion app leaves sharing available. The standalone developer `device.py stop` performs the same transport shutdown for its own session; do not use its session state to control the module-managed source.

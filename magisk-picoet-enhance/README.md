@@ -1,4 +1,4 @@
-# PicoET-Enhance 2.5.2
+# PicoET-Enhance 2.6.0-dev.1
 
 Eye-tracking enhancement for PICO 4 Pro running PICO OS 5.13.7 with Magisk.
 The installer checks the device's eye-tracking library hashes before installing.
@@ -28,6 +28,10 @@ eyelid openness use EyeLook and `1−Blink`; native eye data is used only for me
 pupil diameter.
 
 ## Mode controls
+
+The companion home screen has **LAN cameras** and **Expression tuning**. Camera sharing defaults off and remembers explicit choices. It exposes mouth, left-eye and right-eye streams to trusted LAN clients; the home screen shows actual service status, addresses and per-camera client counts. Closing the app leaves sharing available, and only subscribed cameras run. Turning sharing off drains and closes all streams. The tuning entry retains the original 44-parameter panel and its saved/unsaved state.
+
+Camera control remains in the module-owned worker, not the rootless APK. The controller uses the existing enhancement lock and verifies the camera owner plus IPC attach/stop acknowledgements. The first attachment waits for idle eye/face tracking without restarting it. Separately started development adapters must be retired before using this switch.
 
 Run as root:
 

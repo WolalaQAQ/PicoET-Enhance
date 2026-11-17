@@ -39,14 +39,21 @@ bool write_all(int fd, const std::string& text) {
     }
     return true;
 }
-int open_channel(uid_t uid) {
+int open_channel(uid_t uid, bool camera) {
     Fd users(open("/data/user_de/0", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
     Fd app(openat(users.value, picoet_panel::package_name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
     if (!owned(app.value, uid, true)) return -1;
     Fd files(openat(app.value, "files", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
     if (!owned(files.value, uid, true)) return -1;
     const int channel = openat(files.value, "control", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    if (owned(channel, uid, true)) return channel;
+    if (owned(channel, uid, true)) {
+        if (!camera) return channel;
+        const int lane = openat(channel, "camera", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        close(channel);
+        if (owned(lane, uid, true)) return lane;
+        if (lane >= 0) close(lane);
+        return -1;
+    }
     if (channel >= 0) close(channel);
     return -1;
 }
@@ -89,7 +96,10 @@ bool execute(const std::string& module, const picoet_panel::Request& request, st
         if (dup2(input.value, STDIN_FILENO) < 0 || dup2(writer.value, STDOUT_FILENO) < 0 || dup2(writer.value, STDERR_FILENO) < 0) _exit(126);
         unsetenv("ASH_STANDALONE");
         unsetenv("PICOET_CONTROL_LOCKED");
-        if (request.action == "apply") {
+        if (request.action.compare(0, 7, "camera-") == 0) {
+            const std::string helper = module + "/bin/picoet-camera";
+            execl(helper.c_str(), helper.c_str(), request.action.c_str() + 7, nullptr);
+        } else if (request.action == "apply") {
             const std::string script = module + "/picoet.sh";
             execl("/system/bin/sh", "sh", script.c_str(), "reload-processing", nullptr);
         } else {
@@ -125,7 +135,8 @@ int main(int argc, char** argv) {
     Fd lock(open("/data/adb/picoet-enhance/panel.lock", O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600));
     if (!owned(lock.value, 0, false) || flock(lock.value, LOCK_EX | LOCK_NB) != 0) return 6;
     while (access(module.c_str(), F_OK) == 0 && access((module + "/disable").c_str(), F_OK) != 0 && access((module + "/remove").c_str(), F_OK) != 0) {
-        Fd channel(open_channel(uid));
+      for (bool camera : {false, true}) {
+        Fd channel(open_channel(uid, camera));
         picoet_panel::Request request;
         if (channel.value >= 0 && receive(channel.value, uid, request)) {
             std::string output;
@@ -133,6 +144,7 @@ int main(int argc, char** argv) {
             if (!publish(channel.value, uid, picoet_panel::reply(request, success, output)))
                 std::fprintf(stderr, "Cannot publish panel response: %s\n", std::strerror(errno));
         }
+      }
         usleep(500000);
     }
 }

@@ -3,8 +3,8 @@
     Packages magisk-picoet-enhance into a Magisk zip (runtime injection; zero PICO bytes).
 
 .DESCRIPTION
-    Offline only. Stages the module scripts (LF line endings) plus our two built artifacts
-    (bin/picoet-inject, lib/libpicoet_hook.so), generates hashes.sh, and scans the staged tree:
+    Offline only. Stages the module scripts (LF line endings), enhancement tools,
+    camera components and companion APK, generates hashes.sh, and scans the staged tree:
     every ELF file must be one of our artifacts and no file may match any known PICO library
     SHA256. Writes artifacts/magisk-picoet-enhance-v<version>.zip. It does not touch any device.
     The PICO libraries are never copied or patched: the payload references them by name and
@@ -16,6 +16,7 @@
 [CmdletBinding()]
 param(
     [string]$HookDir = '',
+    [string]$CameraDir = '',
     [string]$OutputDir = '',
     [string]$Python = 'python',
     [string]$PanelKeystore = $env:PICOET_PANEL_KEYSTORE,
@@ -26,6 +27,7 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $moduleDir = Join-Path $PSScriptRoot 'magisk-picoet-enhance'
 if (-not $HookDir) { $HookDir = Join-Path $PSScriptRoot 'hook' }
+if (-not $CameraDir) { $CameraDir = Join-Path $PSScriptRoot 'tongue-source/build-android' }
 if (-not $OutputDir) { $OutputDir = Join-Path $root 'artifacts' }
 
 $scripts = @('module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'picoet.sh',
@@ -45,13 +47,21 @@ $injector = Join-Path $HookDir 'build\picoet-inject'
 $payload = Join-Path $HookDir 'build\libpicoet_hook.so'
 $configHelper = Join-Path $HookDir 'build\picoet-config'
 $panelWorker = Join-Path $HookDir 'build\picoet-panel'
-foreach ($t in @($injector, $payload, $configHelper, $panelWorker)) {
+$cameraController = Join-Path $CameraDir 'picoet-camera'
+$cameraDaemon = Join-Path $CameraDir 'ptj_ipc_daemon'
+$cameraAdapter = Join-Path $CameraDir 'libpicoet_camera_jpeg.so'
+$cameraShim = Join-Path $CameraDir 'libptj_source.so'
+foreach ($t in @($injector, $payload, $configHelper, $panelWorker, $cameraController, $cameraDaemon, $cameraAdapter, $cameraShim)) {
     if (-not (Test-Path -LiteralPath $t)) { throw "Missing build artifact: $t (run hook/build-hook.ps1 first)" }
 }
 $injectSha = (Get-FileHash -LiteralPath $injector -Algorithm SHA256).Hash.ToLower()
 $payloadSha = (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash.ToLower()
 $configSha = (Get-FileHash -LiteralPath $configHelper -Algorithm SHA256).Hash.ToLower()
 $panelSha = (Get-FileHash -LiteralPath $panelWorker -Algorithm SHA256).Hash.ToLower()
+$elfShas = @($injectSha, $payloadSha, $configSha, $panelSha)
+foreach ($file in @($cameraController, $cameraDaemon, $cameraAdapter, $cameraShim)) {
+    $elfShas += (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLower()
+}
 
 # Known PICO library builds (offline payloads and stock). None of these may appear in the zip,
 # and the ELF allowlist below makes any other PICO binary or derivative fail the build too.
@@ -80,6 +90,12 @@ try {
     Copy-Item -LiteralPath $payload -Destination (Join-Path $stage 'lib\libpicoet_hook.so')
     Copy-Item -LiteralPath $configHelper -Destination (Join-Path $stage 'bin\picoet-config')
     Copy-Item -LiteralPath $panelWorker -Destination (Join-Path $stage 'bin\picoet-panel')
+    Copy-Item -LiteralPath $cameraController -Destination (Join-Path $stage 'bin\picoet-camera')
+    Copy-Item -LiteralPath $cameraDaemon -Destination (Join-Path $stage 'bin\ptj_ipc_daemon')
+    Copy-Item -LiteralPath $cameraAdapter -Destination (Join-Path $stage 'lib\libpicoet_camera_jpeg.so')
+    Copy-Item -LiteralPath $cameraShim -Destination (Join-Path $stage 'lib\libptj_source.so')
+    New-Item -ItemType Directory -Path (Join-Path $stage 'licenses/libjpeg-turbo') -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $CameraDir 'LICENSE.md'), (Join-Path $CameraDir 'README.ijg') -Destination (Join-Path $stage 'licenses/libjpeg-turbo')
     $props = Get-Content -Raw (Join-Path $moduleDir 'module.prop')
     $panelVersion = ([regex]::Match($props, '(?m)^version=(.+)$')).Groups[1].Value.Trim()
     $panelCode = ([regex]::Match($props, '(?m)^versionCode=(.+)$')).Groups[1].Value.Trim()
@@ -100,14 +116,14 @@ try {
         $bytes = [IO.File]::ReadAllBytes($f.FullName)
         if ($bytes.Length -ge 4 -and $bytes[0] -eq 0x7f -and $bytes[1] -eq 0x45 -and
             $bytes[2] -eq 0x4c -and $bytes[3] -eq 0x46) {
-            if ($h -ne $injectSha -and $h -ne $payloadSha -and $h -ne $configSha -and $h -ne $panelSha) {
+            if ($elfShas -notcontains $h) {
                 throw "staged ELF $($f.FullName) is not one of our build artifacts"
             }
         }
     }
     if (Test-Path -LiteralPath (Join-Path $stage 'payload')) { throw 'stage contains a payload/ directory' }
     foreach ($s in (Get-ChildItem -Recurse -File $stage -Filter *.so)) {
-        if ((Get-FileHash -LiteralPath $s.FullName -Algorithm SHA256).Hash.ToLower() -ne $payloadSha) {
+        if ($elfShas -notcontains (Get-FileHash -LiteralPath $s.FullName -Algorithm SHA256).Hash.ToLower()) {
             throw "unexpected .so in stage: $($s.FullName)"
         }
     }

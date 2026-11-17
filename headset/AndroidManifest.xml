@@ -2,6 +2,7 @@
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="29" />
     <application android:label="PicoET-Enhance" android:icon="@android:drawable/ic_menu_manage"
         android:allowBackup="false" android:theme="@android:style/Theme.Material.NoActionBar">
+        <activity android:name=".ProcessingActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

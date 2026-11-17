@@ -15,6 +15,8 @@ rm -f "$state/boot.id" "$state/control.lock" "$state/recovery.used" \
     "$state/injection.blocked" "$state/unsafe.instance" "$state/unsafe.handled" \
     "$state/automatic.attempts" "$state/automatic.attempts.tmp" \
     "$state/picoet.log" "$state/inject.log" "$state/service.log" "$state/panel.log" "$state/panel.lock" "$state"/setting.* 2>/dev/null || true
+rm -f "$state/camera.enabled" "$state/camera.enabled.new" "$state/camera.failure" \
+    "$state/camera.failure.new" "$state/camera.instance" "$state/camera.instance.new"
 rmdir "$state" 2>/dev/null || true
 rm -f /data/local/tmp/picoet-mode /data/local/tmp/picoet-gate /data/local/tmp/picoet-hook.log
 rm -f /data/local/tmp/picoet-eye-hz /data/local/tmp/picoet-mouth-hz

@@ -206,7 +206,7 @@ The IJG license covers the libjpeg API and its SIMD implementation (whose source
 also carries zlib notices); the build system and TurboJPEG API carry a
 three-clause BSD license. This integration uses the libjpeg API, not TurboJPEG.
 `tongue-source/build.py` downloads a pinned source archive, builds it separately,
-and retains `LICENSE.md` and `README.ijg` with the build outputs. Keep those
+and retains `LICENSE.md` and `README.ijg` with the build outputs. The module includes both in `licenses/libjpeg-turbo/`. Keep those
 notices and this attribution when distributing a linked daemon. ShadowHook and
 the Android C++ runtime use the existing notices above.
 

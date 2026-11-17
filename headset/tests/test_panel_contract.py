@@ -136,7 +136,7 @@ class RootlessPanelContract(unittest.TestCase):
                                  sorted(set(re.findall(r'\{\d\}', chinese[name] or ''))))
 
     def test_activity_is_a_settings_form_not_a_multiline_configuration_editor(self):
-        source = (SOURCE/'MainActivity.java').read_text()
+        source = (SOURCE/'ProcessingActivity.java').read_text()
         for required in ('new Switch(', 'new SeekBar(', 'number.setSingleLine(true)', 'state.canSave()', 'state.canApply()',
                          'Catalog.MOMENTS', 'new ScopeView(', 'Scope.run(', 'field.initial', 'allPage()'):
             self.assertIn(required, source)
@@ -144,14 +144,14 @@ class RootlessPanelContract(unittest.TestCase):
             self.assertNotIn(forbidden, source)
 
     def test_draft_edits_do_not_submit_module_requests(self):
-        source = (SOURCE/'MainActivity.java').read_text()
+        source = (SOURCE/'ProcessingActivity.java').read_text()
         edited = re.search(r'private void edited\(\) \{(.*?)\n    \}', source, re.S)[1]
         self.assertNotIn('request(', edited)
         self.assertEqual(re.findall(r'request\("(\w+)"\)', source), ['read', 'write', 'apply'])
         self.assertIn('setOnClickListener(v -> replaceDraft(action))', source)
 
     def test_fine_arrows_change_the_draft_without_slider_quantization(self):
-        source = (SOURCE/'MainActivity.java').read_text()
+        source = (SOURCE/'ProcessingActivity.java').read_text()
         arrows = re.search(r'private Button fineButton\(.*?\) \{(.*?)\n    \}', source, re.S)[1]
         for required in ('control(button(', '".decrease"', '".increase"', 'setContentDescription(',
                          '"fine_decrease"', '"fine_increase"', 'field.nudge(current, direction)',
@@ -180,7 +180,7 @@ class RootlessPanelContract(unittest.TestCase):
                     self.assertEqual(item.get('formatted'), 'false', (path, item.get('name')))
 
     def test_view_tags_do_not_use_framework_resource_ids(self):
-        for name in ('MainActivity.java', 'ScopeView.java'):
+        for name in ('MainActivity.java', 'ProcessingActivity.java', 'ScopeView.java'):
             self.assertNotIn('setTag(android.R.id.', (SOURCE/name).read_text())
 
     def test_technical_text_states_formulas_units_and_verified_examples(self):
@@ -203,7 +203,7 @@ class RootlessPanelContract(unittest.TestCase):
 
     def plain_keys(self, resources):
         """Strings shown in simple wording: everything except the technical additions."""
-        technical = re.compile(r'(_pro|_tech)$|^(state_|hint_|failed|valid|apply_|discard_|draft_|range|blink_order|invalid_)')
+        technical = re.compile(r'(_pro|_tech)$|^(state_|hint_|failed|valid|apply_|discard_|draft_|range|blink_order|invalid_|camera_error_)')
         return [name for name in resources if not technical.search(name)]
 
     def test_plain_wording_leaves_out_formula_notation(self):
@@ -217,7 +217,7 @@ class RootlessPanelContract(unittest.TestCase):
                     self.assertIsNone(notation.search(resources[name] or ''))
 
     def test_technical_additions_only_show_in_technical_wording(self):
-        lines = (SOURCE/'MainActivity.java').read_text().splitlines()
+        lines = (SOURCE/'ProcessingActivity.java').read_text().splitlines()
         uses = 0
         for index, line in enumerate(lines):
             if re.search(r'"_(pro|tech)"|_pro"\)', line):
@@ -226,7 +226,7 @@ class RootlessPanelContract(unittest.TestCase):
         self.assertGreaterEqual(uses, 5)
 
     def test_switching_wording_changes_display_only(self):
-        source = (SOURCE/'MainActivity.java').read_text()
+        source = (SOURCE/'ProcessingActivity.java').read_text()
         body = re.search(r'private void setWording\(boolean value\) \{(.*?)\n    \}', source, re.S)[1]
         for forbidden in ('state.', 'request(', 'draft', 'profile', 'replaceDraft', 'edited('):
             self.assertNotIn(forbidden, body)
@@ -236,7 +236,7 @@ class RootlessPanelContract(unittest.TestCase):
             self.assertIn(tag, source)
 
     def test_movement_charts_are_labelled_as_fixed_interval_examples(self):
-        source = (SOURCE/'MainActivity.java').read_text()
+        source = (SOURCE/'ProcessingActivity.java').read_text()
         body = re.search(r'private void momentPage\(Catalog.Moment moment\) \{(.*?)\n    \}', source, re.S)[1]
         self.assertIn('s("scope_example")', body)
         self.assertIn('HZ = 90', (SOURCE/'Scope.java').read_text())
@@ -246,6 +246,8 @@ class RootlessPanelContract(unittest.TestCase):
             self.assertIn('90', resources['guide_time'])
             self.assertIn('1/90 s', resources['guide_time_pro'])
             for name, text in resources.items():
+                if name.startswith(('camera_', 'home_', 'processing_')):
+                    continue
                 self.assertNotIn('实时', text or '')
                 self.assertNotRegex(text or '', r'\blive\b')
 
@@ -257,6 +259,38 @@ class RootlessPanelContract(unittest.TestCase):
         for forbidden in ('system(', 'popen(', '"su"', '"--force"'):
             self.assertNotIn(forbidden, worker)
         self.assertNotIn('kill(', worker)
+
+    def test_home_separates_camera_control_from_the_preserved_tuning_panel(self):
+        manifest = ET.parse(ROOT/'headset/AndroidManifest.xml')
+        ns = '{http://schemas.android.com/apk/res/android}'
+        activities = {node.get(ns+'name'): node for node in manifest.findall('application/activity')}
+        self.assertEqual(activities['.ProcessingActivity'].get(ns+'exported'), 'false')
+        home = (SOURCE/'MainActivity.java').read_text()
+        for fragment in ('"control/camera"', 'ProcessingActivity.class', '"camera-on"', '"camera-off"',
+                         'CameraState.parse(reply[1])', 'camera.enabled', 'camera.clients[i]', 'camera.online',
+                         '"/stream.mjpg"', 'handler.removeCallbacks(poll)', '"camera_retry_off"'):
+            self.assertIn(fragment, home)
+        self.assertNotIn('ProcessingSettings', home)
+        self.assertNotIn('putBoolean(', home)
+        worker = (ROOT/'hook/src/picoet-panel.cpp').read_text()
+        self.assertIn('for (bool camera : {false, true})', worker)
+        self.assertIn('module + "/bin/picoet-camera"', worker)
+
+    def test_camera_switch_is_bundled_opt_in_and_uses_existing_control_lock(self):
+        service = (ROOT/'magisk-picoet-enhance/service.sh').read_text()
+        self.assertIn('"$MODDIR/bin/picoet-camera" reconcile', service)
+        self.assertIn('"$MODDIR/bin/picoet-camera" halt', service)
+        installer = (ROOT/'magisk-picoet-enhance/customize.sh').read_text()
+        self.assertNotIn('camera.enabled', installer)
+        packager = (ROOT/'build-picoet-enhance.ps1').read_text()
+        for name in ('picoet-camera', 'ptj_ipc_daemon', 'libpicoet_camera_jpeg.so', 'libptj_source.so', 'licenses/libjpeg-turbo'):
+            self.assertIn(name, packager)
+        controller = (ROOT/'tongue-source/camera_service.cpp').read_text()
+        self.assertIn('state_root+"/control.lock"', controller)
+        self.assertIn('flock(lock,LOCK_EX)', controller)
+        self.assertIn('camera_service::stopped(*c,instance.pid,instance.birth)', controller)
+        self.assertNotIn('ctl.restart', controller)
+        self.assertNotIn('system(', controller)
 
     def test_module_bundles_and_starts_its_own_panel(self):
         packager = (ROOT/'build-picoet-enhance.ps1').read_text()

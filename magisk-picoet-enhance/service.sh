@@ -27,6 +27,9 @@ if [ -n "$panel_uid" ]; then
     "$MODDIR/bin/picoet-panel" "$MODDIR" "$panel_uid" >> "$STATE_DIR/panel.log" 2>&1 &
 fi
 
+# A saved opt-in is reconciled independently of expression tuning. No flag means off.
+trap '"$MODDIR/bin/picoet-camera" halt >/dev/null 2>&1' 0
+
 # Always reconcile through the same readiness/mapping checks as a manual ensure.
 # This also observes async plugin completion, clears a dead PID's properties and
 # allows read-only fragments to reach the injector's bounded recovery path.
@@ -34,6 +37,7 @@ fi
 while [ -d "$MODDIR" ] && [ ! -f "$MODDIR/disable" ] && [ ! -f "$MODDIR/remove" ]; do
     /system/bin/sh "$MODDIR/picoet.sh" ensure >> "$STATE_DIR/service.log" 2>&1
     rc=$?
+    "$MODDIR/bin/picoet-camera" reconcile >/dev/null 2>&1
     if [ "$rc" -eq 3 ]; then
         sleep 30
     else

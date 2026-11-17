@@ -4,9 +4,9 @@ English | [简体中文](README_zh.md)
 
 An eye-tracking enhancement Magisk module for the PICO 4 Pro: it opens the eye-tracking service's per-eye gate for real pupil data, decouples the facial expression model so each eye is processed on its own, and targets 90 Hz for both eye and mouth expressions by default instead of the stock rate of about 24 Hz. Use it with [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) and [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule).
 
-> v2.5.2 · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
+> v2.6.0-dev.1 (development branch) · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
 
-**End-to-end mouth tracking development:** `feat/tongue-pc` follows [MouthLink](https://github.com/UndefinedSignal/MouthLink)-style whole-mouth regression: the headset captures images, the PC handles configuration, recording, training and inference, and the matching UnifiedPicoModule branch merges the outputs. Segmentation masks followed by hand-written geometry are no longer the main route. Personal images, teacher predictions and student weights stay on the user's PC. Follow the [source-build and testing guide](TONGUE.md); the normal Magisk package below is unchanged, and the development tools do not include a validated general-purpose mouth model.
+**End-to-end mouth tracking development:** `feat/tongue-pc` follows [MouthLink](https://github.com/UndefinedSignal/MouthLink)-style whole-mouth regression: the headset captures images, the PC handles configuration, recording, training and inference, and the matching UnifiedPicoModule branch merges the outputs. Personal images, teacher predictions and student weights stay on the user's PC. Follow the [source-build and testing guide](TONGUE.md); this branch's module includes optional LAN cameras, but no validated general-purpose mouth model.
 
 ## What it does
 
@@ -66,12 +66,12 @@ The installer verifies the SHA-256 of the device's eye-tracking libraries and st
 
 ## Installation
 
-1. Download `magisk-picoet-enhance-v<version>.zip` from [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases).
+1. Prepare `magisk-picoet-enhance-v<version>.zip`: build this development branch using the source instructions below, or download a published stable version from [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases).
 2. Flash it in the Magisk app under Install from storage, or from a command line:
 
    ```sh
-    adb push magisk-picoet-enhance-v2.5.2.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.5.2.zip'
+    adb push magisk-picoet-enhance-v2.6.0-dev.1.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.0-dev.1.zip'
    ```
 
 3. Reboot the headset.
@@ -79,6 +79,10 @@ The installer verifies the SHA-256 of the device's eye-tracking libraries and st
 Fresh installs enable enhanced mode (`dual/on`) at 90/90 Hz after reboot. If you switched to normal mode before upgrading, it stays off.
 
 ## Usage
+
+Open **PicoET-Enhance** from the application library. **LAN cameras** on its home screen is the master switch for mouth, left-eye and right-eye images, with actual module status, addresses and client counts. **Expression tuning** opens the complete existing parameter panel.
+
+Sharing defaults off and remembers your choice. Clients can discover and independently subscribe to all three streams; cameras run only while subscribed. Switching off disconnects every stream; closing the app leaves the service running. Close other eye/face clients once before the first attachment so the adapter can initialize while tracking is idle. Images are unencrypted and unauthenticated, for trusted private networks. The switch does not change processing settings; ordinary expression forwarding still uses Bridge.
 
 Run as root on the headset:
 
@@ -131,6 +135,8 @@ sh /data/adb/modules/picoet-enhance/picoet.sh status
 Rates set in 2.4.0 or later survive reinstalls and upgrades. Only the first migration from a version before 2.4.0 clears old overrides to start at 90/90. Normal mode (`off`) is fully stock regardless of these files.
 
 ### Headset postprocessing
+
+Open **Expression tuning** from the app home screen. Its Start page, movement list and save/apply controls form the existing independent tuning panel.
 
 PICO's stock firmware postprocesses the expression model's output: brow curves and links, Blink endpoint snapping, adaptive/composite/Kalman filters, mouth baseline removal, log compression, the tongue threshold and smoothing. Its parameters were fixed. Since 2.5.0 this module exposes 44 of them as settings whose defaults are the stock values; the processing algorithms themselves remain PICO's.
 
@@ -185,6 +191,7 @@ Building requires Python 3, JDK 17 or newer (`JAVA_HOME`), Android platform 35 a
 
 ```powershell
 pwsh -File hook\build-hook.ps1                 # build the injector and payload
+python tongue-source/build.py android --ndk "$env:ANDROID_HOME/ndk/26.1.10909125" --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe" --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
 pwsh -File build-picoet-enhance.ps1 -Python python # build companion and package the Magisk zip
 ```
 

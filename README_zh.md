@@ -4,9 +4,9 @@
 
 面向 PICO 4 Pro 的眼动增强 Magisk 模块：打开眼动服务的逐眼门控以输出真实瞳孔数据，解除面部表情模型的跨眼耦合让左右眼各自计算，并把眼部与嘴部表情目标频率从原厂约 24 Hz 提高到默认 90/90 Hz。配合 [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) 和 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) 使用。
 
-> v2.5.2 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
+> v2.6.0-dev.1（开发分支）· PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
 
-**端到端嘴追开发：**`feat/tongue-pc`采用[MouthLink](https://github.com/UndefinedSignal/MouthLink)式整嘴回归：头显取图，PC配置、录制、训练和推理，配套UnifiedPicoModule同名分支合并输出。分割mask后手写几何不再作为主线；个人图像、教师预测与学生权重留在用户PC。按[源码构建与测试说明](TONGUE_zh.md)使用；下方正常Magisk包保持不变，开发工具不附带已验收的通用整嘴权重。
+**端到端嘴追开发：**`feat/tongue-pc`采用[MouthLink](https://github.com/UndefinedSignal/MouthLink)式整嘴回归：头显取图，PC配置、录制、训练和推理，配套UnifiedPicoModule同名分支合并输出。个人图像、教师预测与学生权重留在用户PC。按[源码构建与测试说明](TONGUE_zh.md)使用；本分支的模块包含可选局域网相机，不附带已验收的通用整嘴权重。
 
 ## 它做什么
 
@@ -66,12 +66,12 @@ Windows 11 可能会忽略官方宿主申请的 1 ms 定时器精度，这时每
 
 ## 安装
 
-1. 从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载 `magisk-picoet-enhance-v<版本>.zip`。
+1. 准备 `magisk-picoet-enhance-v<版本>.zip`。本开发分支按下方源码步骤构建；已发布的正式版可从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载。
 2. 在 Magisk App 中通过“从本地安装”刷入，或使用命令行：
 
    ```sh
-    adb push magisk-picoet-enhance-v2.5.2.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.5.2.zip'
+    adb push magisk-picoet-enhance-v2.6.0-dev.1.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.0-dev.1.zip'
    ```
 
 3. 重启头显。
@@ -79,6 +79,10 @@ Windows 11 可能会忽略官方宿主申请的 1 ms 定时器精度，这时每
 首次安装默认启用增强模式 `dual/on`，重启后以 90/90 Hz 运行。如果升级前已切到普通模式，升级后仍保持关闭。
 
 ## 使用
+
+从应用库打开 **PicoET-Enhance**。首页的 **局域网相机** 是嘴、左眼、右眼图像传输的总开关，显示模块实际状态，各路列出地址和客户端数量；**参数调节** 进入原有完整面板。
+
+相机共享默认关闭并记住选择。开启后，局域网客户端可自动发现并独立订阅三路图像；有人订阅才启动相机，关闭会断开全部传输，退出GUI不影响后台。首次开启需先关闭其他眼追、面捕客户端一次，以便空闲附加适配器。图像为明文、无认证，仅在可信私网使用。开关不改变后处理参数，普通表情转发仍走Bridge。
 
 在头显上以 Root 运行：
 
@@ -131,6 +135,8 @@ sh /data/adb/modules/picoet-enhance/picoet.sh status
 在 2.4.0 及之后版本设置的频率会在重装或升级时保留。只有首次从 2.4.0 之前的版本迁入时，才清除旧覆盖并以 90/90 起步。普通模式 `off` 完全是原厂行为，不受这些文件影响。
 
 ### 头显端后处理配置
+
+从应用首页进入 **参数调节**；以下的「开始」、动作清单及保存／应用均位于该独立面板。
 
 PICO原厂会在表情模型输出之后做一系列后处理：眉部曲线与联动、Blink端点补齐、自适应／复合／Kalman滤波、嘴部基线扣除、log压缩、伸舌门槛与平滑等。这些处理原本参数固定。从2.5.0起，本模块把其中44个参数开放为配置项，默认值就是原厂值；处理算法本身仍是原厂的。
 
@@ -185,6 +191,7 @@ sh "$MOD/picoet.sh" reload-processing
 
 ```powershell
 pwsh -File hook\build-hook.ps1                 # 构建 injector 与 payload
+python tongue-source/build.py android --ndk "$env:ANDROID_HOME/ndk/26.1.10909125" --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe" --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
 pwsh -File build-picoet-enhance.ps1 -Python python # 构建面板并打包 Magisk zip
 ```
 

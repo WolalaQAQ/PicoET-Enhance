@@ -68,7 +68,7 @@ def main():
     library = jpeg_build/('jpeg-static.lib' if args.target == 'host' else 'libjpeg.a')
     run(args.cmake, '-S', ROOT, '-B', build, *common, f'-DPTJ_JPEG_SOURCE={jpeg}',
         f'-DPTJ_JPEG_BUILD={jpeg_build}', f'-DPTJ_JPEG_LIBRARY={library}')
-    targets = ['ipc_layout', 'ptj_source', 'ptj_ipc_daemon', 'picoet_camera_jpeg', 'picoet-inject'] if args.target == 'android' else ['all']
+    targets = ['ipc_layout', 'ptj_source', 'ptj_ipc_daemon', 'picoet_camera_jpeg', 'picoet-inject', 'picoet-camera'] if args.target == 'android' else ['all']
     run(args.cmake, '--build', build, '--target', *targets, '--parallel', '8')
     if args.target == 'android':
         # EXCLUDE_FROM_ALL keeps the normal enhancement hook out of this build.

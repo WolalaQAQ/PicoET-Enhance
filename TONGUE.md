@@ -2,7 +2,7 @@
 
 English | [简体中文](TONGUE_zh.md)
 
-Use `feat/tongue-pc` in this repository and [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule/tree/feat/tongue-pc). This is a source-based developer test: build the camera transport, run the PC app, and build the matching receiver. The regular Magisk ZIP/build workflow remains unchanged and does not install these additional components.
+Use `feat/tongue-pc` in this repository and [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule/tree/feat/tongue-pc). This branch's module bundles optional three-camera LAN transport controlled from the companion home screen. Prepare the PC app and matching receiver separately from source.
 
 ```text
 PICO camera5 mouth lane (400×400 grayscale, fresh-source target 90 Hz)
@@ -58,6 +58,10 @@ Run that environment's Python against `pc-tongue/backend.py`. `auto` tries insta
 
 ## 2. Build and start the headset source
 
+With this branch's complete module and companion installed, enable **PicoET-Enhance → LAN cameras**. It defaults off and remembers your choice; the home screen reports actual status, stream addresses and client counts. Close other eye/face clients once before first attachment, then let clients subscribe as needed. **Expression tuning** opens the original parameter panel.
+
+The standalone `device.py` path below is for development diagnostics; do not run it alongside the module-managed camera service.
+
 Use rooted PICO 4 Pro / PICO OS 5.13.7. This branch includes the PicoET-Enhance 2.5.2 base, including its saved postprocessing settings. The adapter checks its supported system-library file and instruction window before hooking. Build inputs are Android NDK 26.1.10909125, CMake 3.22.1 and Ninja. libjpeg-turbo 3.1.2 is fetched and built as a separate static-library project; ShadowHook is compiled from this repository's existing vendored source.
 
 The official 2.5.2 main payload has no stock-label callback. JPEG remains available, but stock labels require a separately deployed matching main payload from this branch; portable `device.py start` does not replace the installed module. Status distinguishes JPEG capability, label callback capability and actual observed labels. A successful connection is not evidence that expressions were recorded.
@@ -68,7 +72,7 @@ Exact association also requires the main payload's `picoet_stock_input_identity_
 python tongue-source/build.py android --ndk <NDK-directory> --cmake <cmake-executable> --ninja <ninja-executable>
 ```
 
-The four outputs are in `tongue-source/build-android/`: `picoet-inject`, `libpicoet_camera_jpeg.so`, `libptj_source.so`, `ptj_ipc_daemon`. No device libraries or old compiled objects are build inputs. An existing libjpeg-turbo 3.1.2 source checkout can be selected with `--jpeg-source` for an offline build.
+The outputs are in `tongue-source/build-android/`: `picoet-inject`, `libpicoet_camera_jpeg.so`, `libptj_source.so`, `ptj_ipc_daemon` and the module controller `picoet-camera`. No device libraries or old compiled objects are build inputs. An existing libjpeg-turbo 3.1.2 source checkout can be selected with `--jpeg-source` for an offline build.
 
 For the matching main payload, build the `picoet_hook` target separately in the configured build directory; its output is `tongue-source/build-android/hook/libpicoet_hook.so`. The three-camera adapter, shim and daemon use PTJIPC4 and must be rebuilt together; the PTJ1 image layout is unchanged.
 

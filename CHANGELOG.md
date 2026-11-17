@@ -55,10 +55,25 @@ English | [简体中文](CHANGELOG_zh.md)
 - DINOv3 requires its matching local source and authorized weights under the DINOv3 License. DINOv2 remains the CLI default; select v3 B, L or H+ with `--teacher-backbone dinov3`, `dinov3-large` or `dinov3-huge`.
 - Automatic discovery requires this branch's updated headset daemon and a network that allows broadcasts. The native file chooser runs on the PC hosting the local app and needs Python's Tk support.
 - Reference images retain their source and asset-license notices; the pack contains no source FBX or SDK implementation. Added guide controls are labelled separately from original Meta morphs.
-- Pair with UnifiedPicoModule `feat/tongue-pc`. Normal Magisk packaging and installed versions are unchanged; additional components start explicitly from source.
+- Pair with UnifiedPicoModule `feat/tongue-pc`. This branch's Magisk package includes optional LAN cameras controlled from the companion home screen; prepare the PC app and receiver separately from source.
 - Retain segmentation/geometry and personal mask-training code only for history and regression tests, not as the default or a silent fallback for regression-model failures.
 - No validated general-purpose mouth/teacher weights are bundled, and training materials are not downloaded automatically. Synthetic training and ONNX checks do not establish worn accuracy.
 - On-device inference-input/camera identity association, sustained worn sources, personal accuracy and native/VD concurrency still need live acceptance; this work does not install or operate the device.
+
+## [2.6.0-dev.1] - 2026-11-18
+
+### Features
+- Give the companion app a home for LAN cameras and expression tuning. Move the complete parameter panel into its own screen, preserving drafts, presets, language and save/apply behavior.
+- Add a real LAN-camera master switch, actual service status, per-camera client counts and MJPEG addresses. Bundle the adapter, IPC shim, transport daemon and module controller.
+
+### Design Rationale
+- Keep the app rootless and without network permission. Camera and tuning use separate mailboxes handled by the same module worker, so navigation cannot overwrite an in-flight request.
+- Default sharing off and remember explicit choices. Closing the app leaves the service available, but cameras run only while clients subscribe. Turning sharing off drains every stream and checks the existing ownership, nonce and join acknowledgements.
+- Reuse the enhancement control lock and existing transport, without restarting tracking to toggle sharing. Wait for idle tracking before the first attachment; retain a failed instance's diagnostics instead of repeatedly injecting.
+
+### Notes & Caveats
+- Unpublished development version, `versionCode` 24. Update the APK and module backend together. Processing settings remain unchanged.
+- LAN images are unencrypted and unauthenticated. Retire any separately started development adapter before using the module switch. Module-managed startup, shutdown and the native home screen still require device acceptance.
 
 ## [2.5.2] - 2026-11-15
 

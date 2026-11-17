@@ -11,7 +11,8 @@ final class PanelChannel {
     PanelChannel(File directory) { this.directory = directory; directory.mkdirs(); }
     static String encode(String id, String action, String configuration) throws IOException {
         switch (action) {
-            case "read": case "defaults": case "balanced": case "responsive": case "raw": case "apply": configuration = ""; break;
+            case "read": case "defaults": case "balanced": case "responsive": case "raw": case "apply":
+            case "camera-status": case "camera-on": case "camera-off": configuration = ""; break;
             case "write": case "check": break;
             default: throw new IOException("Unknown action");
         }
