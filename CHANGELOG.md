@@ -5,6 +5,7 @@ English | [简体中文](CHANGELOG_zh.md)
 ## [Unreleased] - 2026-11-17
 
 ### Features
+- Support concurrent JPEG and standard HTTP MJPEG subscribers with one encoding per source frame and independent, bounded latest-frame delivery.
 - Make Capture self-operated: timed preparation and holds, automatic demonstration changes and recording completion, pause/resume and skip, plus an optional managed source lifecycle behind one recording action.
 - Add a persistent current-step counter/progress bar, four ordered capture presets (12/11/13/73 steps) and an expandable action list to Capture. Guided recording uses the selected preset and locks it for the session.
 - Rewrite the wording of all four pages in both languages: buttons, status and error messages, help, preset names and descriptions, the ordered action lists, step prompts and the reference image titles and captions. Each message now says what is happening, what to do and what the result is.
@@ -24,6 +25,7 @@ English | [简体中文](CHANGELOG_zh.md)
 - Send whole-mouth controls through 256-byte MFR1 with per-field validity on local UDP45682 for the matching UnifiedPicoModule to merge, retaining ORT backend selection and the bilingual app.
 
 ### Design Rationale
+- Keep image subscription generations stable while any consumer remains; a slow or disconnected client does not hold the raw shared-slot lease or stop other consumers.
 - Advance only with fresh continuous input and a current, visible, loaded-and-painted demonstration. Keep recording controls beside the existing reference images and preserve unknown training targets.
 - Derive the guide length and order from the preset's action list; freeze the selected plan in the recording manifest before frames arrive, while reusing the existing demonstration assets.
 - Keep optimization coverage separate from validation and output permission; export without an approval retains provenance but enables no channels.

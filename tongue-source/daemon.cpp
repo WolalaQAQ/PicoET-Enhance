@@ -167,7 +167,7 @@ int main(int argc, char** argv) {
         }
         if (registered && !request.matches(c)) { failure(c, OwnerEcho, EPROTO); break; }
         const bool stopping = c.stop_request || interrupted || c.state == Failed;
-        c.subscription.store(!stopping && validated && stats.connected ? stats.connections : 0, std::memory_order_release);
+        c.subscription.store(!stopping && validated ? core_ptj_image_subscription(core) : 0, std::memory_order_release);
         const uint64_t stock_subscription = !stopping && validated ? core_ptj_stock_subscription(core) : 0;
         c.stock_subscription.store(stock_subscription, std::memory_order_release);
         if (stopping) break;

@@ -14,7 +14,9 @@
 #include <memory>
 #include <mutex>
 #include <setjmp.h>
+#include <sstream>
 #include <thread>
+#include <vector>
 #include <jpeglib.h>
 #if defined(_WIN32)
 #include <winsock2.h>
@@ -67,10 +69,22 @@ struct Counters {
     PTJ_COUNTER_FIELDS(PTJ_ATOMIC)
 #undef PTJ_ATOMIC
 };
+struct EncodedFrame {
+    PTJHeader header{};
+    std::vector<uint8_t> jpeg;
+};
 struct Client {
     Socket fd;
     bool pair;
-    explicit Client(Socket s, bool p) : fd(s), pair(p) {}
+    bool mjpeg = false;
+    bool has_after_seq = false;
+    uint64_t after_seq = 0;
+    std::atomic<bool> closed{false}, done{false};
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::shared_ptr<const EncodedFrame> pending;
+    std::thread writer;
+    explicit Client(Socket s, bool p, bool http = false) : fd(s), pair(p), mjpeg(http) {}
     ~Client() { close_socket(fd); }
 };
 struct Frame {
@@ -96,6 +110,10 @@ struct PTJSource {
     bool has_seq = false;
     uint64_t last_seen_seq = 0;
     std::shared_ptr<Client> client;
+    std::vector<std::shared_ptr<Client>> jpeg_clients;
+    uint64_t image_generation = 0;
+    std::array<uint16_t, 3> camera_ports{};
+    uint32_t stream_id = 0;
     Counters stats;
     std::shared_ptr<Client> stock_client;
     std::array<PTJStockRecord, 16> stock_records;
@@ -212,6 +230,77 @@ static IOResult emit(PTJSource& s, Socket fd, PTJHeader& h, const void* p,
     }
     return result;
 }
+static void cancel_jpeg_client(Client& client) {
+    { std::lock_guard<std::mutex> lock(client.mutex); client.closed = true; }
+#if defined(_WIN32)
+    shutdown(client.fd, SD_BOTH);
+#else
+    shutdown(client.fd, SHUT_RDWR);
+#endif
+    client.changed.notify_all();
+}
+static void jpeg_writer(PTJSource& s, Client& client) {
+    while (s.running && !client.closed) {
+        std::shared_ptr<const EncodedFrame> frame;
+        {
+            std::unique_lock<std::mutex> lock(client.mutex);
+            client.changed.wait(lock, [&] { return client.pending || !s.running || client.closed; });
+            if (!s.running || client.closed) break;
+            frame = std::move(client.pending);
+        }
+        const uint64_t deadline = mono_ns() + uint64_t(s.timeout_ms) * 1000000ULL;
+        IOResult result;
+        if (client.mjpeg) {
+            std::ostringstream part;
+            part << "--pico-camera\r\nContent-Type: image/jpeg\r\nContent-Length: " << frame->jpeg.size()
+                 << "\r\nX-Session-ID: " << frame->header.session_id
+                 << "\r\nX-Source-Sequence: " << frame->header.source_seq
+                 << "\r\nX-Sensor-Nanoseconds: " << frame->header.sensor_ns << "\r\n\r\n";
+            const std::string prefix = part.str();
+            result = write_all(s, client.fd, prefix.data(), prefix.size(), deadline);
+            if (result == IOResult::Ok)
+                result = write_all(s, client.fd, frame->jpeg.data(), frame->jpeg.size(), deadline);
+            if (result == IOResult::Ok) result = write_all(s, client.fd, "\r\n", 2, deadline);
+            if (result == IOResult::Ok) {
+                ++s.stats.sent_packets; s.stats.sent_payload_bytes += frame->jpeg.size();
+            }
+        } else {
+            PTJHeader header = frame->header;
+            result = emit(s, client.fd, header, frame->jpeg.data(), uint32_t(frame->jpeg.size()), deadline);
+        }
+        if (result != IOResult::Ok) {
+            ++s.stats.send_errors;
+            if (result == IOResult::Timeout) ++s.stats.send_timeouts;
+            cancel_jpeg_client(client);
+            break;
+        }
+        ++s.stats.sent_sources; s.stats.last_sent_seq = frame->header.source_seq;
+    }
+    // Only a complete frame may be followed by END. A partial write closes instead.
+    if (!s.running && !client.closed && !client.mjpeg) {
+        PTJHeader header{};
+        std::memcpy(header.magic, "PTJ1", 4);
+        header.version = 1; header.header_bytes = sizeof(header); header.flags = PTJ_END;
+        header.session_id = s.session; header.width = PTJ_WIDTH; header.height = PTJ_HEIGHT; header.quality = 95;
+        emit(s, client.fd, header, nullptr, 0, 0, true);
+    }
+    { std::lock_guard<std::mutex> lock(client.mutex); client.pending.reset(); }
+    client.done = true;
+}
+static void reap_jpeg_clients(PTJSource& s) {
+    std::vector<std::shared_ptr<Client>> clients;
+    { std::lock_guard<std::mutex> lock(s.mutex); clients = s.jpeg_clients; }
+    for (const auto& client : clients) {
+        char byte;
+        const int n = recv(client->fd, &byte, 1, MSG_PEEK);
+        if (n == 0 || n > 0 || (n < 0 && !would_block(socket_error()))) cancel_jpeg_client(*client);
+        if (!client->done) continue;
+        client->writer.join();
+        std::lock_guard<std::mutex> lock(s.mutex);
+        s.jpeg_clients.erase(std::remove(s.jpeg_clients.begin(), s.jpeg_clients.end(), client), s.jpeg_clients.end());
+        if (s.jpeg_clients.empty() && !s.client) clear_pending(s, false);
+    }
+}
 struct JPEGError {
     jpeg_error_mgr base;
     jmp_buf jump;
@@ -282,13 +371,27 @@ static void encode_loop(PTJSource& s) {
         s.stats.encode_total_ns += elapsed; atomic_max(s.stats.encode_max_ns, elapsed);
         IOResult result = IOResult::Error;
         bool still_subscribed;
-        { std::lock_guard<std::mutex> lock(s.mutex); still_subscribed = s.client == client; }
+        { std::lock_guard<std::mutex> lock(s.mutex);
+          still_subscribed = client ? s.client == client :
+              !s.jpeg_clients.empty() && f.subscription == s.image_generation; }
         if (!encoded) ++s.stats.encode_errors;
         else {
             ++s.stats.encoded;
             if (!s.running) { ++s.stats.cancel_stop; }
             else if (!still_subscribed) { ++s.stats.cancel_disconnect; }
-            else {
+            else if (!client) {
+                auto packet = std::make_shared<EncodedFrame>();
+                packet->header = h; packet->header.flags = PTJ_JPEG | (f.meta.flags & PTJ_REPLAY);
+                packet->header.payload_bytes = uint32_t(encoder.size);
+                packet->jpeg.assign(encoder.data, encoder.data + encoder.size);
+                std::vector<std::shared_ptr<Client>> clients;
+                { std::lock_guard<std::mutex> lock(s.mutex); clients = s.jpeg_clients; }
+                for (const auto& receiver : clients) {
+                    if (receiver->closed || (receiver->has_after_seq && f.meta.source_seq <= receiver->after_seq)) continue;
+                    { std::lock_guard<std::mutex> lock(receiver->mutex); receiver->pending = packet; }
+                    receiver->changed.notify_one();
+                }
+            } else {
                 const uint64_t deadline = mono_ns() + uint64_t(s.timeout_ms) * 1000000ULL;
                 if (client->pair) {
                     PTJHeader raw = h;
@@ -321,7 +424,7 @@ static void encode_loop(PTJSource& s) {
     }
 }
 
-static bool read_command(PTJSource& s, Socket fd, char (&command)[16], uint64_t& received) {
+static bool read_command(PTJSource& s, Socket fd, char (&command)[256], uint64_t& received) {
     const uint64_t deadline = mono_ns() + 1000000000ULL;
     size_t used = 0;
     while (s.running && mono_ns() < deadline && used < sizeof(command) - 1) {
@@ -362,8 +465,60 @@ static void send_stock(PTJSource& s) {
                             mono_ns() + uint64_t(s.timeout_ms) * 1000000ULL) != IOResult::Ok)
         drop_stock_client(s, client);
 }
+static std::string camera_catalog(PTJSource& s) {
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (!s.service_generation || !s.camera_ports[0]) return {};
+    static const char* names[] = {"mouth", "eye_left", "eye_right"};
+    static const unsigned lanes[] = {2, 0, 1};
+    std::ostringstream json;
+    json << "{\"service\":\"pico-camera\",\"version\":1,\"session_id\":\"" << s.session
+         << "\",\"service_generation\":\"" << s.service_generation << "\",\"streams\":[";
+    for (size_t i = 0; i < s.camera_ports.size(); ++i) {
+        if (i) json << ',';
+        json << "{\"id\":\"" << names[i] << "\",\"source_lane\":" << lanes[i]
+             << ",\"port\":" << s.camera_ports[i]
+             << ",\"path\":\"/stream.mjpg\",\"width\":400,\"height\":400,\"pixel_format\":\"gray8\""
+                ",\"encoding\":\"jpeg\",\"quality\":95}";
+    }
+    json << "]}";
+    return json.str();
+}
+static bool http_headers(PTJSource& s, Socket fd) {
+    const uint64_t deadline = mono_ns() + 1000000000ULL;
+    unsigned bytes = 0, newlines = 1;
+    while (s.running && mono_ns() < deadline && bytes++ < 4096) {
+        char c;
+        const int n = recv(fd, &c, 1, 0);
+        if (n == 1) {
+            if (c == '\n') { if (++newlines == 2) return true; }
+            else if (c != '\r') newlines = 0;
+        } else if (!n || !would_block(socket_error())) return false;
+        else { PollFD p{fd, POLLIN, 0}; poll_sockets(&p, 1, 10); }
+    }
+    return false;
+}
+static bool http_response(PTJSource& s, Socket fd, const char* code, const char* type, const std::string& body) {
+    std::ostringstream text;
+    text << "HTTP/1.1 " << code << "\r\nContent-Type: " << type
+         << "\r\nContent-Length: " << body.size() << "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n" << body;
+    const std::string response = text.str();
+    return write_all(s, fd, response.data(), response.size(), mono_ns() + 100000000ULL) == IOResult::Ok;
+}
+static void subscribe_jpeg(PTJSource& s, Socket fd, bool http) {
+    auto client = std::make_shared<Client>(fd, false, http);
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (!s.running || s.client || s.jpeg_clients.size() >= 8) return;
+    if (s.jpeg_clients.empty()) ++s.image_generation;
+    client->has_after_seq = s.has_seq;
+    client->after_seq = s.has_seq ? s.last_seen_seq : 0;
+    s.jpeg_clients.push_back(client);
+    ++s.stats.connections;
+    try { client->writer = std::thread(jpeg_writer, std::ref(s), std::ref(*client)); }
+    catch (...) { s.jpeg_clients.pop_back(); }
+}
 static void answer_discovery(PTJSource& s) {
     static constexpr char request[] = "PICO_MOUTH_DISCOVER_V1\n";
+    static constexpr char cameras[] = "PICO_CAMERA_DISCOVER_V1\n";
     char bytes[64]{};
     sockaddr_in peer{};
 #if defined(_WIN32)
@@ -373,7 +528,14 @@ static void answer_discovery(PTJSource& s) {
 #endif
     const int received = int(recvfrom(s.discovery, bytes, sizeof(bytes), 0,
                                      reinterpret_cast<sockaddr*>(&peer), &peer_bytes));
-    if (received != int(sizeof(request)-1) || std::memcmp(bytes, request, sizeof(request)-1)) return;
+    if (received == int(sizeof(cameras)-1) && !std::memcmp(bytes, cameras, sizeof(cameras)-1)) {
+        const std::string catalog = camera_catalog(s);
+        if (!catalog.empty())
+            sendto(s.discovery, catalog.data(), int(catalog.size()), 0,
+                   reinterpret_cast<const sockaddr*>(&peer), peer_bytes);
+        return;
+    }
+    if (s.stream_id || received != int(sizeof(request)-1) || std::memcmp(bytes, request, sizeof(request)-1)) return;
     PTJCaptureContext context;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
@@ -387,6 +549,7 @@ static void answer_discovery(PTJSource& s) {
 static void server_loop(PTJSource& s) {
     while (s.running) {
         send_stock(s);
+        reap_jpeg_clients(s);
         // Detect an idle subscriber disappearing, even when there are no sources.
         std::shared_ptr<Client> current;
         { std::lock_guard<std::mutex> lock(s.mutex); current = s.client; }
@@ -406,9 +569,27 @@ static void server_loop(PTJSource& s) {
         int one = 1, buffer = 32768;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&one), sizeof(one));
         setsockopt(fd, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buffer), sizeof(buffer));
-        char command[16]{}; uint64_t received = 0;
+        char command[256]{}; uint64_t received = 0;
         if (!read_command(s, fd, command, received)) { close_socket(fd); continue; }
-        if (std::strcmp(command, "PING") == 0) {
+        if (!std::strncmp(command, "GET ", 4)) {
+            if (!http_headers(s, fd)) { close_socket(fd); continue; }
+            if (!std::strncmp(command, "GET /stream.mjpg HTTP/1.", sizeof("GET /stream.mjpg HTTP/1.")-1)) {
+                static const char response[] =
+                    "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=pico-camera\r\n"
+                    "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+                if (write_all(s, fd, response, sizeof(response)-1, mono_ns()+100000000ULL) == IOResult::Ok)
+                    subscribe_jpeg(s, fd, true);
+                else close_socket(fd);
+            } else if (!std::strncmp(command, "GET /cameras HTTP/1.", 20) ||
+                       !std::strncmp(command, "GET / HTTP/1.", 13)) {
+                const std::string catalog = camera_catalog(s);
+                http_response(s, fd, catalog.empty() ? "503 Service Unavailable" : "200 OK",
+                              "application/json", catalog.empty() ? "{\"error\":\"camera source not attached\"}" : catalog);
+                close_socket(fd);
+            } else {
+                http_response(s, fd, "404 Not Found", "text/plain", "Not found\n"); close_socket(fd);
+            }
+        } else if (std::strcmp(command, "PING") == 0) {
             uint64_t response[2]{received, mono_ns()};
             if (write_all(s, fd, response, sizeof(response), mono_ns() + 100000000ULL) == IOResult::Ok)
                 ++s.stats.pings;
@@ -426,10 +607,14 @@ static void server_loop(PTJSource& s) {
             if (context.capture_session_id && context.service_generation)
                 write_all(s, fd, &context, sizeof(context), mono_ns() + 100000000ULL);
             close_socket(fd);
-        } else if (!std::strcmp(command, "JPEG") || !std::strcmp(command, "PAIR")) {
-            auto client = std::make_shared<Client>(fd, !std::strcmp(command, "PAIR"));
+        } else if (!std::strcmp(command, "JPEG")) {
+            subscribe_jpeg(s, fd, false);
+        } else if (!std::strcmp(command, "PAIR")) {
+            auto client = std::make_shared<Client>(fd, true);
             std::lock_guard<std::mutex> lock(s.mutex);
-            if (s.running && !s.client) { s.client = std::move(client); ++s.stats.connections; }
+            if (s.running && !s.client && s.jpeg_clients.empty()) {
+                s.client = std::move(client); ++s.stats.connections; ++s.image_generation;
+            }
         } else if (!std::strcmp(command, "LABELS")) {
             auto client = std::make_shared<Client>(fd, false);
             std::lock_guard<std::mutex> lock(s.mutex);
@@ -451,6 +636,7 @@ extern "C" int ptj_start(const PTJConfig* config, PTJSource** out) {
     if (config) { if (config->struct_bytes != sizeof(c)) return -1; c = *config; }
     auto s = std::make_unique<PTJSource>();
     s->session = c.session_id ? c.session_id : (mono_ns() ^ (process_id() << 32));
+    s->stream_id = c.reserved;
     s->timeout_ms = c.send_timeout_ms ? c.send_timeout_ms : 100;
 #if defined(_WIN32)
     WSADATA wsa{};
@@ -535,7 +721,7 @@ static int submit_frame(PTJSource* s, const uint8_t* pixels, uint32_t stride, co
         ++s->stats.drop_duplicate; return PTJ_DUPLICATE;
     }
     s->has_seq = true; s->last_seen_seq = meta->source_seq;
-    if (!s->client || (borrowed && s->stats.connections != subscription)) {
+    if ((!s->client && s->jpeg_clients.empty()) || (borrowed && s->image_generation != subscription)) {
         ++s->stats.drop_no_subscriber; return PTJ_NO_SUBSCRIBER;
     }
     if (s->pending >= 0) { ++s->stats.drop_full; return PTJ_FULL; }
@@ -557,7 +743,7 @@ static int submit_frame(PTJSource* s, const uint8_t* pixels, uint32_t stride, co
         s->stats.copy_last_ns = copy_ns; atomic_max(s->stats.copy_max_ns, copy_ns);
     }
     f.meta = *meta; f.client = s->client; f.borrowed = borrowed;
-    f.subscription = borrowed ? subscription : s->stats.connections.load();
+    f.subscription = borrowed ? subscription : s->image_generation;
     s->pending = slot; // Mutex publishes pointer + metadata + subscription as one lease.
     ++s->stats.enqueued;
     atomic_max(s->stats.queue_peak, uint64_t(1 + (s->processing >= 0)));
@@ -576,13 +762,27 @@ extern "C" int core_ptj_get_borrow_stats(const PTJSource* s, CoreBorrowStats* ou
     if (!s || !out) return -1;
     std::lock_guard<std::mutex> lock(s->mutex); *out = s->borrow; return 0;
 }
+extern "C" uint64_t core_ptj_image_subscription(const PTJSource* s) {
+    if (!s) return 0;
+    std::lock_guard<std::mutex> lock(s->mutex);
+    return s->client || !s->jpeg_clients.empty() ? s->image_generation : 0;
+}
+extern "C" void core_ptj_bind_camera_catalog(PTJSource* s, uint16_t mouth, uint16_t left, uint16_t right) {
+    std::lock_guard<std::mutex> lock(s->mutex);
+    s->camera_ports = {mouth, left, right};
+    ip_mreq group{};
+    inet_pton(AF_INET, "239.255.255.250", &group.imr_multiaddr);
+    group.imr_interface.s_addr = htonl(INADDR_ANY);
+    setsockopt(s->discovery, IPPROTO_IP, IP_ADD_MEMBERSHIP,
+               reinterpret_cast<const char*>(&group), sizeof(group));
+}
 extern "C" int ptj_get_stats(const PTJSource* s, PTJStats* stats) {
     if (!s || !stats) return -1;
     *stats = {}; stats->struct_bytes = sizeof(*stats); stats->session_id = s->session;
     stats->running = s->running;
     {
         std::lock_guard<std::mutex> lock(s->mutex);
-        stats->connected = bool(s->client);
+        stats->connected = s->client ? 1 : s->jpeg_clients.size();
         stats->queue_in_use = uint64_t((s->pending >= 0) + (s->processing >= 0));
     }
 #define PTJ_LOAD(n) stats->n = s->stats.n.load(std::memory_order_relaxed);
@@ -598,15 +798,26 @@ extern "C" void ptj_stop(PTJSource* s) {
         s->running = false; clear_pending(*s, true);
     }
     s->changed.notify_all();
+    { std::lock_guard<std::mutex> lock(s->mutex);
+      for (const auto& client : s->jpeg_clients) {
+          std::lock_guard<std::mutex> client_lock(client->mutex);
+          client->changed.notify_all();
+      } }
     if (s->server.joinable()) s->server.join();
     if (s->worker.joinable()) s->worker.join();
+    std::vector<std::shared_ptr<Client>> clients;
+    { std::lock_guard<std::mutex> lock(s->mutex); clients = s->jpeg_clients; }
+    for (const auto& client : clients)
+        if (client->writer.joinable()) client->writer.join();
     // Never append END behind a failed/partial frame; close terminates that connection.
     std::shared_ptr<Client> current;
     {
         std::lock_guard<std::mutex> lock(s->mutex);
         current = std::move(s->client);
+        s->jpeg_clients.clear();
         s->stock_client.reset(); s->stock_size = 0;
     }
+    clients.clear(); // Close every socket before the last WSACleanup cancels outstanding I/O.
     if (current) {
         PTJHeader h{}; std::memcpy(h.magic, "PTJ1", 4);
         h.version = 1; h.header_bytes = 128; h.flags = PTJ_END; h.session_id = s->session;

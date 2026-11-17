@@ -17,6 +17,9 @@ extern "C" {
 CORE_INTERNAL int core_ptj_submit_borrowed(PTJSource*, const uint8_t*, const PTJMeta*,
                                          uint64_t capture_copy_ns, uint64_t subscription);
 CORE_INTERNAL int core_ptj_get_borrow_stats(const PTJSource*, CoreBorrowStats*);
+// Subscription lifetime advances only after the last image client leaves.
+CORE_INTERNAL uint64_t core_ptj_image_subscription(const PTJSource*);
+CORE_INTERNAL void core_ptj_bind_camera_catalog(PTJSource*, uint16_t mouth, uint16_t left, uint16_t right);
 #if defined(PTJ_CORE_TEST)
 // Test DLL only: 1=worker acquired, 2=CRC input, 3=JPEG input, 4=RAW emit, 5=last read finished.
 typedef void (*CoreTestHook)(uint32_t, const uint8_t*, void*);
