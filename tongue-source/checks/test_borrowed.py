@@ -256,6 +256,18 @@ class CoreBorrowTests(unittest.TestCase):
 
 
 class CameraServiceTests(unittest.TestCase):
+    def test_new_subscription_may_begin_with_vendor_identity_one(self):
+        core = Core(self)
+        old = core.connect(pair=False)
+        pages = core.pages_for(bytes([42]) * 160000)
+        self.assertEqual(core.borrow(pages, 100), 0)
+        self.assertEqual(T.packet(old)[0]['source_seq'], 100)
+        old.close()
+        T.wait(lambda: core.stats()['connected'] == 0)
+        new = core.connect(pair=False)
+        self.assertEqual(core.borrow(pages, 1), 0)
+        self.assertEqual(T.packet(new)[0]['source_seq'], 1)
+
     def test_subscriber_limit_rejects_http_with_503_and_keeps_existing_clients(self):
         core = Core(self)
         receivers = [core.connect(pair=False) for _ in range(8)]

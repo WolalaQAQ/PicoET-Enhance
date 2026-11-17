@@ -177,6 +177,12 @@ extern "C" int ptj_start(const PTJConfig* config, PTJSource** out) {
     *out = s.release(); return 0;
 }
 extern "C" uint64_t ptj_session_id(const PTJSource* s) { return s ? s->session : 0; }
+extern "C" uint64_t ptj_capture_epoch(const PTJSource* source) {
+    if (!source) return 0;
+    auto& s = *const_cast<PTJSource*>(source);
+    Lease lease(s);
+    return lease.valid && peer(s) ? s.channel->capture_epoch.load(std::memory_order_acquire) : 0;
+}
 extern "C" int ptj_submit_stock(PTJSource* source, const PTJStockRecord* record) {
     if (!source || !record) return PTJ_INVALID;
     if (record->reserved[0] || record->reserved[1]) return PTJ_INVALID;
@@ -224,6 +230,10 @@ extern "C" int ptj_submit_stream(PTJSource* source, uint32_t stream, const uint8
     uint32_t unlocked = 0;
     if (!image.producer_lock.compare_exchange_strong(unlocked, 1, std::memory_order_acquire)) DROP(drop_busy, PTJ_BUSY);
     struct Unlock { ImageChannel& image; ~Unlock() { image.producer_lock.store(0, std::memory_order_release); } } unlock{image};
+    const uint64_t epoch = c.capture_epoch.load(std::memory_order_acquire);
+    if (image.capture_epoch != epoch) {
+        image.capture_epoch = epoch; image.has_seq = 0;
+    }
     if (image.has_seq && meta->source_seq <= image.last_seen_seq.load()) DROP(drop_duplicate, PTJ_DUPLICATE);
     image.last_seen_seq = meta->source_seq; image.has_seq = 1;
     const uint64_t subscription = image.subscription.load(std::memory_order_acquire);

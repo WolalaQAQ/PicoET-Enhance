@@ -8,10 +8,11 @@ template<class T> T load(const void* p, size_t offset) {
 constexpr uint32_t PREFIX_BYTES = 640000, MAX_BYTES = 2 * 1024 * 1024;
 }
 void CameraBridge::arm(PTJSource* owner, uint64_t owner_session, CameraSubmit function, StockSubmit labels,
-                        uint64_t generation, bool audited, CameraSubmitStream streams) {
+                        uint64_t generation, bool audited, CameraSubmitStream streams, CameraEpoch capture) {
     std::lock_guard<std::mutex> lock(gate);
     source = owner; session = owner_session; submit = function;
     submit_stream = streams;
+    get_capture_epoch = capture; capture_epoch = 0;
     stock_submit = labels; service_generation = generation; audited_camera5 = audited;
     association.reset_context(session, service_generation);
     counts.last_identity = 0; counts.last_sensor_ns = 0; counts.first_identity = 0;
@@ -38,6 +39,15 @@ void CameraBridge::on_frame(uint64_t entry_epoch, const void* listener, const vo
     if (load<uint32_t>(frame, 16) != 36) { ++counts.bad_format; return; }
     if (!identity) { ++counts.missing_identity; return; }
     if (!sensor) { ++counts.missing_sensor; return; }
+    if (get_capture_epoch) {
+        const uint64_t current = get_capture_epoch(source);
+        if (!current) { ++counts.no_subscriber; return; }
+        if (current != capture_epoch) {
+            capture_epoch = current;
+            counts.last_identity = 0;
+            association.reset_context(session, service_generation);
+        }
+    }
     const uint64_t previous = counts.last_identity.load(std::memory_order_relaxed);
     const uint64_t previous_sensor = counts.last_sensor_ns.load(std::memory_order_relaxed);
     if (identity == previous) {
@@ -112,7 +122,7 @@ void CameraBridge::detach_and_drain() {
     accepting.store(0, std::memory_order_release);
     std::unique_lock<std::mutex> lock(gate);
     drained.wait(lock, [&] { return flight.load(std::memory_order_relaxed) == 0; });
-    source = nullptr; submit = nullptr; submit_stream = nullptr; session = 0;
+    source = nullptr; submit = nullptr; submit_stream = nullptr; get_capture_epoch = nullptr; session = 0;
     stock_submit = nullptr; service_generation = 0; audited_camera5 = false; association.clear();
 }
 CameraStats CameraBridge::snapshot() const {

@@ -42,11 +42,13 @@ class Stats(C.Structure):
 
 Submit = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_void_p, C.c_uint32, C.POINTER(Meta))
 SubmitStream = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_uint32, C.c_void_p, C.c_uint32, C.POINTER(Meta))
+CaptureEpoch = C.CFUNCTYPE(C.c_uint64, C.c_void_p)
 DLL = C.CDLL(str(BUILD / 'camera_bridge_test.dll'))
 DLL.camtest_create.restype = C.c_void_p
 DLL.camtest_destroy.argtypes = [C.c_void_p]
 DLL.camtest_arm.argtypes = [C.c_void_p, C.c_void_p, C.c_uint64, Submit]
 DLL.camtest_arm_streams.argtypes = [C.c_void_p, C.c_void_p, C.c_uint64, SubmitStream]
+DLL.camtest_arm_cycles.argtypes = [C.c_void_p, C.c_void_p, C.c_uint64, Submit, CaptureEpoch]
 DLL.camtest_ticket.argtypes = [C.c_void_p]
 DLL.camtest_ticket.restype = C.c_uint64
 DLL.camtest_frame.argtypes = [C.c_void_p, C.c_uint64, C.c_void_p, C.c_void_p]
@@ -192,6 +194,29 @@ class NativeSource:
 
 
 class CameraTests(unittest.TestCase):
+    def test_native_camera_cycle_can_reset_raw_identity_but_not_sensor_time(self):
+        b = self.bridge()
+        current = [1]
+        query = CaptureEpoch(lambda _: current[0])
+        DLL.camtest_arm_cycles(b.handle, 1234, b.session, b.callback, query)
+        b.frame(Frame(identity=20, sensor=1000))
+        current[0] = 2
+        b.frame(Frame(identity=1, sensor=2000))
+        self.assertEqual([row[3].source_seq for row in b.records], [20, 1])
+        self.assertEqual([row[3].raw_identity for row in b.records], [20, 1])
+        self.assertEqual(b.stats()['identity_fault'], 0)
+        current[0] = 3
+        b.frame(Frame(identity=1, sensor=1900))
+        self.assertEqual((b.stats()['sensor_backwards'], b.stats()['identity_fault']), (1, 1))
+
+    def test_raw_identity_regression_inside_same_native_cycle_still_disarms(self):
+        b = self.bridge()
+        query = CaptureEpoch(lambda _: 1)
+        DLL.camtest_arm_cycles(b.handle, 1234, b.session, b.callback, query)
+        b.frame(Frame(identity=20, sensor=1000))
+        b.frame(Frame(identity=19, sensor=2000))
+        self.assertEqual((b.stats()['backwards'], b.stats()['identity_fault']), (1, 1))
+
     def setUp(self):
         self.bridges = []
         self.natives = []

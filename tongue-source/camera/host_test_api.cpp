@@ -10,6 +10,9 @@ EXPORT void camtest_arm(CameraBridge* b, PTJSource* s, uint64_t session, CameraS
 EXPORT void camtest_arm_streams(CameraBridge* b, PTJSource* s, uint64_t session, CameraSubmitStream fn) {
     b->arm(s, session, nullptr, nullptr, 0, false, fn);
 }
+EXPORT void camtest_arm_cycles(CameraBridge* b, PTJSource* s, uint64_t session, CameraSubmit fn, CameraEpoch epoch) {
+    b->arm(s, session, fn, nullptr, 0, false, nullptr, epoch);
+}
 using TestTracking = int (*)(uint32_t);
 EXPORT TrackingDemand* demandtest_create(TestTracking fn) {
     return new TrackingDemand([fn](bool start) { return TrackingResult{fn(start), 0, 0}; });

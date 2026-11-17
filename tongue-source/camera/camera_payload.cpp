@@ -19,7 +19,7 @@
 #include <unistd.h>
 
 extern "C" __attribute__((visibility("default")))
-const char picoet_camera_jpeg_version[] = "camera5-lan-jpeg95-r2-20261117";
+const char picoet_camera_jpeg_version[] = "camera5-lan-jpeg95-r3-20261117";
 
 namespace {
 #define U(x) static_cast<unsigned long long>(x)
@@ -29,6 +29,7 @@ struct API {
     uint64_t (*session_id)(const PTJSource*) = nullptr;
     CameraSubmit submit = nullptr;
     CameraSubmitStream submit_stream = nullptr;
+    CameraEpoch capture_epoch = nullptr;
     StockSubmit stock = nullptr;
     int (*stats)(const PTJSource*, PTJStats*) = nullptr;
     int (*stream_stats)(const PTJSource*, uint32_t, PTJStats*) = nullptr;
@@ -277,9 +278,10 @@ bool load_video() {
     RESOLVE(stats, "ptj_get_stats") RESOLVE(stop, "ptj_stop") RESOLVE(destroy, "ptj_destroy")
     RESOLVE(stock, "ptj_submit_stock")
     RESOLVE(submit_stream, "ptj_submit_stream") RESOLVE(stream_stats, "ptj_get_stream_stats")
+    RESOLVE(capture_epoch, "ptj_capture_epoch")
 #undef RESOLVE
     if (!api.start || !api.session_id || !api.submit || !api.stats || !api.stop || !api.destroy ||
-        !api.stock || !api.submit_stream || !api.stream_stats) {
+        !api.stock || !api.submit_stream || !api.stream_stats || !api.capture_epoch) {
         set_error(-2, "video C ABI exports missing"); dlclose(video_library); video_library = nullptr; return false;
     }
     return true;
@@ -318,7 +320,7 @@ void start_video() {
         dlclose(main_payload); // The installed main payload remains resident.
     }
     bridge().arm(video, api.session_id(video), api.submit, api.stock, start_ticks,
-                 hook_status == 1 && stock_input_identity_supported, api.submit_stream);
+                 hook_status == 1 && stock_input_identity_supported, api.submit_stream, api.capture_epoch);
     if (set_stock_sink) {
         set_stock_sink(stock_callback, nullptr);
         stock_sink_registered = true;

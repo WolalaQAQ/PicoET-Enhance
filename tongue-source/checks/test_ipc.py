@@ -327,6 +327,20 @@ class IPCTests(unittest.TestCase):
         self.assertEqual(rt.module.shim_status()['state'], 'stopped_acknowledged')
         self.assertEqual(rt.module.probe()['stop_ack'], 1)
 
+    def test_native_capture_epoch_resets_only_the_producer_dedup_boundary(self):
+        rt = self.runtime()
+        source = rt.source()
+        old = rt.connect()
+        self.assertEqual(source.submit(meta=source.meta(100)), 0)
+        packet(old)
+        old.close()
+        wait(lambda: rt.module.probe()['subscription'] == 0)
+        rt.module.fixture(25)
+        new = rt.connect()
+        self.assertEqual(source.submit(meta=source.meta(1)), 0)
+        self.assertEqual(packet(new)[0]['source_seq'], 1)
+        self.assertEqual(source.submit(meta=source.meta(1), address=1), 2)
+
     def test_04_pair_strided_lane_copy_meta_and_capture_timestamp(self):
         rt = self.runtime()
         s = rt.source()

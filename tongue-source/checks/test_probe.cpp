@@ -81,6 +81,7 @@ EXPORT int ipc_test_fixture(const char* root, uint32_t action) {
     } else if (action == 16) c->client_nonce[0] ^= 1;
     else if (action == 17) c->request_session ^= 1;
     else if (action == 18) c->attach_client_nonce[0] ^= 1;
+    else if (action == 25) ++c->capture_epoch;
     else if (action == 23 || action == 24) {
         c->stock_subscription = 123;
         for (auto& label : c->labels) label.state.store(action == 23 ? Pending : Free, std::memory_order_release);

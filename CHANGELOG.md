@@ -26,6 +26,9 @@ English | [简体中文](CHANGELOG_zh.md)
 - Add local teacher fine-tuning, soft labels, a directly supervised student baseline, student distillation/personal adaptation and ONNX export tools; user data is not uploaded.
 - Send whole-mouth controls through 256-byte MFR1 with per-field validity on local UDP45682 for the matching UnifiedPicoModule to merge, retaining ORT backend selection and the bilingual app.
 
+### Fixes
+- Scope vendor frame-counter resets to verified native capture epochs so a new subscription works after the last consumer disconnects. Keep raw identities and timestamps unchanged, with strict sensor-time and same-epoch regression checks.
+
 ### Design Rationale
 - Give each camera its own bounded raw slots and encoder; perform Binder startup/shutdown on a separate worker so camera demand does not block the IPC heartbeat.
 - Keep image subscription generations stable while any consumer remains; a slow or disconnected client does not hold the raw shared-slot lease or stop other consumers.

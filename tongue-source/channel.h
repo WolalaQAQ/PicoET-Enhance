@@ -68,6 +68,7 @@ struct alignas(64) StockSlot {
 struct alignas(64) ImageChannel {
     std::atomic<uint32_t> producer_lock{0}, pending{0}; // 3 reserves the pending position.
     std::atomic<uint64_t> subscription{0};
+    std::atomic<uint64_t> capture_epoch{0}; // Producer deduplication belongs to one native camera run.
     std::atomic<uint64_t> in_use{0}, peak{0}, last_seen_seq{0}, has_seq{0};
     std::atomic<uint64_t> dispatched{0}, completed{0}, cancel_disconnect{0}, cancel_stop{0}, dispatch_dropped{0};
     std::atomic<uint64_t> last_capture_copy_ns{0}, last_dispatch_ns{0};
@@ -88,6 +89,7 @@ struct alignas(64) Channel {
     std::atomic<uint64_t> stop_ack_session{0}, stop_client_nonce[2]{};
     std::atomic<uint32_t> error_stage{None}, error_code{0};
     std::atomic<uint64_t> peer_rejected{0};
+    std::atomic<uint64_t> capture_epoch{0}; // Published before each owned Binder START.
     ImageChannel images[3]; // PTJ_MOUTH, PTJ_EYE_LEFT, PTJ_EYE_RIGHT.
     // Labels have no ownership relationship with either image slot.
     std::atomic<uint64_t> stock_subscription{0};

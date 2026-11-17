@@ -523,7 +523,7 @@ static void subscribe_jpeg(PTJSource& s, Socket fd, bool http) {
     }
     std::lock_guard<std::mutex> lock(s.mutex);
     if (!s.running || s.client || s.jpeg_clients.size() >= 8) return;
-    if (s.jpeg_clients.empty()) ++s.image_generation;
+    if (s.jpeg_clients.empty()) { ++s.image_generation; s.has_seq = false; }
     client->has_after_seq = s.has_seq;
     client->after_seq = s.has_seq ? s.last_seen_seq : 0;
     s.jpeg_clients.push_back(client);
@@ -623,7 +623,7 @@ static void server_loop(PTJSource& s) {
             auto client = std::make_shared<Client>(fd, true);
             std::lock_guard<std::mutex> lock(s.mutex);
             if (s.running && !s.client && s.jpeg_clients.empty()) {
-                s.client = std::move(client); ++s.stats.connections; ++s.image_generation;
+                s.client = std::move(client); ++s.stats.connections; ++s.image_generation; s.has_seq = false;
             }
         } else if (!s.stream_id && !std::strcmp(command, "LABELS")) {
             auto client = std::make_shared<Client>(fd, false);

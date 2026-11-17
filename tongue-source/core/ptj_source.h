@@ -71,13 +71,15 @@ PTJ_API int ptj_start(const PTJConfig* config, PTJSource** out_source);
 PTJ_API uint64_t ptj_session_id(const PTJSource* source);
 /* pixels remain caller-owned; return releases them. Single/multiple producer safe.
  * stride >= 400, 400 rows. No allocation, encode, CRC or network in this call.
- * Source seq must increase within a session; attempted duplicate/older seq is dropped.
+ * Source seq must increase within a native capture/subscription lifetime.
+ * The shim requires a new verified capture epoch before accepting a vendor counter reset.
  */
 PTJ_API int ptj_submit(PTJSource* source, const uint8_t* pixels,
                        uint32_t stride, const PTJMeta* meta);
 /* IPC shim: independently subscribed streams; ptj_submit/get_stats select mouth. */
 PTJ_API int ptj_submit_stream(PTJSource*, uint32_t stream, const uint8_t*, uint32_t stride, const PTJMeta*);
 PTJ_API int ptj_get_stream_stats(const PTJSource*, uint32_t stream, PTJStats*);
+PTJ_API uint64_t ptj_capture_epoch(const PTJSource*);
 PTJ_API int ptj_get_stats(const PTJSource* source, PTJStats* stats);
 /* Idempotent, control-thread only. Joins both owned threads before returning.
  * May overlap submit; the handle remains valid until destroy. */

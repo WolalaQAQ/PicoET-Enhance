@@ -63,7 +63,8 @@ std::string status_json(const Channel& c) {
     std::ostringstream j;
     j << "{\"schema_version\":4,\"state\":" << c.state.load() << ",\"session\":" << c.session
       << ",\"daemon_pid\":" << c.daemon_pid << ",\"daemon_birth\":" << c.daemon_birth
-      << ",\"heartbeat_ns\":" << c.daemon_heartbeat.load() << ",\"client_pid\":" << c.client_pid.load()
+      << ",\"heartbeat_ns\":" << c.daemon_heartbeat.load() << ",\"capture_epoch\":" << c.capture_epoch.load()
+      << ",\"client_pid\":" << c.client_pid.load()
       << ",\"client_birth\":" << c.client_birth.load() << ",\"client_heartbeat_ns\":" << c.client_heartbeat.load()
       << ",\"subscription\":" << m.subscription.load() << ",\"stop_ack\":" << c.stop_ack.load()
       << ",\"producer_lock\":" << m.producer_lock.load() << ",\"client_ready\":" << c.client_ready.load()
@@ -181,7 +182,11 @@ int main(int argc, char** argv) {
         unmap_file(mapping); return 1;
     }
     PTJSource* core = cores[PTJ_MOUTH]; // Labels and the legacy control endpoint remain on mouth.
-    TrackingDemand demand;
+    auto native_operation = tracking_operation();
+    TrackingDemand demand([&c, native_operation](bool start) {
+        if (start) c.capture_epoch.fetch_add(1, std::memory_order_release);
+        return native_operation(start);
+    });
     tracking = &demand;
     std::signal(SIGINT, signal_stop); std::signal(SIGTERM, signal_stop);
     c.state.store(Ready, std::memory_order_release);

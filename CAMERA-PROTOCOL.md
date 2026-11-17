@@ -99,7 +99,9 @@ All integers are little-endian. Python's header format is `<4sHHII12Q4I`.
 
 JPEG frames have flag1. A normal stop sends a best-effort flag4 END header with no payload, then closes. A failed partial write closes without appending END. Flag8 marks replay input when used by a developer fixture.
 
-`source_seq` and `raw_identity` retain the vendor frame identity. All three lanes inherit **one camera5 parent sensor timestamp**; the three named sensor fields are not separate eye exposure measurements. `vendor_ns` is retained separately. Copy/encode/emit timestamps use the headset's monotonic clock; compare them to PC time only after clock synchronization. A client joining during encoding starts with a subsequent source, not an earlier in-flight frame.
+`source_seq` and `raw_identity` retain the vendor frame identity. Reopening the native camera can reset that counter to1; ordering is monotonic within each TCP subscription, while the sensor clock remains monotonic across native starts. Create a fresh ordering cursor after reconnecting, and identify recorded frames by the full `(session_id, source_seq, sensor_ns, vendor_ns, raw_identity)` tuple.
+
+All three lanes inherit **one camera5 parent sensor timestamp**; the three named sensor fields are not separate eye exposure measurements. `vendor_ns` is retained separately. Copy/encode/emit timestamps use the headset's monotonic clock; compare them to PC time only after clock synchronization. A client joining during encoding starts with a subsequent source, not an earlier in-flight frame.
 
 `PAIR\n` is an exclusive per-stream diagnostic mode: each source emits raw flag2 bytes and then JPEG flag1. It shares the original protected raw-slot lease through the last read and cannot coexist with JPEG/MJPEG consumers of that same stream.
 
