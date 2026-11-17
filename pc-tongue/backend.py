@@ -79,7 +79,8 @@ def make_guide_server(store, port=57102):
     return ThreadingHTTPServer(('127.0.0.1', port), GuideHandler)
 
 
-def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sources, model_picker=select_model):
+def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sources, model_picker=select_model,
+                capture=None):
     web = ROOT/'web'
     control = threading.Lock()
 
@@ -112,7 +113,7 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                 except (ValueError, OSError) as error:
                     return self.respond(400, {'error': str(error)})
             if path == '/api/status':
-                return self.respond(200, runtime.status())
+                return self.respond(200, (capture or runtime).status())
             if path == '/api/discovery':
                 try:
                     return self.respond(200, discover())
@@ -146,6 +147,9 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                     raise ValueError('Configuration request too large')
                 body = json.loads(self.rfile.read(size) or b'{}')
                 path = urlsplit(self.path).path
+                if (capture and capture.state in ('starting', 'recording', 'stopping') and
+                        path not in ('/api/recording', '/api/recording/display', '/api/stop')):
+                    raise ValueError('Finish the capture session before changing input or training')
                 if path == '/api/model/select':
                     return self.respond(200, model_picker(body.get('initial', '')))
                 if path == '/api/config':
@@ -166,12 +170,22 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                     return self.respond(200, result)
                 if path == '/api/recording':
                     with control:
-                        result = runtime.recording(body.get('action'), person_id=body.get('person_id', ''),
+                        result = (capture or runtime).recording(body.get('action'), person_id=body.get('person_id', ''),
                                                    confirmed=body.get('confirmed', False), guide=body.get('guide', True),
                                                    stage=body.get('stage', 'raw_only'),
                                                     role=body.get('role'), evaluation_only=body.get('evaluation_only'),
-                                                    preset_id=body.get('preset_id', 'complete'))
+                                                     preset_id=body.get('preset_id', 'complete'),
+                                                     automatic=body.get('automatic', False))
                     return self.respond(200, result)
+                if path == '/api/recording/display':
+                    if capture and capture.display_viewer and body.get('viewer') != capture.display_viewer:
+                        return self.respond(200, dict(accepted=False))
+                    recorder = runtime.recorder
+                    if recorder is None:
+                        return self.respond(200, dict(accepted=False))
+                    return self.respond(200, recorder.display(body.get('session_id'), body.get('frame'),
+                        body.get('phase'), visible=body.get('visible') is True,
+                        media_ready=body.get('media_ready') is True))
                 if path == '/api/recording/review':
                     with control:
                         result = runtime.review(body.get('session_id'), body.get('sample_ids'), body.get('targets'),
@@ -184,8 +198,8 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                     return self.respond(200, result)
                 if path == '/api/stop':
                     with control:
-                        runtime.stop()
-                    return self.respond(200, runtime.status())
+                        (capture or runtime).stop()
+                    return self.respond(200, (capture or runtime).status())
                 return self.respond(404, {'error': 'Not found'})
             except (ValueError, OSError, RuntimeError) as error:
                 return self.respond(400, {'error': str(error)})

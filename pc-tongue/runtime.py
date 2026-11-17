@@ -386,6 +386,9 @@ class Runtime:
                         self.recorder.on_frame(*value)
                     elif kind == 'stock':
                         self.recorder.on_stock(value)
+                    guide = self.recorder.guide
+                    if guide and guide.automatic and guide.phase == 'finished':
+                        self.record_stopping = True
                 if time.monotonic()-last_status > .2:
                     self.record_status = self.recorder.status()
                     last_status = time.monotonic()
@@ -423,12 +426,14 @@ class Runtime:
             self.stock_socket = None
 
     def recording(self, action, *, person_id='', confirmed=False, guide=True, stage='raw_only',
-                  role=None, evaluation_only=None, preset_id='complete'):
+                  role=None, evaluation_only=None, preset_id='complete', automatic=False):
         if action == 'begin':
             if confirmed is not True:
                 raise ValueError('Confirm local image/stock recording and local training first')
             if not isinstance(person_id, str) or not person_id.strip():
                 raise ValueError('person_id must be a nonempty anonymous string')
+            if self.record_thread is not None and not self.record_thread.is_alive():
+                self._stop_recording()
             if self.record_thread is not None:
                 raise ValueError('Stop the active recording before beginning another')
             if not self.running or not self.connected or self.mode != 'live' or self.config['model_kind'] != 'face50':
@@ -437,7 +442,8 @@ class Runtime:
             self.recorder = WholeMouthRecording(self.config_path.parent/'recordings')
             self.recorder.set_label_stage(stage)
             self.record_status = self.recorder.begin(person_id, confirmed=True, guide=guide,
-                                                     role=role, evaluation_only=evaluation_only, preset_id=preset_id)
+                                                     role=role, evaluation_only=evaluation_only, preset_id=preset_id,
+                                                     automatic=automatic)
             for capture_session_id, binding in self.transport_bindings.items():
                 self.recorder.bind_capture(capture_session_id, **binding)
             self.record_stopping = False
@@ -449,7 +455,7 @@ class Runtime:
             self.stock_thread = threading.Thread(target=self._stock_receive, name='mouth-stock', daemon=True)
             self.record_thread.start()
             self.stock_thread.start()
-        elif action in ('ready', 'finish', 'confirm', 'skip'):
+        elif action in ('ready', 'finish', 'confirm', 'skip', 'pause', 'resume'):
             if self.recorder is None:
                 raise ValueError('Begin a recording first')
             self.recorder.advance(action)
@@ -535,9 +541,9 @@ class Runtime:
             self.record_stopping = True
             self.record_condition.notify_all()
         if self.record_thread is not None:
-            self.record_thread.join(timeout=5)
-            if self.record_thread.is_alive():
-                raise RuntimeError('Owned recording worker did not stop')
+            # Draining and exporting a real recording can exceed five seconds.
+            # Keep ownership until the writer has actually finished.
+            self.record_thread.join()
             self.record_status = dict(self.recorder.status(), error=self.record_status.get('error'))
         self.record_thread = self.stock_thread = None
 

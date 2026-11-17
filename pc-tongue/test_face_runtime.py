@@ -163,6 +163,21 @@ class FaceRuntimeTests(unittest.TestCase):
         self.assertEqual(json.loads((path/'manifest.json').read_text())['consent']['upload'], False)
         self.assertEqual(self.runtime.prediction['valid_mask'], 0)
 
+    def test_new_recording_reaps_automatically_finished_writer_without_reopening_input(self):
+        self.runtime.start('capture')
+        wait_for(lambda: self.runtime.connected)
+        first = self.runtime.recording('begin', person_id='fixture', confirmed=True, automatic=True)
+        guide = self.runtime.recorder.guide
+        for _ in range(guide.status()['total']):
+            self.runtime.recording('skip')
+        self.submit()
+        self.runtime.record_thread.join(3)
+        self.assertFalse(self.runtime.record_thread.is_alive())
+        self.assertTrue(self.runtime.running)
+        second = self.runtime.recording('begin', person_id='fixture', confirmed=True, automatic=True)
+        self.assertNotEqual(first['session_id'], second['session_id'])
+        self.assertTrue(json.loads((Path(first['path'])/'manifest.json').read_text())['samples_complete'])
+
     def test_training_form_uses_delivered_parser_and_never_launches_for_invalid_args(self):
         operations = self.runtime.training_operations()
         self.assertIn('local-adapt', operations); self.assertIn('teacher-train', operations)
@@ -219,7 +234,8 @@ class FaceRuntimeTests(unittest.TestCase):
                 with urlopen(request) as response:
                     self.assertEqual(response.status, 200)
                 recording.assert_called_once_with('begin', person_id='fixture', confirmed=True,
-                    guide=False, stage='raw_only', role='C', evaluation_only=True, preset_id='complete')
+                    guide=False, stage='raw_only', role='C', evaluation_only=True, preset_id='complete',
+                    automatic=False)
         finally:
             server.shutdown(); worker.join(); server.server_close()
 
