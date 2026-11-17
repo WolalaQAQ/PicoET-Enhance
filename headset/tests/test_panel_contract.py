@@ -311,6 +311,15 @@ class RootlessPanelContract(unittest.TestCase):
         self.assertIn('eyesToggle.setChecked(supportsEyes && camera.eyesEnabled)', home)
         self.assertIn('supportsResults&&supportsEyes?View.VISIBLE:View.GONE', home)
 
+    def test_top_level_tabs_share_the_title_row_instead_of_taking_an_extra_row(self):
+        home = (SOURCE/'MainActivity.java').read_text()
+        screen = re.search(r'(?ms)^    private void buildScreen\(.*?^    \}', home)[0]
+        self.assertEqual(re.findall(r'root\.addView\((\w+)', screen), ['header', 'pages'])
+        self.assertIn('header.addView(title', screen)
+        self.assertIn('new Button[]{broadcastTab,tuningTab,language}', screen)
+        self.assertIn('header.addView(control,params)', screen)
+        self.assertIn('control=button(s(label),false)', home)
+
     def test_camera_switch_is_bundled_opt_in_and_uses_existing_control_lock(self):
         service = (ROOT/'magisk-picoet-enhance/service.sh').read_text()
         self.assertIn('"$MODDIR/bin/picoet-camera" reconcile', service)

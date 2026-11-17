@@ -2,6 +2,7 @@ package dev.pico.etenhance;
 
 import android.content.res.ColorStateList;
 import android.os.*;
+import android.text.TextUtils;
 import android.view.*;
 import android.widget.*;
 import java.io.File;
@@ -41,21 +42,30 @@ public final class MainActivity extends ProcessingActivity {
 
     private void buildScreen() {
         LinearLayout root=column(); root.setBackgroundColor(BG);
-        LinearLayout header=row(); header.setPadding(dp(24),dp(14),dp(24),dp(10));
-        header.addView(text("PicoET-Enhance",22,TEXT,true),new LinearLayout.LayoutParams(0,-2,1));
-        Button language=button(s("language"),false); language.setTag("language");
-        language.setContentDescription(s("change_language"));
-        language.setOnClickListener(v->changeLanguage()); header.addView(language); root.addView(header);
-        LinearLayout tabs=row(); tabs.setPadding(dp(22),0,dp(24),dp(8));
-        broadcastTab=button(s("broadcast_tab"),false); broadcastTab.setTag("broadcast_tab");
-        tuningTab=button(s("tuning_tab"),false); tuningTab.setTag("tuning_tab");
+        LinearLayout header=row(); header.setPadding(dp(16),dp(6),dp(16),dp(6));
+        TextView title=text("PicoET-Enhance",20,TEXT,true);
+        title.setSingleLine(true); title.setEllipsize(TextUtils.TruncateAt.END);
+        header.addView(title,new LinearLayout.LayoutParams(0,-2,1));
+        broadcastTab=titleButton("broadcast_tab","broadcast_tab");
+        tuningTab=titleButton("tuning_tab","tuning_tab");
         broadcastTab.setOnClickListener(v->selectTab(false)); tuningTab.setOnClickListener(v->selectTab(true));
-        tabs.addView(broadcastTab,new LinearLayout.LayoutParams(0,-2,1));
-        LinearLayout.LayoutParams tuningParams=new LinearLayout.LayoutParams(0,-2,1); tuningParams.leftMargin=dp(8);
-        tabs.addView(tuningTab,tuningParams); root.addView(tabs);
+        Button language=titleButton("language","language");
+        language.setContentDescription(s("change_language")); language.setOnClickListener(v->changeLanguage());
+        for(Button control:new Button[]{broadcastTab,tuningTab,language}) {
+            LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-2,-2); params.leftMargin=dp(6);
+            header.addView(control,params);
+        }
+        root.addView(header);
         pages=new FrameLayout(this); root.addView(pages,new LinearLayout.LayoutParams(-1,0,1));
         broadcastPage=buildBroadcast(); pages.addView(broadcastPage,new FrameLayout.LayoutParams(-1,-1));
         setContentView(root); render();
+    }
+
+    private Button titleButton(String label, String tag) {
+        Button control=button(s(label),false);
+        control.setTag(tag); control.setTextSize(14); control.setSingleLine(true);
+        control.setMinWidth(dp(48)); control.setPadding(dp(10),dp(4),dp(10),dp(4));
+        return control;
     }
 
     private void selectTab(boolean tuning) {
