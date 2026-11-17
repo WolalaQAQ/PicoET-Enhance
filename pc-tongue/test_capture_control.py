@@ -6,12 +6,12 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from backend import make_server
-from capture_control import CaptureControl
+from capture_control import CaptureControl, LANCameraSource
 from test_face_runtime import FaceManualRuntime
 from test_runtime import header, jpeg, wait_for
 
@@ -92,6 +92,29 @@ class CaptureControlTests(unittest.TestCase):
     def test_idle_stop_also_stops_manually_opened_input(self):
         self.control.stop()
         self.runtime.stop.assert_called_once_with()
+
+
+class LANCameraSourceTests(unittest.TestCase):
+    def test_existing_service_uses_the_shared_discovery_protocol_without_device_control(self):
+        runtime = Mock(config=dict(headset_host='192.0.2.10', headset_port=45681))
+        source = LANCameraSource(runtime)
+        with patch('capture_control.discover_sources',
+                   return_value=dict(devices=[dict(host='192.0.2.10', port=45681)])) as discovery:
+            self.assertEqual(source.start(), dict(host='192.0.2.10', port=45681))
+            discovery.assert_called_once_with(targets=[('192.0.2.10', 45681)])
+        source.stop()
+        runtime.stop.assert_not_called()
+        runtime.configure.assert_not_called()
+
+    def test_unselected_source_uses_discovery_and_multiple_devices_require_selection(self):
+        source = LANCameraSource(Mock(config={}))
+        with patch('capture_control.discover_sources', return_value=dict(devices=[])) as discovery:
+            with self.assertRaises(ValueError):
+                source.start()
+            discovery.assert_called_once_with(targets=None)
+        with patch('capture_control.discover_sources', return_value=dict(devices=[{}, {}])):
+            with self.assertRaises(ValueError):
+                source.start()
 
 
 class ManagedHTTPTests(unittest.TestCase):

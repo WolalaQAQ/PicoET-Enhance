@@ -1,7 +1,9 @@
 """Discover LAN cameras without subscribing; compatible with legacy mouth sources."""
 import argparse
+from contextlib import ExitStack
 import http.client
 import json
+import select
 import socket
 import struct
 import time
@@ -12,6 +14,11 @@ DISCOVER = b'PICO_MOUTH_DISCOVER_V1\n'
 CAMERA_DISCOVER = b'PICO_CAMERA_DISCOVER_V1\n'
 PORT = 45681
 MULTICAST = '239.255.255.250'
+
+
+def _interfaces():
+    return sorted({row[4][0] for row in socket.getaddrinfo(socket.gethostname(), None,
+                   socket.AF_INET, socket.SOCK_DGRAM) if not row[4][0].startswith('127.')})
 
 
 def _catalog(data):
@@ -28,30 +35,35 @@ def _catalog(data):
 
 
 def discover_sources(timeout=1.2, targets=None):
+    interfaces = _interfaces() if targets is None else ['']
     targets = targets if targets is not None else [('255.255.255.255', PORT), (MULTICAST, PORT)]
     candidates = {}
     catalogs = {}
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
-        sock.bind(('', 0))
-        for target in targets:
-            sock.sendto(DISCOVER, target)
-            sock.sendto(CAMERA_DISCOVER, target)
+    with ExitStack() as stack:
+        sockets = []
+        for interface in interfaces:
+            sock = stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+            sock.bind((interface, 0))
+            if interface:
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(interface))
+            sockets.append(sock)
+            for target in targets:
+                sock.sendto(DISCOVER, target)
+                sock.sendto(CAMERA_DISCOVER, target)
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            sock.settimeout(max(.001, deadline-time.monotonic()))
-            try:
+        while sockets and time.monotonic() < deadline:
+            readable, _, _ = select.select(sockets, [], [], max(.001, deadline-time.monotonic()))
+            for sock in readable:
                 data, endpoint = sock.recvfrom(8192)
-            except socket.timeout:
-                break
-            try:
-                if data.startswith(b'{'):
-                    catalogs[endpoint] = _catalog(data)
-                else:
-                    candidates[endpoint] = CaptureContext.unpack(data)
-            except (ValueError, KeyError, TypeError, struct.error):
-                continue
+                try:
+                    if data.startswith(b'{'):
+                        catalogs[endpoint] = _catalog(data)
+                    else:
+                        candidates[endpoint] = CaptureContext.unpack(data)
+                except (ValueError, KeyError, TypeError, struct.error):
+                    continue
     verified_catalogs = {}
     for (host, port), advertised in catalogs.items():
         connection = http.client.HTTPConnection(host, port, timeout=.4)

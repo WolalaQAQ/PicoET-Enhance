@@ -60,6 +60,12 @@ class Source:
 
 
 class DesktopTests(unittest.TestCase):
+    def test_discovery_enumerates_distinct_ipv4_interfaces_instead_of_only_vpn_default(self):
+        from discovery import _interfaces
+        rows = [(socket.AF_INET, socket.SOCK_DGRAM, 0, '', (ip, 0))
+                for ip in ['198.18.0.1', '192.0.2.4', '192.0.2.4', '127.0.0.1']]
+        with patch('discovery.socket.getaddrinfo', return_value=rows):
+            self.assertEqual(_interfaces(), ['192.0.2.4', '198.18.0.1'])
     def source(self, context=None, **kwargs):
         source = Source(context if context is not None else CaptureContext(123, 456).pack(), **kwargs)
         self.addCleanup(source.close)

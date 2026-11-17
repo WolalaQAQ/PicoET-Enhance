@@ -40,7 +40,7 @@ Combine the reply's source IP with each stream's port and path. IDs and service 
 
 `GET /cameras` and `GET /` return the same catalog on any of the three TCP endpoints. An unattached source returns HTTP503 and stays silent on UDP discovery.
 
-The bundled discovery client checks the HTTP catalog and the PTC1 owner before returning results:
+The bundled discovery client sends through each local IPv4 interface, then checks the HTTP catalog and the PTC1 owner before returning results. This also covers PCs whose default route points at a VPN:
 
 ```powershell
 python pc-tongue/discovery.py --cameras

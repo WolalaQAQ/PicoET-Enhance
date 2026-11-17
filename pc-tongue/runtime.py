@@ -649,14 +649,18 @@ class Runtime:
                 self.bind_capture(context.capture_session_id, context.service_generation, evidence=context.evidence)
                 self.capture_context = context.evidence
             sock = socket.create_connection((config['headset_host'], int(config['headset_port'])), timeout=3)
-            sock.settimeout(1)
+            sock.settimeout(10)  # The first subscription may cold-start the native camera.
             with self.lock:
                 self.socket = sock
                 self.connected = True
             sock.sendall(b'JPEG\n')
             with sock:
+                first_frame = True
                 while not self.stop_event.is_set():
                     header, payload = read_frame(sock)
+                    if first_frame:
+                        sock.settimeout(1)
+                        first_frame = False
                     received_ns = time.perf_counter_ns()
                     if context is not None:
                         context.require_session(header.session_id)

@@ -3,6 +3,25 @@ import threading
 import time
 
 from face_presets import capture_preset
+from discovery import discover_sources
+
+
+class LANCameraSource:
+    """Select an existing camera service; Runtime owns only this client's socket."""
+    def __init__(self, runtime):
+        self.runtime = runtime
+
+    def start(self):
+        host = self.runtime.config.get('headset_host', '')
+        port = self.runtime.config.get('headset_port', 45681)
+        devices = discover_sources(targets=[(host, port)] if host else None)['devices']
+        if len(devices) != 1:
+            raise ValueError('Select one available headset in connection settings')
+        return dict(host=devices[0]['host'], port=devices[0]['port'])
+
+    def stop(self):
+        # Runtime.stop closes this subscription. The shared headset service stays available.
+        pass
 
 
 class CaptureControl:

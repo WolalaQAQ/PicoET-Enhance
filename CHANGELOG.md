@@ -5,6 +5,7 @@ English | [简体中文](CHANGELOG_zh.md)
 ## [Unreleased] - 2026-11-17
 
 ### Features
+- Let managed Capture use an existing LAN camera service; closing the workbench's subscription leaves other consumers and the service running.
 - Expose independent mouth, left-eye and right-eye LAN streams, a broadcast/multicast camera catalog and HTTP MJPEG endpoints, with a reusable discovery CLI and protocol reference.
 - Acquire one native tracking lease on Android for the union of camera/label subscribers and release it after the last consumer leaves.
 - Support concurrent JPEG and standard HTTP MJPEG subscribers with one encoding per source frame and independent, bounded latest-frame delivery.
@@ -27,6 +28,8 @@ English | [简体中文](CHANGELOG_zh.md)
 - Send whole-mouth controls through 256-byte MFR1 with per-field validity on local UDP45682 for the matching UnifiedPicoModule to merge, retaining ORT backend selection and the bilingual app.
 
 ### Fixes
+- Send discovery from each local IPv4 interface, including explicit multicast interface selection, so a VPN default route does not hide LAN cameras.
+- Allow ten seconds for the first camera frame during native cold start, then retain the one-second established-stream timeout.
 - Scope vendor frame-counter resets to verified native capture epochs so a new subscription works after the last consumer disconnects. Keep raw identities and timestamps unchanged, with strict sensor-time and same-epoch regression checks.
 
 ### Design Rationale

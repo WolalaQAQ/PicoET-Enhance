@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import MagicMock, Mock, call, patch
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
@@ -79,6 +80,25 @@ class ManualRuntime(Runtime):
 
 
 class WireTests(unittest.TestCase):
+    def test_live_socket_allows_native_cold_start_then_restores_stream_timeout(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime = Runtime(Path(folder) / 'config.json')
+            self.addCleanup(runtime.udp.close)
+            runtime.config['model_kind'] = 'segmentation'
+            runtime.inference_ready.set()
+            runtime._publish = Mock()
+            runtime._set_clock = Mock()
+            runtime._stop_recording = Mock()
+            sock = MagicMock()
+            packets = [(header(), jpeg()), (replace(header(11), flags=END, payload_bytes=0), b'')]
+            with patch('runtime.sync_clock', return_value={}), \
+                 patch('runtime.socket.create_connection', return_value=sock), \
+                 patch('runtime.read_frame', side_effect=packets):
+                runtime._receive()
+            self.assertEqual(sock.settimeout.call_args_list, [call(10), call(1)])
+            runtime._publish.assert_called_once()
+            self.assertIsNone(runtime.last_error)
+
     def test_roundtrip_and_identity(self):
         h = header()
         self.assertEqual(len(h.pack()), 128)
