@@ -2,6 +2,10 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
+## [Unreleased]
+
+- Put LAN broadcast and post-processing in two tabs. Keep the tuning sidebar and parameter panel, and group the two independent result switches.
+
 ## [2.6.0-dev.2] - 2026-11-18
 
 ### Features

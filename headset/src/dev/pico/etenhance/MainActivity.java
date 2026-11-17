@@ -1,63 +1,29 @@
 package dev.pico.etenhance;
 
-import android.app.Activity;
-import android.content.*;
-import android.content.res.*;
-import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.RippleDrawable;
+import android.content.res.ColorStateList;
 import android.os.*;
 import android.view.*;
 import android.widget.*;
 import java.io.File;
-import java.util.Locale;
 
-/** Companion home: independent camera transport and the existing tuning panel. */
-public final class MainActivity extends Activity {
-    private static final int BG=0xff10151e, CARD=0xff1b2533, LINE=0xff344357;
-    private static final int TEXT=0xfff3f6fc, MUTED=0xffa9b8ce, ACCENT=0xff79e1c2, INK=0xff10251e;
-    private static final int TECH=0xff9fc2ff;
-    private final Handler handler = new Handler(Looper.getMainLooper());
-    private SharedPreferences preferences;
-    private Context localized;
+/** Two peer tabs; switching never changes a sharing policy or a tuning draft. */
+public final class MainActivity extends ProcessingActivity {
+    private final Handler cameraHandler = new Handler(Looper.getMainLooper());
     private PanelChannel channel;
     private CameraState camera;
     private Switch toggle, resultsToggle, eyesToggle;
-    private Button retry;
+    private Button retry, broadcastTab, tuningTab;
     private TextView status, error, resultsStatus, eyesStatus;
-    private LinearLayout resultsCard, eyesCard;
+    private LinearLayout resultsCard, mouthRow, eyeRow;
+    private View resultDivider, broadcastPage, processingPage;
+    private FrameLayout pages;
     private final TextView[] clients = new TextView[3], addresses = new TextView[3];
     private String pending="", pendingAction="", issue="";
-    private boolean rendering;
+    private boolean rendering, tuningSelected;
     private long lastStatus, submitted;
 
-    private int dp(int n) { return (int)(n*getResources().getDisplayMetrics().density+.5f); }
-    private String s(String key) { return localized.getString(getResources().getIdentifier(key,"string",getPackageName())); }
-    private TextView text(CharSequence value, int size, int color, boolean bold) {
-        TextView v = new TextView(this); v.setText(value); v.setTextSize(size); v.setTextColor(color);
-        if (bold) v.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        v.setIncludeFontPadding(false); v.setLineSpacing(dp(4), 1); return v;
-    }
-    private GradientDrawable shape(int color, int border, int radius) {
-        GradientDrawable d = new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius));
-        if (border != 0) d.setStroke(dp(1), border); return d;
-    }
-    private void surface(View v, int color, int border) {
-        v.setBackground(new RippleDrawable(ColorStateList.valueOf(0x3079e1c2), shape(color, border, 12), null));
-    }
-    private Button button(String label, boolean primary) {
-        Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(15);
-        b.setTextColor(primary ? INK : TEXT); b.setMinHeight(dp(48)); b.setMinimumWidth(0);
-        b.setPadding(dp(16), dp(8), dp(16), dp(8)); surface(b, primary ? ACCENT : CARD, primary ? 0 : LINE); return b;
-    }
-    private LinearLayout column() { LinearLayout view=new LinearLayout(this); view.setOrientation(LinearLayout.VERTICAL); return view; }
-    private void gap(LinearLayout into,int n) { into.addView(new View(this),new LinearLayout.LayoutParams(1,dp(n))); }
-    private LinearLayout card(LinearLayout into) {
-        LinearLayout box = column(); box.setPadding(dp(22), dp(18), dp(22), dp(20)); box.setBackground(shape(CARD, LINE, 16));
-        into.addView(box, new LinearLayout.LayoutParams(-1, -2)); gap(into, 14); return box;
-    }
     private Switch cameraSwitch(String label, String tag) {
-        Switch view=new Switch(this); view.setText(s(label)); view.setTextSize(17); view.setTextColor(TEXT); view.setMinHeight(dp(52)); view.setTag(tag);
+        Switch view=new Switch(this); view.setContentDescription(s(label)); view.setMinHeight(dp(48)); view.setTag(tag);
         int[][] states={new int[]{android.R.attr.state_checked},new int[]{}};
         view.setThumbTintList(new ColorStateList(states,new int[]{ACCENT,0xffa4b0c3}));
         view.setTrackTintList(new ColorStateList(states,new int[]{0xff438e78,0xff4a566b}));
@@ -66,67 +32,102 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle bundle) {
         super.onCreate(bundle);
-        preferences=getSharedPreferences("panel",MODE_PRIVATE);
         channel=new PanelChannel(new File(createDeviceProtectedStorageContext().getFilesDir(),"control/camera"));
         pending=preferences.getString("camera_pending",""); pendingAction=preferences.getString("camera_action","");
         submitted=SystemClock.elapsedRealtime();
-        getWindow().setStatusBarColor(BG); getWindow().setNavigationBarColor(BG);
+        buildScreen();
+        selectTab(bundle!=null && bundle.getBoolean("tuning_tab"));
     }
 
     private void buildScreen() {
-        Configuration config=new Configuration(getResources().getConfiguration());
-        String fallback=config.getLocales().get(0).getLanguage().equals("zh")?"zh":"en";
-        config.setLocale(Locale.forLanguageTag(preferences.getString("language",fallback))); localized=createConfigurationContext(config);
         LinearLayout root=column(); root.setBackgroundColor(BG);
-        LinearLayout header=new LinearLayout(this); header.setGravity(Gravity.CENTER_VERTICAL); header.setPadding(dp(24),dp(14),dp(24),dp(10));
-        LinearLayout brand=column(); brand.setPadding(0,0,dp(12),0);
-        brand.addView(text("PicoET-Enhance",22,TEXT,true)); gap(brand,4); brand.addView(text(s("home_intro"),13,MUTED,false));
-        header.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
+        LinearLayout header=row(); header.setPadding(dp(24),dp(14),dp(24),dp(10));
+        header.addView(text("PicoET-Enhance",22,TEXT,true),new LinearLayout.LayoutParams(0,-2,1));
         Button language=button(s("language"),false); language.setTag("language");
-        language.setOnClickListener(v->{
-            String next=localized.getResources().getConfiguration().getLocales().get(0).getLanguage().equals("zh")?"en":"zh";
-            preferences.edit().putString("language",next).apply(); buildScreen();
-        }); header.addView(language); root.addView(header);
+        language.setContentDescription(s("change_language"));
+        language.setOnClickListener(v->changeLanguage()); header.addView(language); root.addView(header);
+        LinearLayout tabs=row(); tabs.setPadding(dp(22),0,dp(24),dp(8));
+        broadcastTab=button(s("broadcast_tab"),false); broadcastTab.setTag("broadcast_tab");
+        tuningTab=button(s("tuning_tab"),false); tuningTab.setTag("tuning_tab");
+        broadcastTab.setOnClickListener(v->selectTab(false)); tuningTab.setOnClickListener(v->selectTab(true));
+        tabs.addView(broadcastTab,new LinearLayout.LayoutParams(0,-2,1));
+        LinearLayout.LayoutParams tuningParams=new LinearLayout.LayoutParams(0,-2,1); tuningParams.leftMargin=dp(8);
+        tabs.addView(tuningTab,tuningParams); root.addView(tabs);
+        pages=new FrameLayout(this); root.addView(pages,new LinearLayout.LayoutParams(-1,0,1));
+        broadcastPage=buildBroadcast(); pages.addView(broadcastPage,new FrameLayout.LayoutParams(-1,-1));
+        setContentView(root); render();
+    }
+
+    private void selectTab(boolean tuning) {
+        tuningSelected=tuning;
+        if(tuning && processingPage==null) {
+            processingPage=tuningPanel(); pages.addView(processingPage,new FrameLayout.LayoutParams(-1,-1));
+        }
+        broadcastPage.setVisibility(tuning?View.GONE:View.VISIBLE);
+        if(processingPage!=null) processingPage.setVisibility(tuning?View.VISIBLE:View.GONE);
+        styleTab(broadcastTab,!tuning); styleTab(tuningTab,tuning);
+        if(!tuning) lastStatus=0; // Refresh on return without changing any sharing policy.
+    }
+
+    private void styleTab(Button tab, boolean active) {
+        tab.setSelected(active);
+        if(active) selected(tab);
+        else { surface(tab,CARD,LINE); tab.setTextColor(TEXT); }
+    }
+
+    private View buildBroadcast() {
         ScrollView scroll=new ScrollView(this); scroll.setClipToPadding(false); scroll.setPadding(dp(22),dp(12),dp(24),dp(20));
-        LinearLayout content=column(); scroll.addView(content); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        LinearLayout content=column(); scroll.addView(content);
 
         LinearLayout transport=card(content);
         toggle=cameraSwitch("camera_title","camera_toggle");
-        toggle.setOnCheckedChangeListener((view,checked)->{if(!rendering)request(checked?"camera-on":"camera-off");}); transport.addView(toggle);
-        gap(transport,5); status=text("",14,ACCENT,true); status.setTag("camera_state"); transport.addView(status); gap(transport,10);
-        transport.addView(text(s("camera_hint"),14,MUTED,false)); gap(transport,12);
-        transport.addView(text(s("camera_privacy"),13,0xffffcf80,false)); gap(transport,18);
-        for(int i=0;i<3;++i) {
-            LinearLayout row=new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL);
-            row.addView(text(s("camera_"+CameraState.STREAMS[i]),16,TEXT,true),new LinearLayout.LayoutParams(0,-2,1));
-            clients[i]=text("",13,MUTED,false); clients[i].setTag("camera_clients_"+CameraState.STREAMS[i]); row.addView(clients[i]); transport.addView(row);
-            addresses[i]=text("",14,TECH,false); addresses[i].setTextIsSelectable(true); addresses[i].setTag("camera_url_"+CameraState.STREAMS[i]);
-            transport.addView(addresses[i]); gap(transport,16);
-        }
+        toggle.setOnCheckedChangeListener((view,checked)->{if(!rendering)request(checked?"camera-on":"camera-off");});
+        status=text("",14,ACCENT,true); status.setTag("camera_state");
+        addSwitchRow(transport,"camera_title",toggle,status);
+        gap(transport,8); transport.addView(text(s("camera_privacy"),13,AMBER,false));
         error=text("",13,0xffffa7a7,false); error.setTextIsSelectable(true); error.setTag("camera_error"); transport.addView(error);
         retry=button("",false); retry.setTag("camera_retry");
         retry.setOnClickListener(v->request(camera.enabled?"camera-on":"camera-off")); transport.addView(retry);
 
-        resultsCard=card(content);
+        resultsCard=card(content); resultsCard.setTag("camera_results_group");
+        resultsCard.addView(text(s("camera_results_heading"),18,TEXT,true));
+        gap(resultsCard,6); resultsCard.addView(text(s("camera_results_hint"),14,MUTED,false));
         resultsToggle=cameraSwitch("camera_results_title","camera_results_toggle");
         resultsToggle.setOnCheckedChangeListener((view,checked)->{if(!rendering)request(checked?"camera-results-on":"camera-results-off");});
-        resultsCard.addView(resultsToggle);
-        resultsStatus=text("",14,ACCENT,true); resultsCard.addView(resultsStatus); gap(resultsCard,10);
-        resultsCard.addView(text(s("camera_results_hint"),14,MUTED,false));
-
-        eyesCard=card(content);
+        resultsStatus=text("",13,MUTED,false);
+        mouthRow=addSwitchRow(resultsCard,"camera_results_title",resultsToggle,resultsStatus);
+        resultDivider=new View(this); resultDivider.setBackgroundColor(LINE);
+        resultsCard.addView(resultDivider,new LinearLayout.LayoutParams(-1,dp(1)));
         eyesToggle=cameraSwitch("camera_eyes_title","camera_eyes_toggle");
         eyesToggle.setOnCheckedChangeListener((view,checked)->{if(!rendering)request(checked?"camera-eyes-on":"camera-eyes-off");});
-        eyesCard.addView(eyesToggle);
-        eyesStatus=text("",14,ACCENT,true); eyesCard.addView(eyesStatus); gap(eyesCard,10);
-        eyesCard.addView(text(s("camera_eyes_hint"),14,MUTED,false));
+        eyesStatus=text("",13,MUTED,false);
+        eyeRow=addSwitchRow(resultsCard,"camera_eyes_title",eyesToggle,eyesStatus);
 
-        LinearLayout processing=card(content);
-        processing.addView(text(s("processing_title"),18,TEXT,true)); gap(processing,10);
-        processing.addView(text(s("processing_hint"),14,MUTED,false)); gap(processing,18);
-        Button open=button(s("processing_open"),true); open.setTag("open_processing");
-        open.setOnClickListener(v->startActivity(new Intent(this,ProcessingActivity.class))); processing.addView(open);
-        setContentView(root); render();
+        LinearLayout cameras=card(content);
+        cameras.addView(text(s("camera_images_heading"),18,TEXT,true)); gap(cameras,10);
+        boolean wide=widthDp()>=760;
+        LinearLayout streams=wide?row():column(); streams.setGravity(Gravity.TOP); cameras.addView(streams);
+        for(int i:new int[]{1,2,0}) {
+            String name=CameraState.STREAMS[i];
+            LinearLayout lane=column();
+            lane.addView(text(s("camera_"+name),16,TEXT,true)); gap(lane,4);
+            clients[i]=text("",13,MUTED,false); clients[i].setTag("camera_clients_"+name); lane.addView(clients[i]);
+            addresses[i]=text("",13,TECH,false); addresses[i].setTextIsSelectable(true); addresses[i].setTag("camera_url_"+name);
+            lane.addView(addresses[i]);
+            LinearLayout.LayoutParams params=wide?new LinearLayout.LayoutParams(0,-2,1):new LinearLayout.LayoutParams(-1,-2);
+            if(i!=0) { if(wide) params.rightMargin=dp(12); else params.bottomMargin=dp(12); }
+            streams.addView(lane,params);
+        }
+        return scroll;
+    }
+
+    private LinearLayout addSwitchRow(LinearLayout parent,String label,Switch control,TextView state) {
+        LinearLayout item=row(); item.setPadding(0,dp(4),0,dp(4));
+        LinearLayout copy=column();
+        copy.addView(text(s(label),16,TEXT,true)); gap(copy,4); copy.addView(state);
+        item.addView(copy,new LinearLayout.LayoutParams(0,-2,1)); item.addView(control);
+        parent.addView(item,new LinearLayout.LayoutParams(-1,-2));
+        return item;
     }
 
     private void render() {
@@ -135,7 +136,11 @@ public final class MainActivity extends Activity {
         String phase=pendingAction.equals("camera-on")?"starting":pendingAction.equals("camera-off")?"stopping":camera==null?"loading":camera.state;
         status.setText(s("camera_state_"+phase));
         boolean supportsResults=camera!=null && camera.resultsSupported;
-        resultsCard.setVisibility(supportsResults?View.VISIBLE:View.GONE);
+        boolean supportsEyes=camera!=null && camera.eyesSupported;
+        resultsCard.setVisibility(supportsResults||supportsEyes?View.VISIBLE:View.GONE);
+        mouthRow.setVisibility(supportsResults?View.VISIBLE:View.GONE);
+        eyeRow.setVisibility(supportsEyes?View.VISIBLE:View.GONE);
+        resultDivider.setVisibility(supportsResults&&supportsEyes?View.VISIBLE:View.GONE);
         resultsToggle.setChecked(supportsResults && camera.resultsEnabled);
         resultsToggle.setEnabled(supportsResults && pending.isEmpty());
         if(supportsResults) {
@@ -143,8 +148,6 @@ public final class MainActivity extends Activity {
                 camera.resultsOnline?(camera.resultsEnabled?"on":"pending_off"):camera.resultsEnabled?"pending_on":"off";
             resultsStatus.setText(s("camera_results_"+resultKey).replace("{0}",String.valueOf(camera.resultsClients)));
         }
-        boolean supportsEyes=camera!=null && camera.eyesSupported;
-        eyesCard.setVisibility(supportsEyes?View.VISIBLE:View.GONE);
         eyesToggle.setChecked(supportsEyes && camera.eyesEnabled);
         eyesToggle.setEnabled(supportsEyes && pending.isEmpty());
         if(supportsEyes) {
@@ -160,8 +163,7 @@ public final class MainActivity extends Activity {
         String detail=!issue.isEmpty()?issue:camera==null?"":camera.error;
         if(!pending.isEmpty() && SystemClock.elapsedRealtime()-submitted>15000)
             detail=pendingAction.equals("camera-status")?"worker_unavailable":"operation_wait";
-        int resource=getResources().getIdentifier("camera_error_"+detail,"string",getPackageName());
-        error.setText(resource!=0?localized.getString(resource):detail); error.setVisibility(detail.isEmpty()?View.GONE:View.VISIBLE);
+        error.setText(id("camera_error_"+detail)!=0?s("camera_error_"+detail):detail); error.setVisibility(detail.isEmpty()?View.GONE:View.VISIBLE);
         retry.setVisibility(camera!=null && camera.state.equals("error")?View.VISIBLE:View.GONE);
         retry.setEnabled(pending.isEmpty());
         retry.setText(s(camera!=null && camera.enabled?"camera_retry_on":"camera_retry_off"));
@@ -177,7 +179,7 @@ public final class MainActivity extends Activity {
         render();
     }
 
-    private final Runnable poll=new Runnable() {
+    private final Runnable cameraPoll=new Runnable() {
         @Override public void run() {
             try {
                 if(!pending.isEmpty()) {
@@ -188,12 +190,15 @@ public final class MainActivity extends Activity {
                         try { camera=CameraState.parse(reply[1]); issue=""; }
                         catch(RuntimeException invalid) { camera=null; issue="worker_unavailable"; }
                     }
-                } else if(SystemClock.elapsedRealtime()-lastStatus>=2000) request("camera-status");
-                render();
+                    render();
+                } else if(!tuningSelected && SystemClock.elapsedRealtime()-lastStatus>=2000) request("camera-status");
             } catch(Exception exception) { error.setText(exception.getMessage()); error.setVisibility(View.VISIBLE); }
-            handler.postDelayed(this,500);
+            cameraHandler.postDelayed(this,500);
         }
     };
-    @Override protected void onResume() { super.onResume(); buildScreen(); lastStatus=0; handler.post(poll); }
-    @Override protected void onPause() { handler.removeCallbacks(poll); super.onPause(); }
+    @Override protected void onSaveInstanceState(Bundle bundle) {
+        bundle.putBoolean("tuning_tab",tuningSelected); super.onSaveInstanceState(bundle);
+    }
+    @Override protected void onResume() { super.onResume(); lastStatus=0; cameraHandler.post(cameraPoll); }
+    @Override protected void onPause() { cameraHandler.removeCallbacks(cameraPoll); super.onPause(); }
 }

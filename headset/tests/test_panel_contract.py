@@ -264,15 +264,17 @@ class RootlessPanelContract(unittest.TestCase):
         manifest = ET.parse(ROOT/'headset/AndroidManifest.xml')
         ns = '{http://schemas.android.com/apk/res/android}'
         activities = {node.get(ns+'name'): node for node in manifest.findall('application/activity')}
-        self.assertEqual(activities['.ProcessingActivity'].get(ns+'exported'), 'false')
+        self.assertEqual(set(activities), {'.MainActivity'})
+        self.assertEqual(activities['.MainActivity'].get(ns+'exported'), 'true')
         home = (SOURCE/'MainActivity.java').read_text()
-        for fragment in ('"control/camera"', 'ProcessingActivity.class', '"camera-on"', '"camera-off"',
+        for fragment in ('"control/camera"', '"camera-on"', '"camera-off"',
                          'CameraState.parse(reply[1])', 'camera.enabled', 'camera.clients[i]', 'camera.online',
-                         '"/stream.mjpg"', 'handler.removeCallbacks(poll)', '"camera_retry_off"',
-                         '"camera-results-on"', '"camera-results-off"', 'camera.resultsOnline', 'camera.resultsSupported'):
+                         '"/stream.mjpg"', 'cameraHandler.removeCallbacks(cameraPoll)', '"camera_retry_off"',
+                         '"camera-results-on"', '"camera-results-off"', 'camera.resultsOnline', 'camera.resultsSupported',
+                         '"camera-eyes-on"', '"camera-eyes-off"', 'camera.eyesOnline', 'camera.eyesSupported'):
             self.assertIn(fragment, home)
         self.assertNotIn('ProcessingSettings', home)
-        self.assertNotIn('putBoolean(', home)
+        self.assertEqual(re.findall(r'\b(\w+)\.putBoolean\("([^"]+)"', home), [('bundle', 'tuning_tab')])
         worker = (ROOT/'hook/src/picoet-panel.cpp').read_text()
         self.assertIn('for (bool camera : {false, true})', worker)
         self.assertIn('module + "/bin/picoet-camera"', worker)
@@ -280,17 +282,34 @@ class RootlessPanelContract(unittest.TestCase):
     def test_home_matches_existing_tuning_panel_styles(self):
         home = (SOURCE/'MainActivity.java').read_text()
         tuning = (SOURCE/'ProcessingActivity.java').read_text()
-        for name in ('text', 'shape', 'surface', 'button', 'card'):
-            pattern = rf'(?ms)^    private [^\n]+ {name}\([^\n]*\) \{{.*?^    \}}'
-            with self.subTest(helper=name):
-                self.assertEqual(re.sub(r'\s+', ' ', re.search(pattern, home)[0]),
-                                 re.sub(r'\s+', ' ', re.search(pattern, tuning)[0]))
-        colors = lambda source: dict(re.findall(r'\b([A-Z]+)\s*=\s*(0x[a-f0-9]+)', source))
-        for name in ('BG', 'CARD', 'LINE', 'TEXT', 'MUTED', 'ACCENT', 'INK', 'TECH'):
-            with self.subTest(color=name):
-                self.assertEqual(colors(home)[name], colors(tuning)[name])
-        self.assertIn('view.setTextSize(17)', home)
-        self.assertIn('view.setMinHeight(dp(52))', home)
+        self.assertIn('MainActivity extends ProcessingActivity', home)
+        for name in ('text', 'surface', 'button', 'card', 'selected'):
+            self.assertRegex(tuning, rf'(?m)^    final \w+ {name}\(')
+            self.assertNotRegex(home, rf'(?m)^    .* \w+ {name}\(')
+        self.assertIn('view.setMinHeight(dp(48))', home)
+
+    def test_peer_tabs_embed_the_original_wide_tuning_layout(self):
+        home = (SOURCE/'MainActivity.java').read_text()
+        tuning = (SOURCE/'ProcessingActivity.java').read_text()
+        self.assertNotIn('startActivity(', home)
+        tabs = re.search(r'(?ms)^    private void selectTab\(.*?^    \}', home)[0]
+        for fragment in ('processingPage==null', 'processingPage=tuningPanel()', 'pages.addView(processingPage',
+                         'broadcastPage.setVisibility', 'processingPage.setVisibility'):
+            self.assertIn(fragment, tabs)
+        self.assertNotIn('request(', tabs)
+        self.assertIn('putBoolean("tuning_tab",tuningSelected)', home)
+        self.assertIn('bundle.getBoolean("tuning_tab")', home)
+        self.assertIn('wide ? column() : row()', tuning)
+        self.assertLess(tuning.index('body.addView(side'), tuning.index('body.addView(host'))
+        self.assertNotIn('setContentView(', tuning)
+
+    def test_result_toggles_share_one_card_without_linking_their_policies(self):
+        home = (SOURCE/'MainActivity.java').read_text()
+        self.assertIn('addSwitchRow(resultsCard,"camera_results_title",resultsToggle', home)
+        self.assertIn('addSwitchRow(resultsCard,"camera_eyes_title",eyesToggle', home)
+        self.assertIn('resultsToggle.setChecked(supportsResults && camera.resultsEnabled)', home)
+        self.assertIn('eyesToggle.setChecked(supportsEyes && camera.eyesEnabled)', home)
+        self.assertIn('supportsResults&&supportsEyes?View.VISIBLE:View.GONE', home)
 
     def test_camera_switch_is_bundled_opt_in_and_uses_existing_control_lock(self):
         service = (ROOT/'magisk-picoet-enhance/service.sh').read_text()

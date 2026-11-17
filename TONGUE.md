@@ -58,9 +58,9 @@ Run that environment's Python against `pc-tongue/backend.py`. `auto` tries insta
 
 ## 2. Build and start the headset source
 
-With this branch's complete module and companion installed, enable **PicoET-Enhance → LAN cameras**. It defaults off and remembers your choice; the home screen reports actual status, stream addresses and client counts. Close other eye/face clients once before first attachment, then let clients subscribe as needed. **Expression tuning** opens the original parameter panel.
+With this branch's complete module and companion installed, turn on the master switch in **PicoET-Enhance → LAN broadcast**. It defaults off and remembers your choice; the tab reports actual status, stream addresses and client counts. Close other eye/face clients once before first attachment, then let clients subscribe as needed. The **Post-processing** tab shows the original parameter panel.
 
-To include headset mouth results, also turn on **Share mouth results** in the companion. In the PC workbench, **Recording → More recording options → Receive headset mouth results** controls the subscription for that recording. Turn the PC option off for image-only recording; preview never subscribes to results.
+To include headset mouth results, also turn on **Mouth** under **Result sharing** in the companion. In the PC workbench, **Recording → More recording options → Receive headset mouth results** controls the subscription for that recording. Turn the PC option off for image-only recording; preview never subscribes to results.
 
 The standalone `device.py` path below is for development diagnostics; do not run it alongside the module-managed camera service.
 

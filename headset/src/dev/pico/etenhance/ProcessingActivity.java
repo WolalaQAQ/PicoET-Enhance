@@ -13,10 +13,11 @@ import android.widget.*;
 import java.io.File;
 import java.util.*;
 
-public final class ProcessingActivity extends Activity {
-    private static final int BG = 0xff10151e, CARD = 0xff1b2533, LINE = 0xff344357, NAV = 0xff141c28;
-    private static final int TEXT = 0xfff3f6fc, MUTED = 0xffa9b8ce, ACCENT = 0xff79e1c2, INK = 0xff10251e;
-    private static final int AMBER = 0xffffcf80, TECH = 0xff9fc2ff;
+/** The tuning panel and shared styling for the companion's single activity. */
+abstract class ProcessingActivity extends Activity {
+    static final int BG = 0xff10151e, CARD = 0xff1b2533, LINE = 0xff344357, NAV = 0xff141c28;
+    static final int TEXT = 0xfff3f6fc, MUTED = 0xffa9b8ce, ACCENT = 0xff79e1c2, INK = 0xff10251e;
+    static final int AMBER = 0xffffcf80, TECH = 0xff9fc2ff;
     private static final String[] PRESETS = {"balanced", "responsive", "defaults", "raw"};
     private static final String[] GUIDE = {"read", "time", "flow"};
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -25,28 +26,28 @@ public final class ProcessingActivity extends Activity {
     private final List<Runnable> live = new ArrayList<>();
     private final Map<String, Button> navigation = new LinkedHashMap<>();
     private PanelChannel channel;
-    private SharedPreferences preferences;
+    SharedPreferences preferences;
     private Context localized;
-    private LinearLayout host;
+    private LinearLayout panel, host;
     private ScrollView scroll;
     private TextView chip, footerHint, notice;
     private Button saveButton, applyButton, reloadButton;
     private String page = "start", profile = "defaults", pending = "", pendingAction = "";
     private ProcessingSettings recoveredDraft;
-    private boolean rendering, pro;
+    private boolean rendering, pro, resumed;
 
-    private int id(String key) { return getResources().getIdentifier(key, "string", getPackageName()); }
-    private String s(String key) { return localized.getString(id(key)); }
+    final int id(String key) { return getResources().getIdentifier(key, "string", getPackageName()); }
+    final String s(String key) { return localized.getString(id(key)); }
     private String fmt(String key, Object... values) {
         String result = s(key);
         for (int i = 0; i < values.length; ++i) result = result.replace("{" + i + "}", String.valueOf(values[i]));
         return result;
     }
-    private int dp(float value) { return (int)(value * getResources().getDisplayMetrics().density + .5f); }
-    private int widthDp() { return getResources().getConfiguration().screenWidthDp; }
-    private LinearLayout column() { LinearLayout v = new LinearLayout(this); v.setOrientation(LinearLayout.VERTICAL); return v; }
-    private LinearLayout row() { LinearLayout v = new LinearLayout(this); v.setGravity(Gravity.CENTER_VERTICAL); return v; }
-    private TextView text(CharSequence value, int size, int color, boolean bold) {
+    final int dp(float value) { return (int)(value * getResources().getDisplayMetrics().density + .5f); }
+    final int widthDp() { return getResources().getConfiguration().screenWidthDp; }
+    final LinearLayout column() { LinearLayout v = new LinearLayout(this); v.setOrientation(LinearLayout.VERTICAL); return v; }
+    final LinearLayout row() { LinearLayout v = new LinearLayout(this); v.setGravity(Gravity.CENTER_VERTICAL); return v; }
+    final TextView text(CharSequence value, int size, int color, boolean bold) {
         TextView v = new TextView(this); v.setText(value); v.setTextSize(size); v.setTextColor(color);
         if (bold) v.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         v.setIncludeFontPadding(false); v.setLineSpacing(dp(4), 1); return v;
@@ -55,17 +56,17 @@ public final class ProcessingActivity extends Activity {
         GradientDrawable d = new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius));
         if (border != 0) d.setStroke(dp(1), border); return d;
     }
-    private void surface(View v, int color, int border) {
+    final void surface(View v, int color, int border) {
         v.setBackground(new RippleDrawable(ColorStateList.valueOf(0x3079e1c2), shape(color, border, 12), null));
     }
-    private Button button(String label, boolean primary) {
+    final Button button(String label, boolean primary) {
         Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(15);
         b.setTextColor(primary ? INK : TEXT); b.setMinHeight(dp(48)); b.setMinimumWidth(0);
         b.setPadding(dp(16), dp(8), dp(16), dp(8)); surface(b, primary ? ACCENT : CARD, primary ? 0 : LINE); return b;
     }
-    private void selected(Button b) { surface(b, 0xff27483f, 0xff4e8e7d); b.setTextColor(ACCENT); }
-    private void gap(LinearLayout layout, int height) { View v = new View(this); layout.addView(v, new LinearLayout.LayoutParams(1, dp(height))); }
-    private LinearLayout card(LinearLayout into) {
+    final void selected(Button b) { surface(b, 0xff27483f, 0xff4e8e7d); b.setTextColor(ACCENT); }
+    final void gap(LinearLayout layout, int height) { View v = new View(this); layout.addView(v, new LinearLayout.LayoutParams(1, dp(height))); }
+    final LinearLayout card(LinearLayout into) {
         LinearLayout box = column(); box.setPadding(dp(22), dp(18), dp(22), dp(20)); box.setBackground(shape(CARD, LINE, 16));
         into.addView(box, new LinearLayout.LayoutParams(-1, -2)); gap(into, 14); return box;
     }
@@ -115,18 +116,27 @@ public final class ProcessingActivity extends Activity {
         } catch (IllegalArgumentException error) { Toast.makeText(this, s("draft_invalid"), Toast.LENGTH_LONG).show(); }
         channel = new PanelChannel(new File(createDeviceProtectedStorageContext().getFilesDir(), "control"));
         pending = preferences.getString("pending", ""); pendingAction = preferences.getString("pending_action", "");
+    }
+
+    final void changeLanguage() {
+        String next = localized.getResources().getConfiguration().getLocales().get(0).getLanguage().equals("zh") ? "en" : "zh";
+        preferences.edit().putString("language", next).apply();
+        recreate();
+    }
+
+    final View tuningPanel() {
+        if (panel != null) return panel;
+        panel = column(); panel.setTag("processing_panel");
         buildScreen();
         if (pending.isEmpty() && !state.dirty()) request("read");
+        if (resumed) handler.post(poll);
+        return panel;
     }
 
     private void buildScreen() {
         LinearLayout root = column(); root.setBackgroundColor(BG);
-        LinearLayout header = row(); header.setPadding(dp(24), dp(14), dp(24), dp(10));
-        LinearLayout brand = column(); brand.setPadding(0, 0, dp(12), 0);
-        TextView back = text(s("home_back"), 13, ACCENT, false); back.setTag("home_back");
-        back.setMinHeight(dp(44)); back.setGravity(Gravity.CENTER_VERTICAL); back.setOnClickListener(v -> finish()); brand.addView(back);
-        brand.addView(text(s("processing_title"), 22, TEXT, true)); gap(brand, 4); brand.addView(text(s("subtitle"), 13, MUTED, false));
-        header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout header = row(); header.setPadding(dp(24), dp(6), dp(24), dp(8));
+        header.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
         LinearLayout wording = row(); wording.setPadding(0, 0, dp(12), 0);
         for (boolean option : new boolean[]{false, true}) {
             Button mode = button(s(option ? "wording_pro" : "wording_simple"), false); mode.setTag(option ? "mode_pro" : "mode_simple");
@@ -138,13 +148,7 @@ public final class ProcessingActivity extends Activity {
         header.addView(wording);
         reloadButton = button(s("reload"), false); reloadButton.setTag("reload");
         reloadButton.setOnClickListener(v -> replaceDraft("read")); header.addView(reloadButton);
-        Button language = button(s("language"), false); language.setContentDescription(s("change_language")); language.setTag("language");
-        LinearLayout.LayoutParams langParams = new LinearLayout.LayoutParams(-2, -2); langParams.leftMargin = dp(8); header.addView(language, langParams);
-        language.setOnClickListener(v -> {
-            persist();
-            String next = localized.getResources().getConfiguration().getLocales().get(0).getLanguage().equals("zh") ? "en" : "zh";
-            preferences.edit().putString("language", next).apply(); recreate();
-        }); root.addView(header);
+        root.addView(header);
 
         boolean wide = widthDp() >= 760;
         LinearLayout body = new LinearLayout(this); body.setOrientation(wide ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
@@ -173,6 +177,7 @@ public final class ProcessingActivity extends Activity {
         }
         if (wide) {
             ScrollView side = new ScrollView(this); side.addView(list); side.setBackgroundColor(NAV);
+            side.setTag("processing_sidebar");
             body.addView(side, new LinearLayout.LayoutParams(dp(232), -1));
         } else {
             HorizontalScrollView strip = new HorizontalScrollView(this); strip.addView(list);
@@ -203,7 +208,8 @@ public final class ProcessingActivity extends Activity {
         applyParams.leftMargin = dp(8); actionButtons.addView(applyButton, applyParams);
         footer.addView(actionRow); notice = text("", 13, MUTED, false); notice.setMaxLines(3); notice.setTag("notice");
         notice.setPadding(0, dp(8), 0, 0); notice.setVisibility(View.GONE); footer.addView(notice); root.addView(footer);
-        setContentView(root); renderPage(false);
+        panel.removeAllViews();
+        panel.addView(root, new LinearLayout.LayoutParams(-1, -1)); renderPage(false);
     }
 
     private void renderPage(boolean keepScroll) {
@@ -598,6 +604,13 @@ public final class ProcessingActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle bundle) {
         if (state.applied != null) bundle.putString("applied_snapshot", state.applied.format()); super.onSaveInstanceState(bundle);
     }
-    @Override protected void onResume() { super.onResume(); handler.post(poll); }
-    @Override protected void onPause() { handler.removeCallbacks(poll); persist(); super.onPause(); }
+    @Override protected void onResume() {
+        super.onResume(); resumed = true;
+        if (panel != null) handler.post(poll);
+    }
+    @Override protected void onPause() {
+        resumed = false; handler.removeCallbacks(poll);
+        if (panel != null) persist();
+        super.onPause();
+    }
 }

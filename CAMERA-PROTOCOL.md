@@ -111,7 +111,7 @@ The existing `PICO_MOUTH_DISCOVER_V1\n` / PTC1 discovery and mouth-only `LABELS\
 
 PSL1 carries 33 mouth channels at four stages (raw, action-postprocessed before clamping, clamped instant, and final filtered output), two quality values, validity, classification and source identity. It does not contain eye-expression vectors; ordinary eye/face result forwarding remains the Bridge path. A JPEG or MJPEG subscription receives images, not these result records.
 
-On the module-managed source, enable **Share mouth results** in the companion to allow `LABELS` subscriptions while **LAN cameras** is on. Result sharing defaults off and remembers your choice. Turning it off rejects new label connections and closes the current one without interrupting images. Third-party clients may reconnect when it is enabled again; one label client can subscribe at a time.
+On the module-managed source, enable **Mouth** under **LAN broadcast → Result sharing** to allow `LABELS` subscriptions while broadcasting. Result sharing defaults off and remembers your choice. Turning it off rejects new label connections and closes the current one without interrupting images. Third-party clients may reconnect when it is enabled again; one label client can subscribe at a time.
 
 The PC workbench opens a label subscription at the start of a recording only if **Receive headset mouth results** is selected. Preview never opens it. **Training label stage** still controls how training labels are derived. If the label connection is unavailable, images continue and missing labels remain unknown.
 
@@ -119,7 +119,7 @@ PSL1 and images are delivered independently. Pair only records marked associated
 
 ## Eye expression results (PSE1)
 
-Enable **Share eye results** in the companion. It defaults off independently of mouth results. To receive both eyes, send `EYES\n` on a new TCP connection to the advertised `eye_left` port. Turning the switch off disconnects the result subscriber without interrupting image or mouth streams. One eye-result subscriber is supported at a time.
+Enable **Both eyes** under **LAN broadcast → Result sharing** in the companion. It defaults off independently of mouth results. To receive both eyes, send `EYES\n` on a new TCP connection to the advertised `eye_left` port. Turning the switch off disconnects the result subscriber without interrupting image or mouth streams. One eye-result subscriber is supported at a time.
 
 Each little-endian 320-byte record has Python layout `<4sHHII6Q64f`. Its 64-byte header contains magic `PSE1`, version `1`, header size `64`, record size `320`, flags, capture session, verified service generation, result sequence, left and right inference-input timestamps in ns, and production monotonic time in ns. Flags 0/1 mark a new left/right observation; bits 2/3 mark that observation valid. The timestamp is zero for a side not updated; ignore its values.
 
@@ -129,4 +129,4 @@ The payload contains `raw24` (20 expression and four original quality values), `
 
 The adapter performs a synchronous protection copy only for subscribed lanes. Each stream has its own two-slot IPC queue, encoder and consumers. The transport daemon owns network sockets; the vendor camera callback does no JPEG encoding or network writes.
 
-Update the main hook, adapter, shim, controller and daemon together for **PTJIPC5**. PTJ1, PTC1 and PSL1 wire layouts are unchanged. Turning **LAN cameras** off ends all subscriptions, joins encoders/writers, releases the source's tracking lease and checks acknowledgements for every raw-slot return. Closing the companion app leaves sharing available. The standalone developer `device.py stop` performs the same shutdown for its own session; do not use its session state to control the module-managed source.
+Update the main hook, adapter, shim, controller and daemon together for **PTJIPC5**. PTJ1, PTC1 and PSL1 wire layouts are unchanged. Turning the **LAN broadcast** master switch off ends all subscriptions, joins encoders/writers, releases the source's tracking lease and checks acknowledgements for every raw-slot return. Closing the companion app leaves sharing available. The standalone developer `device.py stop` performs the same shutdown for its own session; do not use its session state to control the module-managed source.
