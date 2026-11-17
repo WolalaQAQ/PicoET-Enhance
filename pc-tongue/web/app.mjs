@@ -72,7 +72,7 @@ export function captureProgress(status, preset, preview = false) {
   const total = guide?.steps?.length ?? guide?.total ?? preset?.steps?.length ?? 0;
   const phase = guide?.phase ?? "practice", done = ["done","finished"].includes(phase);
   const current = total && guide && phase !== "practice" ? done ? total : Math.min((guide.index ?? 0)+1,total) : 0;
-  const phaseKey = !guide ? "captureIdle" : recording?.state === "cancelled" ? "capturePaused" :
+  const phaseKey = !guide ? "captureIdle" : guide.paused || recording?.state === "cancelled" ? "capturePaused" :
     !active && !external && !done ? "capturePaused" :
     ({prepare:"capturePrepare",hold:"visualhold",review:"captureReview",finished:"visualdone"})[phase] ?? "visual"+phase;
   return {total,current,active,phaseKey};
@@ -162,7 +162,8 @@ export function createApp(doc, options = {}) {
       for(const preset of presets) {const option=doc.createElement("option");option.value=preset.id;
         option.textContent=`${preset.name[language]} · ${preset.steps.length} ${t("captureSteps")}`;selector.append(option);}
     }
-    selector.value=state.selectedPreset ?? ""; selector.disabled=active || Boolean(state.busy) || !presets.length;
+    selector.value=state.selectedPreset ?? ""; selector.disabled=active ||
+      ["starting","stopping"].includes(state.status?.capture_control?.state) || Boolean(state.busy) || !presets.length;
     const preset=selectedPreset(), progress=captureProgress(current.current?state.status:null,preset,state.presetPreview);
     get("capture-progress-label").textContent=t("captureProgress");
     get("capture-preset-label").textContent=t("capturePreset");
@@ -196,33 +197,46 @@ export function createApp(doc, options = {}) {
   }
   function renderRecord(current) {
     const record = state.status?.recording, active = record?.state === "recording" || record?.state === "collecting";
-    get("record-start").disabled = !current.current || !current.running || state.status?.connected !== true || state.status?.source_mode !== "live" || active || Boolean(state.busy) || state.dirty || !get("record-consent").checked || !get("person_id").value.trim();
-    get("record-stop").disabled = !current.current || !active || Boolean(state.busy); get("record-cancel").disabled = get("record-stop").disabled;
-    get("record-start").hidden = active; get("record-stop").hidden = !active; get("record-cancel").hidden = !active;
-    get("record-consent").disabled = active || Boolean(state.busy); get("person_id").disabled = active || Boolean(state.busy);
-    get("record-state").textContent = current.current ? t(record?.state ?? "idle") : t("offline");
+    const managed = state.status?.managed_capture, control = state.status?.capture_control;
+    const pending = ["starting","recording","stopping"].includes(control?.state);
+    get("record-start").disabled = !current.current || !managed && (!current.running || state.status?.connected !== true || state.status?.source_mode !== "live") || active || pending || Boolean(state.busy) || state.dirty || !get("record-consent").checked || !get("person_id").value.trim();
+    get("record-stop").disabled = !current.current || !(active || pending) || control?.state==="stopping" || Boolean(state.busy); get("record-cancel").disabled = get("record-stop").disabled;
+    get("record-start").hidden = active || pending; get("record-stop").hidden = !(active || pending); get("record-cancel").hidden = !(active || pending);
+    get("record-consent").disabled = active || pending || Boolean(state.busy); get("person_id").disabled = active || pending || Boolean(state.busy);
+    get("guide-enabled").disabled = active || pending || Boolean(state.busy);
+    get("label-stage").disabled = active || pending || Boolean(state.busy);
+    const controlText = {starting:"captureStarting",stopping:"captureSaving",completed:"captureComplete",error:"captureError"};
+    get("record-state").textContent = current.current ? t(controlText[control?.state] ?? record?.state ?? "idle") : t("offline");
     get("capture-stop").disabled = get("stop").disabled;
-    const next = !get("headset_host").value.trim() ? "recordNeedHeadset" : !current.running ? "recordOpenCamera" :
+    const next = managed ? "captureSelfService" : !get("headset_host").value.trim() ? "recordNeedHeadset" : !current.running ? "recordOpenCamera" :
       !current.video ? "recordWaitCamera" : !get("record-consent").checked ? "recordNeedConsent" : "recordReady";
     get("record-next").textContent = active ? "" : t(next);
-    get("record-path").textContent = display(record?.directory ?? record?.path); get("record-error").hidden = !record?.error;
-    get("record-error").textContent = record?.error ? errorMessage(state.language, record.error) : "";
+    get("record-path").textContent = display(record?.directory ?? record?.path);
+    get("record-error").hidden = !(record?.error || control?.error);
+    get("record-error").textContent = record?.error || control?.error ? errorMessage(state.language, record?.error || control.error) : "";
     const guide = record?.guide, step = guide?.current ?? guide?.step;
     const phase = guide?.phase === "review" ? "confirm" : guide?.phase;
-    const prompt = step && typeof step === "object" ? (step[phase]?.[state.language === "en" ? "en" : "zh"] ?? step.id) : step;
+    const auto = guide?.automatic === true;
+    const prompt = auto && step ? `${t(guide.paused?"autoPaused":phase==="hold"?"autoHold":"autoPrepare")} ${step.title?.[state.language==="en"?"en":"zh"] ?? step.id}` :
+      step && typeof step === "object" ? (step[phase]?.[state.language === "en" ? "en" : "zh"] ?? step.id) : step;
     get("guide").hidden = !active || !current.current || !prompt;
-    get("guide-step").textContent = prompt ?? ""; get("guide-hint").textContent = t(guide?.phase === "settle" ? "settle" : "hold");
+    get("guide-step").textContent = prompt ?? ""; get("guide-hint").textContent = auto ? t(guide.paused?"autoPausedHelp":!guide.display_ready?"autoShowImage":"autoNext") : t(guide?.phase === "settle" ? "settle" : "hold");
+    get("guide-countdown").hidden = !auto || guide?.paused || !guide?.display_ready;
+    get("guide-countdown").textContent = `${Math.ceil(guide?.remaining_seconds ?? 0)} ${t("guideSeconds")}`;
+    get("guide-pause").hidden = !auto || !active;
+    get("guide-pause").disabled = Boolean(state.busy) || !current.current;
+    get("guide-pause").textContent = t(guide?.paused?"guideResume":"guidePause");
     get("guide-progress").value = guide?.progress ?? 0;
     for (const [action, enabled] of [["ready", guide?.phase === "prepare" && step?.kind !== "remount"], ["finish", guide?.ready_to_finish], ["confirm", guide?.phase === "review"], ["skip", Boolean(step)]]) {
       get(`guide-${action}`).disabled = !active || !current.current || !enabled || Boolean(state.busy);
-      get(`guide-${action}`).hidden = !enabled;
+      get(`guide-${action}`).hidden = !enabled || auto && action!=="skip";
     }
     const available = Boolean(speech && Utterance); get("voice-enabled").disabled = !available;
     get("voice-info").textContent = t(!available ? "voiceUnavailable" : get("voice-enabled").checked ? "voiceReady" : "voiceOff");
     const voiceKey = active && current.current && available && get("voice-enabled").checked && prompt ? `${record?.session_id}/${guide?.index}/${guide?.phase}/${prompt}/${state.language}` : null;
     if (voiceKey !== state.spoken) {
       speech?.cancel(); state.spoken = voiceKey;
-      if (voiceKey) { const utterance = new Utterance(`${prompt}. ${get("guide-hint").textContent}`); utterance.lang = state.language === "en" ? "en-US" : "zh-CN"; speech.speak(utterance); }
+      if (voiceKey) { const utterance = new Utterance(auto ? prompt : `${prompt}. ${get("guide-hint").textContent}`); utterance.lang = state.language === "en" ? "en-US" : "zh-CN"; speech.speak(utterance); }
     }
   }
   function referenceStep(current) {
@@ -233,7 +247,8 @@ export function createApp(doc, options = {}) {
         id: external.running ? step.visual.demo_prompt_ids[0] : state.referenceSelected};
     }
     const record = state.status?.recording, active = current.current && ["recording", "collecting"].includes(record?.state) && (record?.guide?.current ?? record?.guide?.step);
-    return {following: Boolean(active), step: active || null, id: active?.id ?? state.referenceSelected};
+    return {following: Boolean(active), step: active || null, id: active?.id ?? state.referenceSelected,
+      automatic: record?.guide?.automatic, phase: record?.guide?.phase, frame:record?.guide?.frame};
   }
   function renderReference(current) {
     const poses = state.reference?.poses ?? [], guide = referenceStep(current), pose = poses.find(item => item.id === guide.id), hasImage = Boolean(pose?.front);
@@ -253,12 +268,16 @@ export function createApp(doc, options = {}) {
     const external = guide.external;
     get("reference-mode").textContent = external?.running ? `${external.role} · ${external.index+1}/${external.steps.length} · ${t("visual"+external.phase)}` : external ? t("visualpractice") : t(guide.following ? "referenceFollowing" : "referencePractice");
     get("reference-pose").textContent = pose?.title?.[language] ?? guide.id;
-    get("reference-instruction").textContent = external && guide.id === guide.step.visual.demo_prompt_ids[0] ? `${guide.step.text} ${guide.step.visual.note}` : guide.following ? "" : pose?.instruction?.[language] ?? "";
+    get("reference-instruction").textContent = external && guide.id === guide.step.visual.demo_prompt_ids[0] ? `${guide.step.text} ${guide.step.visual.note}` :
+      guide.following && guide.automatic ? guide.step.title?.[language] ?? "" : guide.following ? "" : pose?.instruction?.[language] ?? "";
     if (state.referencePose !== guide.id) { state.referencePose = guide.id; state.referenceAnimated = false; }
-    const animated = external?.running ? !["hold", "done", "paused", "interrupted"].includes(external.phase) : state.referenceAnimated;
+    const animated = external?.running ? !["hold", "done", "paused", "interrupted"].includes(external.phase) :
+      guide.following && guide.automatic ? guide.phase==="prepare" : state.referenceAnimated;
     const anchorId = external && guide.id === guide.step.visual.demo_prompt_ids[0] ? guide.step.visual.demo_prompt_ids[1] : null;
     const anchor = poses.find(item => item.id === anchorId)?.front ?? state.reference?.neutral;
-    const key = `${guide.id}/${animated}/${pose?.front}/${pose?.profile}/${anchor}/${external?.frame ?? ""}`;
+    const key = `${guide.id}/${animated}/${pose?.front}/${pose?.profile}/${anchor}/${external?.frame ?? guide.frame ?? ""}`;
+    get("reference-views").hidden = !hasImage || state.referenceImageError;
+    get("reference-profile").hidden = !hasImage || !pose?.profile;
     if (key !== state.referenceKey) {
       state.referenceKey = key; state.referenceImageError = false;
       for (const id of ["reference-image", "reference-neutral-image", "reference-profile-image"]) get(id).removeAttribute("src");
@@ -268,7 +287,7 @@ export function createApp(doc, options = {}) {
         get("reference-neutral-image").src = asset(anchor);
         if (pose.profile) get("reference-profile-image").src = asset(pose.profile);
       }
-      if (external && state.page === "recording") get("reference-image").scrollIntoView?.({block:"center"});
+      if ((external || guide.automatic) && state.page === "recording") get("pose-reference").scrollIntoView?.({block:"start"});
     }
     get("reference-neutral-caption").textContent = t(anchorId ? "referenceOpening" : "referenceNeutral");
     get("reference-image").setAttribute("alt", `${t("referenceTarget")}: ${pose?.title?.[language] ?? guide.id}`);
@@ -280,7 +299,8 @@ export function createApp(doc, options = {}) {
     get("reference-play").disabled = state.referenceImageError || Boolean(external?.running);
     get("reference-play").textContent = t(animated ? "referenceStill" : "referencePlay");
     get("reference-play").setAttribute("aria-pressed", String(animated));
-    get("reference-message").textContent = !hasImage && pose?.unavailable_reason?.[language] ? pose.unavailable_reason[language] :
+    get("reference-message").textContent = guide.following && guide.automatic && !hasImage ? guide.step.title?.[language] ?? "" :
+      !hasImage && pose?.unavailable_reason?.[language] ? pose.unavailable_reason[language] :
       t(state.referenceLoading ? "referenceLoading" : !state.reference ? "referenceMissing" : !hasImage ? "referencePoseMissing" : state.referenceImageError ? "referenceImageError" : "referenceHelp");
     const authored = pose?.provenance?.some(kind => kind === "original_tongue_mesh_with_authored_skin_binding_and_post_skinning_controls" || kind === "original_mouth_shift_deltas_with_authored_independent_lip_masks");
     get("reference-origin").textContent = hasImage ? t(authored ? "referenceAuthored" : "referenceOriginal") : "";
@@ -296,18 +316,23 @@ export function createApp(doc, options = {}) {
     finally { state.referenceLoading = false; if (!state.destroyed) render(); }
   }
   async function reportVisual() {
-    if (!options.viewer || state.visualReporting || state.destroyed || !view().current) return;
+    if (state.visualReporting || state.destroyed || !view().current) return;
     const external = state.status?.external_guide;
-    if (!external) return;
+    const record=state.status?.recording, owner=state.status?.capture_control?.viewer;
+    const automatic=record?.guide?.automatic && record.state==="recording" && record.guide.step &&
+      (!owner || owner===options.viewer);
+    if (!(external && options.viewer) && !automatic) return;
     state.visualReporting = true;
     try {
       const current = referenceStep(view()), key = state.referenceKey;
       const images = ["reference-image", "reference-neutral-image", ...(get("reference-profile").hidden ? [] : ["reference-profile-image"])].map(get);
-      const rect = get("reference-image").getBoundingClientRect?.();
+      const pose=state.reference?.poses?.find(p=>p.id===current.id), textOnly=Boolean(automatic && pose && !pose.front);
+      const rect = get(textOnly?"reference-message":"reference-image").getBoundingClientRect?.();
       const height = doc.documentElement.clientHeight ?? Infinity;
       const inView = !rect || rect.height > 0 && (Math.min(rect.bottom,height)-Math.max(rect.top,0))/rect.height >= .8;
-      let ready = state.selectedPreset===external.case && state.page === "recording" && current.id === current.step?.visual?.demo_prompt_ids?.[0] &&
-        inView && !state.referenceImageError && !get("reference-views").hidden && images.every(image => image.complete && image.naturalWidth > 0);
+      let ready = (automatic ? current.id===record.guide.step.id : state.selectedPreset===external.case && current.id === current.step?.visual?.demo_prompt_ids?.[0]) && state.page === "recording" &&
+        inView && !state.referenceImageError && (textOnly ? Boolean(get("reference-message").textContent) :
+          !get("reference-views").hidden && images.every(image => image.complete && image.naturalWidth > 0));
       if (ready && state.referencePaintedKey !== key) {
         const paint = options.paint ?? globalThis.requestAnimationFrame;
         await new Promise(resolve => paint(() => paint(resolve)));
@@ -315,8 +340,11 @@ export function createApp(doc, options = {}) {
       }
       ready = ready && state.referencePaintedKey === state.referenceKey;
       if (state.destroyed) return;
-      await requestJson(fetcher, "/api/display", {viewer: options.viewer, frame: external.frame,
-        index: external.index, visible: !doc.hidden && state.page === "recording", media_ready: ready});
+      const visible=!doc.hidden && state.page==="recording";
+      await requestJson(fetcher, automatic?"/api/recording/display":"/api/display", automatic ?
+        {session_id:record.session_id,frame:record.guide.frame,phase:record.guide.phase,visible,media_ready:ready,
+          ...(owner ? {viewer:options.viewer} : {})} :
+        {viewer:options.viewer,frame:external.frame,index:external.index,visible,media_ready:ready});
     } finally { state.visualReporting = false; }
   }
   function reviewImageUrl(sample) { return `/api/recording/image?session=${encodeURIComponent(state.reviews.session_id)}&sample=${encodeURIComponent(sample.sample_id)}`; }
@@ -410,7 +438,13 @@ export function createApp(doc, options = {}) {
     get("stock-info").textContent = `${t(association)} · ${JSON.stringify(stock ?? null)}`;
     get("snapshot-state").textContent = t(current.current ? "snapshot" : "expiredSnapshot");
     const replay = state.status?.replay; get("replay-info").textContent = replay?.path ? `${replay.path} · ${display(replay.position)} / ${display(replay.total)} ${t("frames")}${replay.finished ? ` · ${t("replayDone")}` : ""}` : t("replayReady");
+    const focused=state.page==="recording" && state.status?.recording?.state==="recording" && state.status?.recording?.guide?.automatic;
+    doc.documentElement.setAttribute?.("data-guiding",String(Boolean(focused)));
     renderCapturePlan(current); renderRecord(current); renderReference(current); renderTraining(current); renderReview(current);
+    if(state.status?.managed_capture && state.page==="recording") {
+      get("connection-setup").hidden=true; get("capture").hidden=true; get("capture-stop").hidden=true;
+      get("page-intro").textContent=t("captureSelfService");
+    }
     if (state.status?.read_only) {
       get("status").textContent = t("visualReadonly");
       get("page-intro").textContent = t("visualReadonly");
@@ -533,11 +567,11 @@ export function createApp(doc, options = {}) {
   }
   async function stop() { if (!get("stop").disabled) await control("stopping", () => requestJson(fetcher, "/api/stop", {}, 20000)); }
   async function record(action) {
-    const button = {begin: "record-start", stop: "record-stop", cancel: "record-cancel", ready: "guide-ready", finish: "guide-finish", confirm: "guide-confirm", skip: "guide-skip"}[action]; if (!button || get(button).disabled) return;
-    if (action === "begin" && !validate("live", false)) return;
+    const button = {begin: "record-start", stop: "record-stop", cancel: "record-cancel", ready: "guide-ready", finish: "guide-finish", confirm: "guide-confirm", skip: "guide-skip", pause:"guide-pause",resume:"guide-pause"}[action]; if (!button || get(button).disabled) return;
+    if (action === "begin" && !state.status?.managed_capture && !validate("live", false)) return;
     await control("working", async () => {
       await requestJson(fetcher, "/api/recording", {action, ...(action === "begin" ? {person_id: get("person_id").value.trim(), confirmed: get("record-consent").checked, guide: get("guide-enabled").checked, stage: get("label-stage").value,
-        ...(get("guide-enabled").checked ? {preset_id:state.selectedPreset} : {})} : {})}, 20000);
+        ...(get("guide-enabled").checked ? {preset_id:state.selectedPreset,automatic:true} : {})} : {})}, 20000);
       if(action==="begin")state.presetPreview=false;
       get("record-consent").checked = false;
     });
@@ -582,6 +616,7 @@ export function createApp(doc, options = {}) {
   });
   navigation?.addEventListener("hashchange", hashChanged);
   get("language").addEventListener("change", () => setLanguage(get("language").value));
+  get("guide-pause").addEventListener("click",()=>record(state.status?.recording?.guide?.paused?"resume":"pause"));
   for (const [id, fn] of [["save", save], ["stop", stop], ["capture-stop", stop], ["capture", () => start("capture")], ["replay", () => start("replay")], ["record-start", () => record("begin")], ["record-stop", () => record("stop")], ["record-cancel", () => record("cancel")], ["train-start", () => train()], ["train-cancel", () => train("cancel")], ...["ready", "finish", "confirm", "skip"].map(action => [`guide-${action}`, () => record(action)])]) get(id).addEventListener("click", fn);
   for (const id of ["preview-enabled", "record-consent", "voice-enabled", "person_id"]) get(id).addEventListener("change", render);
   for (const id of ["review-confirmed", "reviewer"]) get(id).addEventListener("change", render);
@@ -599,7 +634,7 @@ export function createApp(doc, options = {}) {
   });
   get("reference-play").addEventListener("click", () => { if (!get("reference-play").disabled && !get("reference-play").hidden) { state.referenceAnimated = !state.referenceAnimated; render(); } });
   for (const id of ["reference-image", "reference-neutral-image", "reference-profile-image"]) get(id).addEventListener("error", () => { state.referenceImageError = true; render(); });
-  async function init() { render(); await Promise.all([pollStatus(), loadReference(), loadPresets()]); if (!state.destroyed) { state.interval = timers.setInterval(() => { render(); void pollStatus(); }, 500); if(options.viewer) state.visualTimer=timers.setInterval(() => {void reportVisual().catch(error => {state.error=error.message;});},200); previewLoop(); await discover(); } }
+  async function init() { render(); await Promise.all([pollStatus(), loadReference(), loadPresets()]); if (!state.destroyed) { state.interval = timers.setInterval(() => { render(); void pollStatus(); }, 500); state.visualTimer=timers.setInterval(() => {void reportVisual().catch(error => {state.error=error.message;});},200); previewLoop(); await discover(); } }
   function destroy() { state.destroyed = true; state.generation++; navigation?.removeEventListener("hashchange", hashChanged); speech?.cancel(); timers.clearInterval(state.interval); timers.clearInterval(state.visualTimer); timers.clearTimeout(state.previewTimer); clearPreview(); }
   return {init, destroy, start, stop, save, record, train, loadReviews, applyReview, readForm, pollStatus, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs};
 }

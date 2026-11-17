@@ -1,6 +1,12 @@
 export const LANGUAGE_KEY = "pico-tongue-language";
 export const messages = {
   en: {
+    guidePause:"Pause", guideResume:"Resume", guideSeconds:"s",
+    autoPrepare:"Copy the pose:", autoHold:"Hold:", autoPaused:"Paused:",
+    autoPausedHelp:"Guide paused; raw recording continues. Resume when you are ready.", autoShowImage:"Keep the demonstration fully visible to continue.",
+    autoNext:"The next pose appears automatically.", captureStarting:"Opening camera…",
+    captureSaving:"Saving recording…", captureComplete:"Recording saved", captureError:"Recording stopped",
+    captureSelfService:"Choose a preset, check the recording agreement, then start. The guide changes poses and finishes recording automatically.",
     capturePreset: "Capture preset", captureProgress: "Current step", captureSteps: "steps",
     captureOrder: "Actions in order", captureIdle: "Not started", capturePrepare: "Get ready",
     captureReview: "Confirm this step", capturePaused: "Paused", captureFree: "Free recording · no step guide",
@@ -48,7 +54,7 @@ export const messages = {
     replaying: "Replaying data", replayReady: "Replay reads a saved dataset on this PC and needs no headset.", replayDone: "Finished", frames: "frames",
     allChannels: "All model channels", unknownHelp: "“—” means this channel has no value: the model does not output it, or no fresh result has arrived. Names are the model's own channel names.",
     supported: "Trained channels", migration: "Your earlier tongue-only settings are kept in the local configuration archive. Choose a whole-mouth ONNX model to use the current workflow.",
-    recordHelp: "Recording doesn't need a model, and images are saved only after you start recording. For each step, click Start holding and keep the pose until Finish holding is enabled; the timer restarts if the image stream is interrupted. Then click Confirm action done. Left and right mean your own left and right. Skip any step you can't do; skipped steps get no labels. Labels are added afterwards under Review recorded images.",
+    recordHelp: "Choose a preset and start recording. Copy each demonstration during the three-second preparation, then hold until the countdown ends. The next pose appears automatically. Pause, resume, skip or finish whenever you need. Left and right mean your own left and right. Add labels afterwards under Review recorded images.",
     person: "Who is this recording for?", guided: "Guide me step by step", voice: "Spoken instructions", voiceReady: "Each step is read aloud. Keep the PC's sound audible while you wear the headset.",
     voiceOff: "Spoken instructions are off.", voiceUnavailable: "This browser can't read instructions aloud. Use a browser with speech support for spoken instructions.",
     consent: "I agree to save mouth images on this PC, and I am ready to follow the guide.", recordStart: "Start recording", recordStop: "Finish recording", cancel: "Cancel",
@@ -94,6 +100,12 @@ export const messages = {
     providerMissing: "The execution provider for the selected device is not installed. Pick another inference device under Settings → Connection and performance.", providerInitFailed: "The execution provider for the selected device failed to start. Pick another inference device under Settings → Connection and performance.",
   },
   "zh-CN": {
+    guidePause:"暂停", guideResume:"继续", guideSeconds:"秒",
+    autoPrepare:"看图模仿：", autoHold:"保持：", autoPaused:"已暂停：",
+    autoPausedHelp:"引导已暂停，原始画面继续保存。准备好后点「继续」。", autoShowImage:"请让示范图完整显示在窗口中。",
+    autoNext:"倒计时结束后自动切换下一个动作。", captureStarting:"正在打开相机…",
+    captureSaving:"正在保存录制…", captureComplete:"录制已保存", captureError:"录制已停止",
+    captureSelfService:"选择预设，勾选录制同意后开始。界面自动切换动作，完成后自动结束录制。",
     capturePreset: "采集预设", captureProgress: "当前步骤", captureSteps: "步",
     captureOrder: "动作顺序", captureIdle: "尚未开始", capturePrepare: "准备动作",
     captureReview: "确认本步", capturePaused: "已暂停", captureFree: "自由录制 · 无步骤引导",
@@ -139,7 +151,7 @@ export const messages = {
     replay: "回放数据", replayPath: "回放数据集（.npz）", replaying: "正在回放", replayReady: "回放读取本机保存的数据集，不需要连接头显。", replayDone: "已读完", frames: "帧",
     allChannels: "全部模型通道", unknownHelp: "“—”表示该通道没有数值：模型不输出它，或还没有收到新的结果。名称是模型自己的通道名。", supported: "已训练通道",
     migration: "原舌头流程的设置保存在本机配置存档中。请选择整嘴 ONNX 模型，使用当前流程。",
-    recordHelp: "录制不需要模型，点击开始录制后才会保存图像。每一步先点“开始保持”，保持动作直到“结束保持”可以点击（画面中断会重新计时），再点“确认已完成动作”。动作中的左右都指你自己的左右。做不到的步骤可以跳过，跳过的步骤不产生标签。标签稍后在“审核已录图像”中添加。",
+    recordHelp: "选好预设后开始录制。每步先看示范模仿3秒，再保持到倒计时结束，界面自动切换下一步。随时可以暂停、继续、跳过或结束。动作中的左右指你自己的左右。标签稍后在「审核已录图像」中添加。",
     person: "这份素材属于谁？", guided: "按步骤引导我", voice: "语音提示", voiceReady: "每一步都会朗读。佩戴头显时，请保持能听到电脑的声音。", voiceOff: "语音提示已关闭。",
     voiceUnavailable: "当前浏览器不能朗读提示。需要语音提示时，请换用支持语音的浏览器。", consent: "我同意在这台电脑上保存嘴部图像，并已准备好跟随引导。",
     recordStart: "开始录制", recordStop: "完成录制", cancel: "取消", working: "处理中…", idle: "空闲", recording: "录制中", completed: "已完成", cancelled: "已取消", failed: "失败", stoppedRecording: "已停止",

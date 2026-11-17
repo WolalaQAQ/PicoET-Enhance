@@ -5,6 +5,7 @@ English | [简体中文](CHANGELOG_zh.md)
 ## [Unreleased] - 2026-11-17
 
 ### Features
+- Make Capture self-operated: timed preparation and holds, automatic demonstration changes and recording completion, pause/resume and skip, plus an optional managed source lifecycle behind one recording action.
 - Add a persistent current-step counter/progress bar, four ordered capture presets (12/11/13/73 steps) and an expandable action list to Capture. Guided recording uses the selected preset and locks it for the session.
 - Rewrite the wording of all four pages in both languages: buttons, status and error messages, help, preset names and descriptions, the ordered action lists, step prompts and the reference image titles and captions. Each message now says what is happening, what to do and what the result is.
 - Add reusable exact-pair auditing and derived raw-supervision helpers, preserving signed archives, reviewed-label priority and whole-session grouping.
@@ -23,6 +24,7 @@ English | [简体中文](CHANGELOG_zh.md)
 - Send whole-mouth controls through 256-byte MFR1 with per-field validity on local UDP45682 for the matching UnifiedPicoModule to merge, retaining ORT backend selection and the bilingual app.
 
 ### Design Rationale
+- Advance only with fresh continuous input and a current, visible, loaded-and-painted demonstration. Keep recording controls beside the existing reference images and preserve unknown training targets.
 - Derive the guide length and order from the preset's action list; freeze the selected plan in the recording manifest before frames arrive, while reusing the existing demonstration assets.
 - Keep optimization coverage separate from validation and output permission; export without an approval retains provenance but enables no channels.
 - Record distinct DINOv2/DINOv3 checkpoint kinds and input sizes so continuation restores the matching teacher. Both use CLS and mean-patch features with the same 50-channel head and MobileNetV3-small student.
@@ -35,7 +37,7 @@ English | [简体中文](CHANGELOG_zh.md)
 - Preserve raw, gated instant and final filtered values separately; a gated TongueOut zero is not an automatic negative label. Split training/validation by person and headset-fit session.
 
 ### Notes & Caveats
-- Preset selection and practice do not begin recording or approve labels. Free recording has no step plan; completing guidance still requires an explicit stop.
+- Preset selection and practice do not begin recording or approve labels. Guided recording stops automatically; free recording is stopped manually. Pausing the guide retains the raw stream.
 - Model loading and the final runtime merge enforce `validated_channels` and `valid_mask`; legacy training-only manifests no longer enable output.
 - DINOv3 requires its matching local source and authorized weights under the DINOv3 License. DINOv2 remains the CLI default; select v3 B, L or H+ with `--teacher-backbone dinov3`, `dinov3-large` or `dinov3-huge`.
 - Automatic discovery requires this branch's updated headset daemon and a network that allows broadcasts. The native file chooser runs on the PC hosting the local app and needs Python's Tk support.

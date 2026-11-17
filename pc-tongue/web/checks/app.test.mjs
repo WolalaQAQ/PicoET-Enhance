@@ -50,7 +50,7 @@ function setup(t, options = {}) {
     server.calls.push({path, ...opts}); const custom = await server.before?.(path, opts); if (custom) return custom;
     if (path === "/api/discovery") return Response.json({devices: server.discovered ?? []});
     if (path === "/api/presets") return Response.json({presets:server.presets,default:"complete"});
-    if (path === "/api/display") return Response.json({accepted:true});
+    if (path === "/api/display" || path === "/api/recording/display") return Response.json({accepted:true});
     if (path === "/api/model/select") return Response.json(server.selectedModel ?? {cancelled: true});
     if (path === "/static/guide-reference/manifest.json") return server.reference ? Response.json(server.reference) : Response.json({error: "Not found"}, {status: 404});
     if (path === "/api/status") { if (server.failStatus) throw TypeError("Failed to fetch"); return Response.json(server.status); }
@@ -296,13 +296,103 @@ test("record requires separate consent and a person ID, not an existing model", 
   const {app, server, el} = setup(t); server.config.model_path = ""; await app.init(); await app.record("begin");
   assert.ok(!server.calls.some(c => c.path === "/api/recording")); await app.start("capture"); el("person_id").value = "local-person"; el("record-consent").checked = true; el("person_id").emit("change"); await app.record("begin");
   const body = JSON.parse(server.calls.find(c => c.path === "/api/recording").body);
-  assert.deepEqual(body, {action: "begin", person_id: "local-person", confirmed: true, guide: true, stage: "raw_only",preset_id:"complete"});
+  assert.deepEqual(body, {action: "begin", person_id: "local-person", confirmed: true, guide: true, stage: "raw_only",preset_id:"complete",automatic:true});
   assert.equal(el("record-consent").checked, false); assert.equal(el("guide").hidden, false); assert.equal(el("guide-step").textContent, "Relax your mouth");
 });
 test("guide phase controls use real ready/finish/confirm/skip API, never auto-approve labels", async t => {
   const {app, el, server} = setup(t); await app.init(); await app.start("capture"); el("person_id").value = "local"; el("record-consent").checked = true; el("person_id").emit("change"); await app.record("begin");
   assert.equal(el("guide-ready").disabled, false); assert.equal(el("guide-confirm").disabled, true); await app.record("ready");
   assert.equal(el("guide-step").textContent, "Hold"); assert.ok(!server.calls.some(c => c.path.includes("review")));
+});
+test("managed capture starts from one recording click without a separate camera or agent step",async t=>{
+  const f=setup(t);f.server.status.managed_capture=true;f.server.status.capture_control={state:"idle",error:""};
+  f.server.config.headset_host="";f.server.config.model_path="";
+  await f.app.init();f.app.navigate("recording");
+  assert.equal(f.el("record-start").disabled,true);
+  f.el("record-consent").checked=true;f.el("record-consent").emit("change");
+  assert.equal(f.el("record-start").disabled,false);
+  await f.app.record("begin");
+  const request=f.server.calls.find(c=>c.path==="/api/recording");
+  assert.equal(JSON.parse(request.body).automatic,true);
+  assert.ok(!f.server.calls.some(c=>c.path==="/api/start"));
+  assert.equal(f.el("connection-setup").hidden,true);
+});
+test("automatic capture shows countdown and animated preparation, then a still hold with real paint receipts",async t=>{
+  let paints=0;
+  const f=setup(t,{paint:fn=>{paints++;fn();}});
+  f.server.status.recording={state:"recording",session_id:"self-operated",guide:{
+    automatic:true,paused:false,index:0,total:3,preset_id:"complete",phase:"prepare",frame:"prepare-frame",
+    display_ready:true,remaining_seconds:2.2,step:{id:"JawForward",kind:"pose",title:{en:"Jaw forward",zh:"下颌前伸"}}}};
+  await f.app.init();f.app.navigate("recording");
+  assert.equal(f.el("guide-countdown").textContent,"3 s");
+  assert.equal(f.el("guide-ready").hidden,true);
+  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward-motion.webp");
+  await f.app.reportVisual();
+  assert.equal(JSON.parse(f.server.calls.at(-1).body).media_ready,false);
+  for(const id of ["reference-image","reference-neutral-image","reference-profile-image"])
+    Object.assign(f.el(id),{complete:true,naturalWidth:512});
+  await f.app.reportVisual();
+  assert.equal(f.server.calls.at(-1).path,"/api/recording/display");
+  assert.deepEqual(JSON.parse(f.server.calls.at(-1).body),{
+    session_id:"self-operated",frame:"prepare-frame",phase:"prepare",visible:true,media_ready:true});
+  assert.equal(paints,2);
+  Object.assign(f.server.status.recording.guide,{phase:"hold",frame:"hold-frame"});
+  await f.app.pollStatus();
+  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward.webp");
+  f.app.navigate("preferences");await f.app.reportVisual();
+  assert.equal(JSON.parse(f.server.calls.at(-1).body).visible,false);
+});
+test("automatic pause resume and skip are controlled entirely in the capture UI",async t=>{
+  const f=setup(t);
+  const guide={automatic:true,paused:false,index:0,total:3,preset_id:"complete",phase:"hold",frame:"fixture",
+    remaining_seconds:2,display_ready:true,step:{id:"neutral",kind:"negative",title:{en:"Relax",zh:"放松"}}};
+  f.server.status.recording={state:"recording",session_id:"fixture",guide};
+  f.server.before=(path,opts)=>{
+    if(path!=="/api/recording")return null;
+    const {action}=JSON.parse(opts.body);
+    if(["pause","resume"].includes(action)){guide.paused=action==="pause";guide.phase="prepare";return Response.json({state:"recording"});}
+    return null;
+  };
+  await f.app.init();f.app.navigate("recording");
+  await f.el("guide-pause").emit("click");
+  assert.equal(f.el("guide-pause").textContent,messages.en.guideResume);
+  assert.equal(f.el("guide-countdown").hidden,true);
+  await f.el("guide-pause").emit("click");
+  assert.equal(f.el("guide-pause").textContent,messages.en.guidePause);
+  await f.app.record("skip");
+  assert.deepEqual(f.server.calls.filter(c=>c.path==="/api/recording").map(c=>JSON.parse(c.body).action),["pause","resume","skip"]);
+  assert.ok(!f.server.calls.some(c=>c.path.includes("/review")));
+});
+test("a desktop monitor cannot send automatic receipts for a headset-owned recording",async t=>{
+  const f=setup(t,{viewer:"desktop"});
+  f.server.status.capture_control={state:"recording",viewer:"headset"};
+  f.server.status.recording={state:"recording",session_id:"fixture",guide:{automatic:true,phase:"prepare",
+    frame:"fixture",step:{id:"JawForward"}}};
+  await f.app.init();f.app.navigate("recording");await f.app.reportVisual();
+  assert.ok(!f.server.calls.some(c=>c.path==="/api/recording/display"));
+});
+test("automatic text steps acknowledge visible painted instructions without loading substitute images",async t=>{
+  let paints=0;
+  const f=setup(t,{viewer:"headset",paint:fn=>{paints++;fn();}});
+  f.server.reference.poses.push({id:"occluded",title:{en:"Cover the mouth",zh:"遮挡嘴部"}});
+  f.server.status.capture_control={state:"recording",viewer:"headset"};
+  f.server.status.recording={state:"recording",session_id:"fixture",guide:{automatic:true,phase:"prepare",
+    frame:"text",step:{id:"occluded",kind:"occlusion",title:{en:"Cover your mouth briefly",zh:"短暂遮挡嘴部"}}}};
+  await f.app.init();f.app.navigate("recording");await f.app.reportVisual();
+  assert.equal(f.el("reference-views").hidden,true);
+  assert.equal(f.el("reference-image").src,"");
+  assert.equal(f.el("reference-message").textContent,"Cover your mouth briefly");
+  const call=f.server.calls.find(c=>c.path==="/api/recording/display");
+  assert.equal(JSON.parse(call.body).media_ready,true);
+  assert.equal(JSON.parse(call.body).viewer,"headset");
+  assert.equal(paints,2);
+});
+test("managed startup locks the chosen plan and recording options before frames arrive",async t=>{
+  const f=setup(t);f.server.status.managed_capture=true;f.server.status.capture_control={state:"starting"};
+  await f.app.init();
+  for(const id of ["capture-preset","person_id","record-consent","guide-enabled","label-stage"])
+    assert.equal(f.el(id).disabled,true,id);
+  assert.equal(f.el("record-state").textContent,messages.en.captureStarting);
 });
 test("optional speech speaks each guide phase once and language switch needs no request", async t => {
   const speech = {calls: [], cancel() {}, speak(x) { this.calls.push(x); }};

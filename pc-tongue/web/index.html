@@ -76,7 +76,7 @@
           <label class="check"><input id="record-consent" type="checkbox"><span id="consent-label">I agree to save mouth images on this PC, and I am ready to follow the guide.</span></label>
           <div class="actions"><button id="record-start" type="button" disabled>Start recording</button><button id="record-stop" type="button" disabled>Finish recording</button><button id="record-cancel" type="button" disabled>Cancel</button><span id="record-state" role="status"></span></div>
           <p id="record-next" class="hint"></p>
-          <div id="guide" hidden><h2 id="guide-step"></h2><p id="guide-hint"></p><progress id="guide-progress" max="1" value="0"></progress><div class="actions"><button id="guide-ready" type="button">Start holding</button><button id="guide-finish" type="button">Finish holding</button><button id="guide-confirm" type="button">Confirm action done</button><button id="guide-skip" type="button">Skip</button></div></div>
+          <div id="guide" hidden><h2 id="guide-step"></h2><output id="guide-countdown" hidden></output><p id="guide-hint"></p><progress id="guide-progress" max="1" value="0"></progress><div class="actions"><button id="guide-pause" type="button" hidden>Pause</button><button id="guide-ready" type="button">Start holding</button><button id="guide-finish" type="button">Finish holding</button><button id="guide-confirm" type="button">Confirm action done</button><button id="guide-skip" type="button">Skip</button></div></div>
           <p id="record-error" role="alert" hidden></p>
         </div>
         <details id="record-options" class="disclosure-panel"><summary id="record-options-title">More recording options</summary>

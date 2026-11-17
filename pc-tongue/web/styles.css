@@ -229,3 +229,41 @@ dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; font-family:
 .task-tip { margin-top: 14px; }
 .page-footer { margin-top: 24px; }
 @media(max-width:540px) { #page-tracking #camera-panel:not([data-live="true"]) .preview { aspect-ratio: 1.7; }.setup-card { padding: 16px; }.topbar { height: 52px; } }
+
+/* The same Capture page keeps its demonstration and controls together while guiding. */
+html[data-guiding="true"] .sidebar,
+html[data-guiding="true"] .topbar,
+html[data-guiding="true"] .page-heading,
+html[data-guiding="true"] .capture-toolbar,
+html[data-guiding="true"] .camera-slot,
+html[data-guiding="true"] .capture-preset-choice,
+html[data-guiding="true"] #capture-preset-description,
+html[data-guiding="true"] #capture-plan-order,
+html[data-guiding="true"] .reference-heading,
+html[data-guiding="true"] .reference-actions,
+html[data-guiding="true"] #reference-picker,
+html[data-guiding="true"] #reference-directions,
+html[data-guiding="true"] #reference-details,
+html[data-guiding="true"] #record-options,
+html[data-guiding="true"] #review,
+html[data-guiding="true"] .page-footer { display:none; }
+html[data-guiding="true"] .app-shell { display:block; }
+html[data-guiding="true"] .workspace { padding:12px 24px; }
+html[data-guiding="true"] .capture-workspace { display:block; }
+html[data-guiding="true"] .pose-reference { padding:12px 18px; }
+html[data-guiding="true"] .capture-step-progress { padding:0 0 8px; margin-bottom:8px; }
+html[data-guiding="true"] .reference-pose { margin:8px 0 4px; font-size:20px; }
+html[data-guiding="true"] #reference-instruction { margin:4px 0 8px; }
+html[data-guiding="true"] .reference-views { grid-template-columns:.3fr 1fr .65fr; gap:12px; }
+html[data-guiding="true"] .reference-profile { grid-column:auto; width:100%; }
+html[data-guiding="true"] .reference-views img { height:clamp(140px,35vh,300px); object-fit:contain; }
+html[data-guiding="true"] .record-controls { position:sticky; bottom:0; z-index:4; padding:10px 18px; margin-top:10px; background:#f5f8f4; }
+html[data-guiding="true"] .record-controls > .check,
+html[data-guiding="true"] #voice-info,
+html[data-guiding="true"] #record-next,
+html[data-guiding="true"] #record-path,
+html[data-guiding="true"] #guide-progress,
+html[data-guiding="true"] #guide-step { display:none; }
+#guide-countdown { font-size:28px; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; }
+html[data-guiding="true"] #guide { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; padding:8px 12px; margin:8px 0 0; }
+html[data-guiding="true"] #guide-hint { font-size:12px; flex:1; margin:0; }
