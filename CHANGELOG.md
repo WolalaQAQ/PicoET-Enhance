@@ -66,6 +66,9 @@ English | [简体中文](CHANGELOG_zh.md)
 - Give the companion app a home for LAN cameras and expression tuning. Move the complete parameter panel into its own screen, preserving drafts, presets, language and save/apply behavior.
 - Add a real LAN-camera master switch, actual service status, per-camera client counts and MJPEG addresses. Bundle the adapter, IPC shim, transport daemon and module controller.
 
+### Fixed
+- Match the companion home to the existing tuning panel: outlined ripple buttons, card borders, typography, spacing and switch sizing.
+
 ### Design Rationale
 - Keep the app rootless and without network permission. Camera and tuning use separate mailboxes handled by the same module worker, so navigation cannot overwrite an in-flight request.
 - Default sharing off and remember explicit choices. Closing the app leaves the service available, but cameras run only while clients subscribe. Turning sharing off drains every stream and checks the existing ownership, nonce and join acknowledgements.

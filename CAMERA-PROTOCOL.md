@@ -109,6 +109,10 @@ Before collecting metadata, send `CONTEXT\n` on a separate control connection. I
 
 The existing `PICO_MOUTH_DISCOVER_V1\n` / PTC1 discovery and mouth-only `LABELS\n` / PSL1 side channel remain available. Labels have their own subscription; they do not supply missing image identity.
 
+PSL1 carries 33 mouth channels at four stages (raw, action-postprocessed before clamping, clamped instant, and final filtered output), two quality values, validity, classification and source identity. It does not contain eye-expression vectors; ordinary eye/face result forwarding remains the Bridge path. A JPEG or MJPEG subscription receives images, not these result records.
+
+The PC workbench opens its label subscription when recording begins and closes it when recording ends. Preview alone does not subscribe to labels. The companion's LAN-camera switch controls the whole service, including labels; there is currently no separate result-transmission switch in either GUI. **Training label stage** selects how recorded data supplies training labels, not whether results are transmitted.
+
 ## Source lifecycle
 
 The adapter performs a synchronous protection copy only for subscribed lanes. Each stream has its own two-slot IPC queue, encoder and consumers. The transport daemon owns network sockets; the vendor camera callback does no JPEG encoding or network writes.

@@ -276,6 +276,21 @@ class RootlessPanelContract(unittest.TestCase):
         self.assertIn('for (bool camera : {false, true})', worker)
         self.assertIn('module + "/bin/picoet-camera"', worker)
 
+    def test_home_matches_existing_tuning_panel_styles(self):
+        home = (SOURCE/'MainActivity.java').read_text()
+        tuning = (SOURCE/'ProcessingActivity.java').read_text()
+        for name in ('text', 'shape', 'surface', 'button', 'card'):
+            pattern = rf'(?ms)^    private [^\n]+ {name}\([^\n]*\) \{{.*?^    \}}'
+            with self.subTest(helper=name):
+                self.assertEqual(re.sub(r'\s+', ' ', re.search(pattern, home)[0]),
+                                 re.sub(r'\s+', ' ', re.search(pattern, tuning)[0]))
+        colors = lambda source: dict(re.findall(r'\b([A-Z]+)\s*=\s*(0x[a-f0-9]+)', source))
+        for name in ('BG', 'CARD', 'LINE', 'TEXT', 'MUTED', 'ACCENT', 'INK', 'TECH'):
+            with self.subTest(color=name):
+                self.assertEqual(colors(home)[name], colors(tuning)[name])
+        self.assertIn('toggle.setTextSize(17)', home)
+        self.assertIn('toggle.setMinHeight(dp(52))', home)
+
     def test_camera_switch_is_bundled_opt_in_and_uses_existing_control_lock(self):
         service = (ROOT/'magisk-picoet-enhance/service.sh').read_text()
         self.assertIn('"$MODDIR/bin/picoet-camera" reconcile', service)

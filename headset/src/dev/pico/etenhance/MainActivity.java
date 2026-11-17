@@ -5,6 +5,7 @@ import android.content.*;
 import android.content.res.*;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.os.*;
 import android.view.*;
 import android.widget.*;
@@ -13,7 +14,9 @@ import java.util.Locale;
 
 /** Companion home: independent camera transport and the existing tuning panel. */
 public final class MainActivity extends Activity {
-    private static final int BG=0xff10151e, CARD=0xff1b2533, TEXT=0xfff3f6fc, MUTED=0xffa9b8ce, ACCENT=0xff79e1c2;
+    private static final int BG=0xff10151e, CARD=0xff1b2533, LINE=0xff344357;
+    private static final int TEXT=0xfff3f6fc, MUTED=0xffa9b8ce, ACCENT=0xff79e1c2, INK=0xff10251e;
+    private static final int TECH=0xff9fc2ff;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private SharedPreferences preferences;
     private Context localized;
@@ -29,19 +32,29 @@ public final class MainActivity extends Activity {
 
     private int dp(int n) { return (int)(n*getResources().getDisplayMetrics().density+.5f); }
     private String s(String key) { return localized.getString(getResources().getIdentifier(key,"string",getPackageName())); }
-    private TextView text(String value, int size, int color, boolean bold) {
-        TextView view=new TextView(this); view.setText(value); view.setTextSize(size); view.setTextColor(color);
-        if(bold)view.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
-        view.setLineSpacing(dp(4),1); return view;
+    private TextView text(CharSequence value, int size, int color, boolean bold) {
+        TextView v = new TextView(this); v.setText(value); v.setTextSize(size); v.setTextColor(color);
+        if (bold) v.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        v.setIncludeFontPadding(false); v.setLineSpacing(dp(4), 1); return v;
+    }
+    private GradientDrawable shape(int color, int border, int radius) {
+        GradientDrawable d = new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius));
+        if (border != 0) d.setStroke(dp(1), border); return d;
+    }
+    private void surface(View v, int color, int border) {
+        v.setBackground(new RippleDrawable(ColorStateList.valueOf(0x3079e1c2), shape(color, border, 12), null));
+    }
+    private Button button(String label, boolean primary) {
+        Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(15);
+        b.setTextColor(primary ? INK : TEXT); b.setMinHeight(dp(48)); b.setMinimumWidth(0);
+        b.setPadding(dp(16), dp(8), dp(16), dp(8)); surface(b, primary ? ACCENT : CARD, primary ? 0 : LINE); return b;
     }
     private LinearLayout column() { LinearLayout view=new LinearLayout(this); view.setOrientation(LinearLayout.VERTICAL); return view; }
     private void gap(LinearLayout into,int n) { into.addView(new View(this),new LinearLayout.LayoutParams(1,dp(n))); }
-    private LinearLayout section(LinearLayout into) {
-        LinearLayout box=column(); box.setPadding(dp(24),dp(22),dp(24),dp(22));
-        GradientDrawable background=new GradientDrawable(); background.setColor(CARD); background.setCornerRadius(dp(16)); box.setBackground(background);
-        into.addView(box,new LinearLayout.LayoutParams(-1,-2)); gap(into,18); return box;
+    private LinearLayout card(LinearLayout into) {
+        LinearLayout box = column(); box.setPadding(dp(22), dp(18), dp(22), dp(20)); box.setBackground(shape(CARD, LINE, 16));
+        into.addView(box, new LinearLayout.LayoutParams(-1, -2)); gap(into, 14); return box;
     }
-    private Button button(String value) { Button view=new Button(this); view.setText(value); view.setAllCaps(false); view.setMinHeight(dp(52)); return view; }
 
     @Override public void onCreate(Bundle bundle) {
         super.onCreate(bundle);
@@ -56,40 +69,43 @@ public final class MainActivity extends Activity {
         Configuration config=new Configuration(getResources().getConfiguration());
         String fallback=config.getLocales().get(0).getLanguage().equals("zh")?"zh":"en";
         config.setLocale(Locale.forLanguageTag(preferences.getString("language",fallback))); localized=createConfigurationContext(config);
-        LinearLayout root=column(); root.setBackgroundColor(BG); root.setPadding(dp(28),dp(18),dp(28),dp(18));
-        LinearLayout header=new LinearLayout(this); header.setGravity(Gravity.CENTER_VERTICAL);
-        header.addView(text("PicoET-Enhance",26,TEXT,true),new LinearLayout.LayoutParams(0,-2,1));
-        Button language=button(s("language")); language.setTag("language");
+        LinearLayout root=column(); root.setBackgroundColor(BG);
+        LinearLayout header=new LinearLayout(this); header.setGravity(Gravity.CENTER_VERTICAL); header.setPadding(dp(24),dp(14),dp(24),dp(10));
+        LinearLayout brand=column(); brand.setPadding(0,0,dp(12),0);
+        brand.addView(text("PicoET-Enhance",22,TEXT,true)); gap(brand,4); brand.addView(text(s("home_intro"),13,MUTED,false));
+        header.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
+        Button language=button(s("language"),false); language.setTag("language");
         language.setOnClickListener(v->{
             String next=localized.getResources().getConfiguration().getLocales().get(0).getLanguage().equals("zh")?"en":"zh";
             preferences.edit().putString("language",next).apply(); buildScreen();
-        }); header.addView(language); root.addView(header); gap(root,8); root.addView(text(s("home_intro"),14,MUTED,false)); gap(root,20);
-        ScrollView scroll=new ScrollView(this); LinearLayout content=column(); scroll.addView(content); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        }); header.addView(language); root.addView(header);
+        ScrollView scroll=new ScrollView(this); scroll.setClipToPadding(false); scroll.setPadding(dp(22),dp(12),dp(24),dp(20));
+        LinearLayout content=column(); scroll.addView(content); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
 
-        LinearLayout transport=section(content);
-        toggle=new Switch(this); toggle.setText(s("camera_title")); toggle.setTextSize(22); toggle.setTextColor(TEXT); toggle.setMinHeight(dp(60)); toggle.setTag("camera_toggle");
+        LinearLayout transport=card(content);
+        toggle=new Switch(this); toggle.setText(s("camera_title")); toggle.setTextSize(17); toggle.setTextColor(TEXT); toggle.setMinHeight(dp(52)); toggle.setTag("camera_toggle");
         int[][] states={new int[]{android.R.attr.state_checked},new int[]{}};
         toggle.setThumbTintList(new ColorStateList(states,new int[]{ACCENT,0xffa4b0c3}));
         toggle.setTrackTintList(new ColorStateList(states,new int[]{0xff438e78,0xff4a566b}));
         toggle.setOnCheckedChangeListener((view,checked)->{if(!rendering)request(checked?"camera-on":"camera-off");}); transport.addView(toggle);
-        status=text("",16,ACCENT,true); status.setTag("camera_state"); transport.addView(status); gap(transport,10);
+        gap(transport,5); status=text("",14,ACCENT,true); status.setTag("camera_state"); transport.addView(status); gap(transport,10);
         transport.addView(text(s("camera_hint"),14,MUTED,false)); gap(transport,12);
         transport.addView(text(s("camera_privacy"),13,0xffffcf80,false)); gap(transport,18);
         for(int i=0;i<3;++i) {
             LinearLayout row=new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL);
             row.addView(text(s("camera_"+CameraState.STREAMS[i]),16,TEXT,true),new LinearLayout.LayoutParams(0,-2,1));
             clients[i]=text("",13,MUTED,false); clients[i].setTag("camera_clients_"+CameraState.STREAMS[i]); row.addView(clients[i]); transport.addView(row);
-            addresses[i]=text("",14,MUTED,false); addresses[i].setTextIsSelectable(true); addresses[i].setTag("camera_url_"+CameraState.STREAMS[i]);
+            addresses[i]=text("",14,TECH,false); addresses[i].setTextIsSelectable(true); addresses[i].setTag("camera_url_"+CameraState.STREAMS[i]);
             transport.addView(addresses[i]); gap(transport,16);
         }
         error=text("",13,0xffffa7a7,false); error.setTextIsSelectable(true); error.setTag("camera_error"); transport.addView(error);
-        retry=button(""); retry.setTag("camera_retry");
+        retry=button("",false); retry.setTag("camera_retry");
         retry.setOnClickListener(v->request(camera.enabled?"camera-on":"camera-off")); transport.addView(retry);
 
-        LinearLayout processing=section(content);
-        processing.addView(text(s("processing_title"),22,TEXT,true)); gap(processing,10);
+        LinearLayout processing=card(content);
+        processing.addView(text(s("processing_title"),18,TEXT,true)); gap(processing,10);
         processing.addView(text(s("processing_hint"),14,MUTED,false)); gap(processing,18);
-        Button open=button(s("processing_open")); open.setTag("open_processing");
+        Button open=button(s("processing_open"),true); open.setTag("open_processing");
         open.setOnClickListener(v->startActivity(new Intent(this,ProcessingActivity.class))); processing.addView(open);
         setContentView(root); render();
     }
