@@ -64,20 +64,24 @@ class FrameHeader:
                 self.raw_identity, self.raw_crc32)
 
 
-def read_exact(sock, size):
+def read_exact(sock, size, *, part=None):
     result = bytearray(size)
     view = memoryview(result)
     while view:
         count = sock.recv_into(view)
         if count == 0:
+            if part == 'header' and len(view) == size:
+                raise EOFError('PTJ1 stream closed between frames')
+            if part:
+                raise EOFError(f'PTJ1 stream closed during {part}: received {size-len(view)}/{size} bytes')
             raise EOFError('PTJ1 connection ended within a frame')
         view = view[count:]
     return bytes(result)
 
 
 def read_frame(sock):
-    header = FrameHeader.unpack(read_exact(sock, HEADER.size))
-    return header, read_exact(sock, header.payload_bytes)
+    header = FrameHeader.unpack(read_exact(sock, HEADER.size, part='header'))
+    return header, read_exact(sock, header.payload_bytes, part='payload')
 
 
 class SourceOrder:
