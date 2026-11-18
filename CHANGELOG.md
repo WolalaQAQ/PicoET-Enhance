@@ -5,6 +5,9 @@ English | [简体中文](CHANGELOG_zh.md)
 ## [Unreleased]
 
 - Put LAN broadcast and post-processing in two tabs. Keep the tuning sidebar and parameter panel, and group the two independent result switches.
+- Use `--continue-recording` to offer the remaining actions from a stopped guided recording. The continuation saves separately and stays in the same dataset split group.
+- Keep live camera preview visible during guidance. Choose automatic or manual step advance, adjust preparation time, move to any step, and resume the last unfinished guide from the recording page.
+- Distinguish an image stream closing between frames from an incomplete header or payload.
 
 ## [2.6.0-dev.2] - 2026-11-18
 
@@ -16,7 +19,7 @@ English | [简体中文](CHANGELOG_zh.md)
 - Acquire one native tracking lease on Android for the union of camera/label subscribers and release it after the last consumer leaves.
 - Support concurrent JPEG and standard HTTP MJPEG subscribers with one encoding per source frame and independent, bounded latest-frame delivery.
 - Make Capture self-operated: timed preparation and holds, automatic demonstration changes and recording completion, pause/resume and skip, plus an optional managed source lifecycle behind one recording action.
-- Add a persistent current-step counter/progress bar, four ordered capture presets (12/11/13/73 steps) and an expandable action list to Capture. Guided recording uses the selected preset and locks it for the session.
+- Add a persistent current-step counter/progress bar, four ordered capture presets (12/11/13/71 steps) and an expandable action list to Capture. Guided recording uses the selected preset and locks it for the session. Every timed step is something the wearer can do; occlusion labelling stays in Review, and the refit suggestion appears after a recording is saved.
 - Rewrite the wording of all four pages in both languages: buttons, status and error messages, help, preset names and descriptions, the ordered action lists, step prompts and the reference image titles and captions. Each message now says what is happening, what to do and what the result is.
 - Add reusable exact-pair auditing and derived raw-supervision helpers, preserving signed archives, reviewed-label priority and whole-session grouping.
 - Add optional source-weighted MSE/Huber and mild, non-mirrored IR augmentation for matched training comparisons.
