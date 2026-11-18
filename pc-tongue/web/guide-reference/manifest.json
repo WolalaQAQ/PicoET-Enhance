@@ -9,7 +9,7 @@
     "license": "Oculus SDK License Agreement",
     "license_url": "https://developers.meta.com/horizon/licenses/oculussdk/"
   },
-  "scope": "Reference images for the capture guide. Poses use Meta-Man's original morphs and correctives; the tongue and independent lip movements come from controls added on the original mesh. Occlusion and refit steps are text-only.",
+  "scope": "Reference images for the capture guide. Poses use Meta-Man's original morphs and correctives; the tongue and independent lip movements come from controls added on the original mesh. Occlusion and refit entries are kept only so earlier frozen guides still render.",
   "poses": [
     {
       "id": "neutral",
@@ -622,7 +622,7 @@
         "en": "Tongue down"
       },
       "instruction": {
-        "zh": "舌体朝下伸",
+        "zh": "舌头朝下伸出",
         "en": "Extend your tongue downward"
       },
       "front": "TongueDown.webp",
@@ -874,8 +874,8 @@
         "en": "Medium extension"
       },
       "instruction": {
-        "zh": "舌头向前伸到个人舒适行程的一半",
-        "en": "Extend your tongue to about half your comfortable range"
+        "zh": "舌头向前伸到舒适长度的一半左右",
+        "en": "Extend your tongue to about half your comfortable length"
       },
       "front": "tongue_medium.webp",
       "provenance": [
@@ -929,7 +929,7 @@
       },
       "instruction": {
         "zh": "舌头向自身左上方伸出",
-        "en": "Extend your tongue up-left"
+        "en": "Extend your tongue toward your own upper left"
       },
       "front": "tongue_left_up.webp",
       "provenance": [
@@ -947,7 +947,7 @@
       },
       "instruction": {
         "zh": "舌头向自身右上方伸出",
-        "en": "Extend your tongue up-right"
+        "en": "Extend your tongue toward your own upper right"
       },
       "front": "tongue_right_up.webp",
       "provenance": [
@@ -965,7 +965,7 @@
       },
       "instruction": {
         "zh": "舌头向自身左下方伸出",
-        "en": "Extend your tongue down-left"
+        "en": "Extend your tongue toward your own lower left"
       },
       "front": "tongue_left_down.webp",
       "provenance": [
@@ -983,7 +983,7 @@
       },
       "instruction": {
         "zh": "舌头向自身右下方伸出",
-        "en": "Extend your tongue down-right"
+        "en": "Extend your tongue toward your own lower right"
       },
       "front": "tongue_right_down.webp",
       "provenance": [
@@ -1196,6 +1196,7 @@
     },
     {
       "id": "negative_occluded",
+      "legacy_only": true,
       "title": {
         "zh": "嘴部被遮挡或画外",
         "en": "Mouth covered or out of view"
@@ -1205,12 +1206,13 @@
         "en": "When the mouth is covered or out of view, record it as unknown, not as no tongue"
       },
       "unavailable_reason": {
-        "zh": "这一步是遮挡或重新佩戴，没有对应的表情图，请按文字说明操作。",
-        "en": "This step is about covering the mouth or refitting the headset, so it has no expression image. Follow the written instructions."
+        "zh": "这一步没有示范图，请按文字说明操作。",
+        "en": "This step has no reference image. Follow the written instructions."
       }
     },
     {
       "id": "remount",
+      "legacy_only": true,
       "title": {
         "zh": "重新佩戴",
         "en": "Refit the headset"
@@ -1220,8 +1222,8 @@
         "en": "Stop this recording, take off and refit the headset, then start a new recording; repeating on another day adds variety"
       },
       "unavailable_reason": {
-        "zh": "这一步是遮挡或重新佩戴，没有对应的表情图，请按文字说明操作。",
-        "en": "This step is about covering the mouth or refitting the headset, so it has no expression image. Follow the written instructions."
+        "zh": "这一步没有示范图，请按文字说明操作。",
+        "en": "This step has no reference image. Follow the written instructions."
       }
     }
   ]

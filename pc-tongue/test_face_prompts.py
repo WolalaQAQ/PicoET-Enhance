@@ -36,7 +36,20 @@ class PromptTests(unittest.TestCase):
             if step['kind'] == 'pose':
                 self.assertEqual(len(step['labels']), 1)
         self.assertIn('skip', POSES['TongueRoll'][1])
-        self.assertTrue(prompt_plan()[-1]['requires_new_session'])
+        self.assertNotIn('requires_new_session', prompt_plan()[-1])
+
+    def test_timed_steps_are_wearer_actions_without_reviewer_rules(self):
+        steps = prompt_plan()
+        self.assertEqual({s['kind'] for s in steps}, {'pose', 'negative', 'continuous', 'combination'})
+        self.assertEqual(steps[-1]['id'], 'negative_tip_curl_not_roll')
+        banned = ('未知', '遮挡', '画外', '画面内', '审核', '标签', '重新佩戴', '取下', 'unknown', 'covered', 'out of view',
+                  'review', 'label', 'refit', 'take off')
+        for step in steps:
+            for phase in ('prepare', 'hold', 'confirm', 'skip'):
+                for language, text in step[phase].items():
+                    self.assertFalse([w for w in banned if w in text.lower()], (step['id'], phase, text))
+            for language, text in step['title'].items():
+                self.assertFalse([w for w in banned if w in text.lower()], (step['id'], text))
 
     def test_plans_are_independent(self):
         first = prompt_plan()

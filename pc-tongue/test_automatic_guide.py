@@ -61,6 +61,18 @@ class AutomaticGuideTests(unittest.TestCase):
         self.assertEqual(self.guide.step['id'], 'JawOpen')
         self.assertNotEqual(self.guide.frame, frame)
 
+    def test_custom_preparation_includes_a_fresh_countdown_after_jumping(self):
+        self.guide = MouthGuide('basics', automatic=True, clock=lambda: self.now, prepare_seconds=7)
+        for _ in range(60):
+            self.feed()
+        self.assertEqual(self.guide.phase, 'prepare')
+        self.guide.advance('select_step', step_index=4)
+        self.assertEqual(self.guide.status()['remaining_seconds'], 7)
+        self.assertEqual(self.guide.status()['progress'], 0)
+        for _ in range(72):
+            self.feed()
+        self.assertEqual(self.guide.phase, 'hold')
+
     def test_automatic_window_completion_preserves_unknown_targets(self):
         with tempfile.TemporaryDirectory() as folder:
             recording = WholeMouthRecording(folder)

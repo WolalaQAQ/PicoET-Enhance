@@ -42,7 +42,7 @@ POSES = {
     'TongueLeft': ('舌头向自身左侧伸出', 'Extend your tongue to your own left'),
     'TongueRight': ('舌头向自身右侧伸出', 'Extend your tongue to your own right'),
     'TongueUp': ('整条舌头朝上伸出，不只是弯起舌尖', 'Extend your whole tongue upward, not just the tip'),
-    'TongueDown': ('舌体朝下伸', 'Extend your tongue downward'),
+    'TongueDown': ('舌头朝下伸出', 'Extend your tongue downward'),
     'CheekPuffLeft': ('只鼓左腮，右侧尽量放松', 'Puff only your left cheek and relax the right'),
     'CheekPuffRight': ('只鼓右腮，左侧尽量放松', 'Puff only your right cheek and relax the left'),
     'CheekSuckLeft': ('只轻吸左腮，不内卷嘴唇', 'Gently suck in only your left cheek without rolling your lips'),
@@ -60,12 +60,8 @@ POSES = {
 
 
 def _step(key, zh, en, labels=None, *, kind='pose', hold_s=3., **extra):
-    if kind == 'remount':
-        prepare = dict(zh=f'最后一步：{zh}。点「完成录制」结束本次录制。',
-                       en=f'Last step: {en}. Click \u201cFinish recording\u201d to end this recording.')
-    else:
-        prepare = dict(zh=f'下一个动作：{zh}。准备好后点「开始保持」。',
-                       en=f'Next: {en}. Click \u201cStart holding\u201d when you are ready.')
+    prepare = dict(zh=f'下一个动作：{zh}。准备好后点「开始保持」。',
+                   en=f'Next: {en}. Click \u201cStart holding\u201d when you are ready.')
     return dict(id=key, title=dict(zh=zh, en=en), kind=kind, labels=dict(labels or {}), hold_s=hold_s,
                 reaction_s=1., tail_s=.3, skippable=True, prepare=prepare,
                 hold=dict(zh=f'保持：{zh}。「结束保持」亮起后点击它。',
@@ -82,16 +78,16 @@ def prompt_plan():
     steps += [_step(name, *POSES[name], {name: 1.}) for name in CHANNELS]
     for name, value, zh, en in (
         ('short', .25, '舌尖刚超过唇缘，短伸舌', 'Extend your tongue just past your lips'),
-        ('medium', .5, '舌头向前伸到个人舒适行程的一半', 'Extend your tongue to about half your comfortable range'),
+        ('medium', .5, '舌头向前伸到舒适长度的一半左右', 'Extend your tongue to about half your comfortable length'),
         ('long', 1., '舌头充分但舒适地向前伸', 'Extend your tongue fully but comfortably')):
         steps.append(_step('tongue_'+name, zh, en, {'TongueOut': value}, intensity_rank=value))
     steps.append(_step('tongue_sweep', '缓慢短、中、长伸舌，再缓慢收回，重复一次',
                        'Slowly extend short, medium, long, then retract; repeat once', kind='continuous', hold_s=6.))
     for side, vertical, zh, en in (
-        ('Left', 'Up', '左上', 'up-left'), ('Right', 'Up', '右上', 'up-right'),
-        ('Left', 'Down', '左下', 'down-left'), ('Right', 'Down', '右下', 'down-right')):
+        ('Left', 'Up', '左上', 'upper left'), ('Right', 'Up', '右上', 'upper right'),
+        ('Left', 'Down', '左下', 'lower left'), ('Right', 'Down', '右下', 'lower right')):
         steps.append(_step('tongue_'+side.lower()+'_'+vertical.lower(), f'舌头向自身{zh}方伸出',
-                           f'Extend your tongue {en}', {'Tongue'+side: .7, 'Tongue'+vertical: .7}, kind='combination'))
+                           f'Extend your tongue toward your own {en}', {'Tongue'+side: .7, 'Tongue'+vertical: .7}, kind='combination'))
     for name, zh, en, labels in (
         ('lips_opposed_a', '上唇左移、下唇右移', 'Move upper lip left and lower lip right', {'MouthUpperLeft': 1., 'MouthLowerRight': 1.}),
         ('lips_opposed_b', '上唇右移、下唇左移', 'Move upper lip right and lower lip left', {'MouthUpperRight': 1., 'MouthLowerLeft': 1.}),
@@ -107,14 +103,10 @@ def prompt_plan():
         ('wide_open', '大张嘴，舌头留在口内', 'Open your mouth wide, tongue inside your mouth'),
         ('pucker_release', '噘嘴再放松，舌头留在口内', 'Pucker, then relax, tongue inside your mouth'),
         ('speech', '自然说一小段话，不用刻意伸舌', 'Speak a short passage naturally, with no need to stick out your tongue'),
-        ('tip_curl_not_roll', '只弯起舌尖，舌头两侧保持平展', 'Curl only your tongue tip, keeping the sides of the tongue flat'),
-        ('occluded', '嘴部被遮挡或不在画面内时，只记为未知，不当作没有伸舌', 'When the mouth is covered or out of view, record it as unknown, not as no tongue')):
+        ('tip_curl_not_roll', '只弯起舌尖，舌头两侧保持平展', 'Curl only your tongue tip, keeping the sides of the tongue flat')):
         labels = ({'TongueRoll': 0.} if name == 'tip_curl_not_roll' else
                   {'TongueOut': 0.} if name in ('teeth', 'wide_open', 'pucker_release') else {})
         steps.append(_step('negative_'+name, zh, en, labels, kind='negative', hold_s=5.))
-    steps.append(_step('remount', '结束本次录制，取下并重新戴好头显，再开始新的录制；隔天再做一次更好',
-                       'Stop this recording, take off and refit the headset, then start a new recording; repeating on another day adds variety',
-                       kind='remount', requires_new_session=True))
     return deepcopy(steps)
 
 

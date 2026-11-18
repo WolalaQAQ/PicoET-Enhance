@@ -31,20 +31,29 @@ def _finite(value):
 
 class MouthGuide:
     """Explicit prepare/hold/review/confirm; source continuity is not pose evidence."""
-    def __init__(self, preset_id=DEFAULT_PRESET, *, automatic=False, clock=time.monotonic):
-        self.preset = capture_preset(preset_id)
+    def __init__(self, preset_id=DEFAULT_PRESET, *, automatic=False, clock=time.monotonic,
+                 continuation=None, step_index=0, prepare_seconds=3.):
+        self.preset = deepcopy(continuation['preset']) if continuation else capture_preset(preset_id)
         self.steps = self.preset['steps']
-        self.index = 0
+        self._validate_index(step_index)
+        if type(prepare_seconds) not in (int, float) or not 3 <= prepare_seconds <= 30:
+            raise ValueError('Preparation time must be 3–30 seconds')
+        self.index = step_index
         self.phase = 'prepare'
         self.frames = []
-        self.completed = []
-        self.skipped = []
+        self.completed = set()
+        self.skipped = set()
         self.automatic, self.clock = automatic, clock
+        self.prepare_seconds = prepare_seconds
         self.paused = False
         self.prepare_started = None
         self.frame = uuid.uuid4().hex
         self.displayed_phase = None
         self.displayed_at = None
+
+    def _validate_index(self, index):
+        if type(index) is not int or not 0 <= index < len(self.steps):
+            raise ValueError('Choose a step in the selected capture plan')
 
     def display(self, frame, phase, *, visible, media_ready):
         if frame != self.frame or phase != self.phase:
@@ -66,20 +75,17 @@ class MouthGuide:
         return self.steps[self.index] if self.index < len(self.steps) else None
 
     def feed(self, sample):
+        if self.paused:
+            return False
         if self.automatic:
-            if self.paused or not self.display_ready():
+            if not self.display_ready():
                 self.frames, self.prepare_started = [], None
                 return False
             if self.phase == 'prepare':
                 if self.prepare_started is None:
                     self.prepare_started = self.clock()
-                if self.clock()-self.prepare_started >= 3.:
-                    if self.step['kind'] == 'remount':
-                        self.completed.append(self.step['id'])
-                        self.index += 1
-                        self.phase = 'finished'
-                    else:
-                        self.advance('ready')
+                if self.clock()-self.prepare_started >= self.prepare_seconds:
+                    self.advance('ready')
                 return False
         if self.phase != 'hold':
             return False
@@ -102,7 +108,7 @@ class MouthGuide:
         return [row for row in self.frames if
                 start+int(self.step['reaction_s']*1e9) <= row['mouth_sensor_ns'] <= end-int(self.step['tail_s']*1e9)]
 
-    def advance(self, action):
+    def advance(self, action, *, step_index=None):
         if self.step is None:
             raise ValueError('Guide is finished')
         if action in ('pause', 'resume'):
@@ -110,14 +116,20 @@ class MouthGuide:
             self.phase, self.frames = 'prepare', []
             self._next_display()
             return
-        if action == 'skip':
-            self.skipped.append(self.step['id'])
+        if action == 'select_step':
+            self._validate_index(step_index)
+            self.index = step_index
+            self.phase, self.frames = 'prepare', []
+            self._next_display()
+        elif self.paused:
+            raise ValueError('Resume the guide before continuing the current action')
+        elif action == 'skip':
+            if self.index not in self.completed:
+                self.skipped.add(self.index)
             self.index += 1
             self.phase, self.frames = 'prepare', []
             self._next_display()
         elif action == 'ready' and self.phase == 'prepare':
-            if self.step['kind'] == 'remount':
-                raise ValueError('Stop, refit, then begin a new recording session')
             self.phase, self.frames = 'hold', []
             self._next_display()
         elif action == 'finish' and self.phase == 'hold':
@@ -126,7 +138,8 @@ class MouthGuide:
             self.phase = 'review'
         elif action == 'confirm' and self.phase == 'review':
             # This confirms task completion only. It does not approve image labels.
-            self.completed.append(self.step['id'])
+            self.completed.add(self.index)
+            self.skipped.discard(self.index)
             self.index += 1
             self.phase, self.frames = 'prepare', []
             self._next_display()
@@ -137,8 +150,8 @@ class MouthGuide:
 
     def status(self):
         span = 0 if len(self.frames) < 2 else (self.frames[-1]['mouth_sensor_ns']-self.frames[0]['mouth_sensor_ns'])/1e9
-        remaining = (max(0., 3.-(self.clock()-self.prepare_started)) if self.prepare_started is not None
-                     else 3.) if self.phase == 'prepare' else max(0., (
+        remaining = (max(0., self.prepare_seconds-(self.clock()-self.prepare_started)) if self.prepare_started is not None
+                     else self.prepare_seconds) if self.phase == 'prepare' else max(0., (
                          self.step['reaction_s']+self.step['hold_s']+self.step['tail_s']-span
                      )) if self.step and self.phase == 'hold' else 0.
         return dict(step=deepcopy(self.step), phase=self.phase, index=self.index, total=len(self.steps),
@@ -147,8 +160,10 @@ class MouthGuide:
                     preset_id=self.preset['id'], preset_name=deepcopy(self.preset['name']),
                     continuous_seconds=span, frames=len(self.frames),
                     ready_to_finish=bool(self.step and self.phase == 'hold' and self.candidates()),
-                    completed=list(self.completed), skipped=list(self.skipped),
-                    progress=self.index/len(self.steps))
+                     completed=[self.steps[i]['id'] for i in sorted(self.completed)],
+                     skipped=[self.steps[i]['id'] for i in sorted(self.skipped)],
+                     completed_indices=sorted(self.completed), skipped_indices=sorted(self.skipped),
+                     progress=(len(self.completed)+len(self.skipped))/len(self.steps))
 
 
 class WholeMouthRecording:
@@ -183,7 +198,7 @@ class WholeMouthRecording:
             self.label_stage = stage
 
     def begin(self, person_id, confirmed=False, guide=True, *, role=None, evaluation_only=None,
-              preset_id=DEFAULT_PRESET, automatic=False):
+              preset_id=DEFAULT_PRESET, automatic=False, continuation=None, step_index=0, prepare_seconds=3.):
         with self.lock:
             # Check consent before mkdir, stop, clearing state or any other write.
             if confirmed is not True:
@@ -194,9 +209,12 @@ class WholeMouthRecording:
                 raise ValueError('Recording role must be A, B, C or omitted for ordinary recording')
             if evaluation_only is not None and (type(evaluation_only) is not bool or evaluation_only != (role == 'C')):
                 raise ValueError('evaluation_only must match the explicit recording role C')
+            if role == 'C' and step_index != 0:
+                raise ValueError('The sealed recording must follow its frozen order')
             if self.state == 'recording':
                 raise ValueError('Stop the active recording before beginning another')
-            selected_guide = MouthGuide(preset_id, automatic=automatic) if guide else None
+            selected_guide = MouthGuide(preset_id, automatic=automatic, continuation=continuation,
+                                        step_index=step_index, prepare_seconds=prepare_seconds) if guide else None
             self.person_id, self.session_id = person_id, uuid.uuid4().hex
             self.path = self.root/self.session_id
             self.path.mkdir(parents=True, exist_ok=False)
@@ -219,11 +237,16 @@ class WholeMouthRecording:
                                    observability_role=role, evaluation_only=role == 'C',
                                   capture_plan=deepcopy(self.guide.preset) if self.guide else None,
                                   automatic_guidance=bool(self.guide and self.guide.automatic),
-                                 consent=dict(local_recording=True, local_training=True, upload=False),
+                                  consent=dict(local_recording=True, local_training=role != 'C', upload=False),
                                  nonfinite_raw_encoding='NaN/Infinity/-Infinity strings',
                                  split_fields=['person_id', 'session_id', 'fit_id', 'source_group_id'],
                                  pairing='exact verified identity only; no nearest/latest joins',
-                                 prompt_labels='unreviewed proposals; not observed ground truth')
+                                  prompt_labels='unreviewed proposals; not observed ground truth')
+            if self.guide:
+                self.manifest.update(guide_start_step=step_index, guide_prepare_seconds=prepare_seconds)
+            if continuation:
+                self.manifest.update(continuation_of=continuation['session_id'], fit_id=continuation['fit_id'],
+                                     source_group_id=continuation['source_group_id'])
             write_json(self.path/'manifest.json', self.manifest)
             self.state = 'recording'
             return self._status()
@@ -289,7 +312,7 @@ class WholeMouthRecording:
             image = f'images/{sample_id}.jpg'
             (self.path/image).write_bytes(bytes(jpeg))
             row = dict(sample_id=sample_id, image=image, header=h,
-                       person_id=self.person_id, session_id=self.session_id, fit_id=self.session_id,
+                       person_id=self.person_id, session_id=self.session_id, fit_id=self.manifest['fit_id'],
                        day=self.manifest['day'], capture_session_id=int(h['session_id']),
                        source_seq=int(h['source_seq']), mouth_sensor_ns=int(h['mouth_sensor_ns']),
                        source_identity=h['raw_identity'], service_generation=generation,
@@ -453,17 +476,23 @@ class WholeMouthRecording:
                 self._event(kind+'_pair_timeout', **{'sample_id' if kind == 'image' else 'stock_id':
                                                     row['sample_id'] if kind == 'image' else row['stock_id']})
 
-    def advance(self, action):
+    def advance(self, action, *, step_index=None, guide_frame=None):
         with self.lock:
             if self.state != 'recording' or self.guide is None:
                 raise ValueError('No active guide')
-            if action == 'finish' and self.guide.phase == 'hold':
-                for row in self.guide.candidates():
-                    row['prompt_candidate'] = dict(prompt_id=self.guide.step['id'],
-                                                   labels=deepcopy(self.guide.step['labels']), reviewed=False)
+            if guide_frame is not None and guide_frame != self.guide.frame:
+                raise ValueError('The current step has changed')
+            if self.manifest['evaluation_only'] and action == 'select_step':
+                raise ValueError('The sealed recording must follow its frozen order')
             previous = self.guide.step['id'] if self.guide.step else None
-            self.guide.advance(action)
-            self._event('guide_action', action=action, prompt_id=previous,
+            previous_index = self.guide.index
+            candidates = self.guide.candidates() if action == 'finish' and self.guide.phase == 'hold' else ()
+            self.guide.advance(action, step_index=step_index)
+            for row in candidates:
+                row['prompt_candidate'] = dict(prompt_id=previous, step_index=previous_index,
+                                                labels=deepcopy(self.guide.step['labels']), reviewed=False)
+            self._event('guide_action', action=action, prompt_id=previous, step_index=previous_index,
+                        next_step_index=self.guide.index,
                         automatic=self.guide.automatic)
             return self.guide.status()
 
@@ -571,6 +600,7 @@ class WholeMouthRecording:
     def _status(self):
         states = Counter(row['pairing_status'] for row in self.images)
         return dict(state=self.state, schema=SCHEMA, session_id=self.session_id, person_id=self.person_id,
+                    evaluation_only=bool(self.path and self.manifest['evaluation_only']),
                     path=str(self.path) if self.path else None, label_stage=self.label_stage,
                     images=len(self.images), stocks=len(self.stocks), counts=dict(self.counts), pairing=dict(states),
                     trainable=sum(row['trainable'] for row in self.images),

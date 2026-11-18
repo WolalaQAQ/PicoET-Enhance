@@ -426,7 +426,8 @@ class Runtime:
             self.stock_socket = None
 
     def recording(self, action, *, person_id='', confirmed=False, guide=True, stage='raw_only',
-                  role=None, evaluation_only=None, preset_id='complete', automatic=False, receive_results=True):
+                  role=None, evaluation_only=None, preset_id='complete', automatic=False, receive_results=True,
+                  continuation=None, step_index=None, prepare_seconds=3., guide_frame=None):
         if action == 'begin':
             if confirmed is not True:
                 raise ValueError('Confirm local image/stock recording and local training first')
@@ -444,8 +445,10 @@ class Runtime:
             self.recorder = WholeMouthRecording(self.config_path.parent/'recordings')
             self.recorder.set_label_stage(stage)
             self.record_status = self.recorder.begin(person_id, confirmed=True, guide=guide,
-                                                     role=role, evaluation_only=evaluation_only, preset_id=preset_id,
-                                                     automatic=automatic)
+                                                      role=role, evaluation_only=evaluation_only, preset_id=preset_id,
+                                                       automatic=automatic, continuation=continuation,
+                                                       step_index=step_index if step_index is not None else 0,
+                                                       prepare_seconds=prepare_seconds)
             for capture_session_id, binding in self.transport_bindings.items():
                 self.recorder.bind_capture(capture_session_id, **binding)
             self.record_stopping = False
@@ -458,10 +461,10 @@ class Runtime:
             self.record_thread.start()
             if self.stock_thread is not None:
                 self.stock_thread.start()
-        elif action in ('ready', 'finish', 'confirm', 'skip', 'pause', 'resume'):
+        elif action in ('ready', 'finish', 'confirm', 'skip', 'pause', 'resume', 'select_step'):
             if self.recorder is None:
                 raise ValueError('Begin a recording first')
-            self.recorder.advance(action)
+            self.recorder.advance(action, step_index=step_index, guide_frame=guide_frame)
             self.record_status = self.recorder.status()
         elif action in ('stop', 'cancel'):
             # End the run as well: no previous output or preview survives cancellation.

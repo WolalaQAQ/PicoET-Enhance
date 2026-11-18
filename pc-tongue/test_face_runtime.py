@@ -248,7 +248,7 @@ class FaceRuntimeTests(unittest.TestCase):
                     self.assertEqual(response.status, 200)
                 recording.assert_called_once_with('begin', person_id='fixture', confirmed=True,
                     guide=False, stage='raw_only', role='C', evaluation_only=True, preset_id='complete',
-                     automatic=False, receive_results=False)
+                      automatic=False, receive_results=False, step_index=None, guide_frame=None, prepare_seconds=3.)
         finally:
             server.shutdown(); worker.join(); server.server_close()
 

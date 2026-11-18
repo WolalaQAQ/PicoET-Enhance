@@ -10,7 +10,7 @@ from urllib.parse import urlsplit, parse_qs
 from runtime import DEFAULT_CONFIG, ROOT, Runtime
 from discovery import discover_sources
 from file_dialog import select_model
-from face_presets import capture_presets
+from face_presets import SEALED_PROFILES, capture_continuation, capture_presets
 from capture_control import CaptureControl, LANCameraSource
 
 
@@ -84,6 +84,7 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                 capture=None):
     web = ROOT/'web'
     control = threading.Lock()
+    sealed_c = capture is not None and capture.sealed_preset is not None
 
     class Handler(BaseHTTPRequestHandler):
         def respond(self, code, data=b'', content_type='application/json; charset=utf-8'):
@@ -102,8 +103,13 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
             path = request.path
             query = parse_qs(request.query)
             if path == '/api/presets':
-                return self.respond(200, dict(presets=capture_presets(), default='complete'))
+                try:
+                    return self.respond(200, capture.presets() if capture else dict(presets=capture_presets(), default='complete'))
+                except (OSError, ValueError) as error:
+                    return self.respond(400, {'error': str(error)})
             if path in ('/api/recording/review', '/api/recording/image'):
+                if sealed_c:
+                    return self.respond(403, {'error': 'Sealed C archives are not reviewed in the capture workbench'})
                 try:
                     if path.endswith('/image'):
                         return self.respond(200, runtime.review_image(query.get('session', [''])[0],
@@ -148,6 +154,9 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                     raise ValueError('Configuration request too large')
                 body = json.loads(self.rfile.read(size) or b'{}')
                 path = urlsplit(self.path).path
+                if sealed_c and path not in ('/api/config', '/api/start', '/api/recording',
+                                             '/api/recording/display', '/api/stop'):
+                    return self.respond(403, {'error': 'This workbench is only for sealed C capture'})
                 if (capture and capture.state in ('starting', 'recording', 'stopping') and
                         path not in ('/api/recording', '/api/recording/display', '/api/stop')):
                     raise ValueError('Finish the capture session before changing input or training')
@@ -155,10 +164,16 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                     return self.respond(200, model_picker(body.get('initial', '')))
                 if path == '/api/config':
                     with control:
+                        if sealed_c:
+                            if capture.state != 'idle':
+                                raise ValueError('This sealed C attempt has already started')
+                            body.update(model_path='', enabled=False, model_kind='face50', output_enabled=False)
                         result = runtime.configure(body)
                     return self.respond(200, result)
                 if path == '/api/start':
                     with control:
+                        if sealed_c and (capture.state != 'idle' or body.get('mode') != 'capture'):
+                            raise ValueError('Only camera preview is available before starting sealed C')
                         result = runtime.start(body.get('mode', 'live'), body.get('path'))
                     return self.respond(200, result)
                 if path == '/api/prepare':
@@ -171,13 +186,16 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                     return self.respond(200, result)
                 if path == '/api/recording':
                     with control:
+                        continuation = dict(continuation_session_id=body.get('continuation_session_id')) if capture else {}
                         result = (capture or runtime).recording(body.get('action'), person_id=body.get('person_id', ''),
                                                    confirmed=body.get('confirmed', False), guide=body.get('guide', True),
                                                    stage=body.get('stage', 'raw_only'),
                                                     role=body.get('role'), evaluation_only=body.get('evaluation_only'),
                                                      preset_id=body.get('preset_id', 'complete'),
                                                       automatic=body.get('automatic', False),
-                                                      receive_results=body.get('receive_results', True))
+                                                       receive_results=body.get('receive_results', True),
+                                                       step_index=body.get('step_index'), guide_frame=body.get('guide_frame'),
+                                                       prepare_seconds=body.get('prepare_seconds', 3.), **continuation)
                     return self.respond(200, result)
                 if path == '/api/recording/display':
                     if capture and capture.display_viewer and body.get('viewer') != capture.display_viewer:
@@ -222,13 +240,36 @@ def main(argv=None):
     parser.add_argument('--device', default='auto')
     parser.add_argument('--record-input', action='store_true', help='Keep complete live JPEG frames in the owned run directory')
     parser.add_argument('--runs', type=Path)
+    parser.add_argument('--continue-recording', metavar='SESSION_ID', help='Offer the unfinished actions of a stopped local recording')
+    parser.add_argument('--sealed-c', type=Path, metavar='NEW_DIRECTORY',
+                        help='Serve one sealed C recording attempt in a new local data directory (use a separate --port)')
+    parser.add_argument('--sealed-c-profile', choices=SEALED_PROFILES,
+                        help='Fixed action plan for --sealed-c (default: mouth; jaw: JawOpen only)')
     args = parser.parse_args(argv)
+    if args.sealed_c_profile and not args.sealed_c:
+        parser.error('--sealed-c-profile requires --sealed-c')
+    if args.sealed_c:
+        if args.port == 8787 or args.config or args.runs or args.model or args.record_input or args.continue_recording:
+            parser.error('--sealed-c needs a separate --port and owns its config, runs and recordings')
+        try:
+            args.sealed_c.mkdir()
+        except OSError as error:
+            parser.error(f'--sealed-c requires a new directory with an existing parent: {error}')
+        args.config = args.sealed_c.resolve()/'config.json'
     runtime = Runtime(args.config, run_root=args.runs, record_input=args.record_input)
     if args.model:
         runtime.configure({'model_path': args.model, 'device': args.device})
-    capture = CaptureControl(runtime, LANCameraSource(runtime))
+    continuation = (capture_continuation(runtime.config_path.parent/'recordings', args.continue_recording)
+                    if args.continue_recording else None)
+    profile = args.sealed_c_profile or 'mouth'
+    sealed_preset = SEALED_PROFILES[profile] if args.sealed_c else None
+    capture = CaptureControl(runtime, LANCameraSource(runtime), continuation=continuation, sealed_preset=sealed_preset)
     server = make_server(runtime, port=args.port, capture=capture)
-    print(f'Mouth control: http://127.0.0.1:{server.server_port}', flush=True)
+    if args.sealed_c:
+        print(f'Sealed C [{profile}] (awaiting explicit start): '
+              f'http://127.0.0.1:{server.server_port}/#/recording', flush=True)
+    else:
+        print(f'Mouth control: http://127.0.0.1:{server.server_port}', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

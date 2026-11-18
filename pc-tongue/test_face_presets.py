@@ -15,12 +15,29 @@ class PresetTests(unittest.TestCase):
     def test_named_presets_have_explicit_distinct_orders_and_derived_lengths(self):
         presets = {p['id']:p for p in capture_presets()}
         self.assertEqual({k:len(p['steps']) for k,p in presets.items()},
-                         dict(basics=12,tongue=11,lips=13,complete=73))
+                         dict(basics=12,tongue=11,lips=13,complete=71))
         self.assertEqual(presets['complete']['steps'],prompt_plan())
+        self.assertNotIn('negative_occluded', {s['id'] for s in presets['complete']['steps']})
+        self.assertNotIn('remount', {s['id'] for s in presets['complete']['steps']})
+        for preset in presets.values():
+            text = json.dumps([preset['name'], preset['description']], ensure_ascii=False).lower()
+            for word in ('重新佩戴', '遮挡', '未知', 'refit', 'occlu', 'unknown'):
+                self.assertNotIn(word, text)
         self.assertEqual([s['id'] for s in presets['basics']['steps'][:3]],
                          ['neutral','JawOpen','MouthClose'])
         self.assertEqual([s['id'] for s in presets['tongue']['steps'][1:4]],
                          ['tongue_short','tongue_medium','tongue_long'])
+
+    def test_reference_manifest_matches_the_plan_and_hides_frozen_only_entries(self):
+        manifest = json.loads((Path(__file__).parent/'web'/'guide-reference'/'manifest.json').read_text(encoding='utf-8'))
+        poses = {p['id']: p for p in manifest['poses']}
+        steps = prompt_plan()
+        for step in steps:
+            self.assertEqual(poses[step['id']]['instruction'], step['title'], step['id'])
+            self.assertNotIn('legacy_only', poses[step['id']])
+        legacy = {key for key, p in poses.items() if p.get('legacy_only')}
+        self.assertEqual(legacy, set(poses)-{s['id'] for s in steps}, 'every non-plan entry must be hidden')
+        self.assertEqual(legacy, {'negative_occluded', 'remount'})
 
     def test_guide_uses_selected_order_and_finishes_at_its_own_total(self):
         for preset in capture_presets():
