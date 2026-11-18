@@ -13,6 +13,9 @@ const LABELS = {title: "title", "host-label": "host", "model-label": "model", "m
   "recording-title": "recordingTitle", "record-help": "recordHelp", "person-label": "person", "guided-label": "guided", "voice-label": "voice", "consent-label": "consent",
   "record-start": "recordStart", "record-stop": "recordStop", "record-cancel": "cancel", "training-title": "trainingTitle", "training-help": "trainingHelp",
   "guide-ready": "guideReady", "guide-finish": "guideFinish", "guide-confirm": "guideConfirm", "guide-skip": "guideSkip",
+  "guide-prev": "guidePrevStep", "guide-next": "guideNextStep", "guide-select-label": "guideSelect",
+  "guide-mode-label": "guideMode", "guide-auto-option": "guideAuto", "guide-manual-option": "guideManual",
+  "guide-prepare-label": "guidePrepareSeconds", "record-continue": "guideContinue",
   "label-stage-label": "labelStage", "raw-only-option": "rawOnly", "instant-option": "instantLabels",
   "receive-results-label": "receiveResults", "receive-results-hint": "receiveResultsHint",
   "review-title": "reviewTitle", "review-help": "reviewHelp", "review-all-label": "reviewAll", "review-load": "reviewLoad", "review-prev": "previous", "review-next": "next", "review-select-page": "selectPage",
@@ -33,6 +36,7 @@ const LABELS = {title: "title", "host-label": "host", "model-label": "model", "m
   "train-go-record": "goCapture", "train-go-review": "goReview",
   "train-step-one": "trainStepOne", "train-step-one-help": "trainStepOneHelp", "train-step-two": "trainStepTwo", "train-step-two-help": "trainStepTwoHelp",
   "train-step-three": "trainStepThree", "train-step-three-help": "trainStepThreeHelp", "training-tools-title": "trainingTools", "training-tools-help": "trainingToolsHelp", "technical-error-title": "technicalError"};
+const MOVING_STEPS = new Set(["tongue_sweep", "negative_pucker_release", "negative_speech"]);
 const display = x => x == null || x === "" ? "—" : String(x);
 const fixed = (x, n = 1) => x != null && Number.isFinite(Number(x)) ? Number(x).toFixed(n) : "—";
 const percentile = x => x ? `${fixed(x.p50)} / ${fixed(x.p95)} ms` : "—";
@@ -75,7 +79,7 @@ export function captureProgress(status, preset, preview = false) {
   const current = total && guide && phase !== "practice" ? done ? total : Math.min((guide.index ?? 0)+1,total) : 0;
   const phaseKey = !guide ? "captureIdle" : guide.paused || recording?.state === "cancelled" ? "capturePaused" :
     !active && !external && !done ? "capturePaused" :
-    ({prepare:"capturePrepare",hold:"visualhold",review:"captureReview",finished:"visualdone"})[phase] ?? "visual"+phase;
+    ({prepare:"capturePrepare",hold:"captureHold",review:"captureReview",finished:"visualdone"})[phase] ?? "visual"+phase;
   return {total,current,active,phaseKey};
 }
 export function createApp(doc, options = {}) {
@@ -90,7 +94,8 @@ export function createApp(doc, options = {}) {
     referenceKey: "", referencePose: null, referenceAnimated: false, referenceImageError: false,
     discovering: false, discovered: [], discoveryError: "", discoveryDone: false, discoveryKey: "", pickingModel: false,
     page: routePage(navigation?.location.hash), cameraPage: "", referencePaintedKey: "", visualReporting: false,
-    presets: [], selectedPreset: null, presetPreview: false, presetOptionsKey: "", presetListKey: "", externalCase: null};
+    presets: [], selectedPreset: null, presetPreview: false, presetOptionsKey: "", presetListKey: "", externalCase: null,
+    startStep: 0, archiveKey: ""};
   const t = key => messages[state.language][key] ?? key, view = () => deriveView(state.status, state.online, now()-state.at);
   const choiceLabel = value => messages[state.language][`choice-${value}`] ?? value;
   const fieldLabel = name => t(name === "device" ? "trainDevice" : name === "split" ? "splitPath" : name);
@@ -164,7 +169,7 @@ export function createApp(doc, options = {}) {
         option.textContent=`${preset.name[language]} · ${preset.steps.length} ${t("captureSteps")}`;selector.append(option);}
     }
     selector.value=state.selectedPreset ?? ""; selector.disabled=active ||
-      ["starting","stopping"].includes(state.status?.capture_control?.state) || Boolean(state.busy) || !presets.length;
+      state.status?.capture_control?.sealed_c || ["starting","stopping"].includes(state.status?.capture_control?.state) || Boolean(state.busy) || !presets.length;
     const preset=selectedPreset(), progress=captureProgress(current.current?state.status:null,preset,state.presetPreview);
     get("capture-progress-label").textContent=t("captureProgress");
     get("capture-preset-label").textContent=t("capturePreset");
@@ -178,35 +183,82 @@ export function createApp(doc, options = {}) {
     const listKey=JSON.stringify([state.selectedPreset,state.language,preset?.steps]);
     if (listKey!==state.presetListKey) {
       state.presetListKey=listKey; get("capture-action-list").replaceChildren();
-      for (const step of preset?.steps ?? []) {const item=doc.createElement("li");
-        item.textContent=step.title?.[language] ?? step.prepare?.[language] ?? step.id;get("capture-action-list").append(item);}
+      get("guide-select").replaceChildren();
+      for (const [index, step] of (preset?.steps ?? []).entries()) {
+        const item=doc.createElement("li"), option=doc.createElement("option");
+        item.textContent=step.title?.[language] ?? step.prepare?.[language] ?? step.id;
+        option.value=String(index); option.textContent=`${index+1}. ${item.textContent}`;
+        get("capture-action-list").append(item); get("guide-select").append(option);
+      }
     }
+    const guide=record?.guide, total=preset?.steps.length ?? 0;
+    const index=active ? guide?.index ?? 0 : state.startStep;
+    const show=total>0 && !external && !state.status?.read_only && !state.status?.capture_control?.sealed_c &&
+      (active ? Boolean(guide?.step) && !record.evaluation_only : get("guide-enabled").checked);
+    get("capture-step-nav").hidden=!show;
+    get("guide-select").value=String(index);
+    get("guide-select").disabled=!show || !current.current || Boolean(state.busy) ||
+      ["starting","stopping"].includes(state.status?.capture_control?.state);
+    get("guide-prev").disabled=get("guide-select").disabled || index<=0;
+    get("guide-next").disabled=get("guide-select").disabled || index+1>=total;
     for(const [index,item] of [...get("capture-action-list").children].entries()) {
       if(progress.current===index+1)item.setAttribute("aria-current","step");else item.removeAttribute("aria-current");
     }
   }
   function selectPreset(id) {
     if (get("capture-preset").disabled || !availablePresets().some(p=>p.id===id)) return;
-    state.selectedPreset=id; state.presetPreview=true;
+    previewPreset(id);
+    render();
+  }
+  function previewPreset(id) {
+    state.selectedPreset=id; state.presetPreview=true; state.startStep=0;
     const first=selectedPreset().steps[0]; state.referenceSelected=first.demo_id ?? first.id;
-    state.referenceAnimated=false; render();
+    state.referenceAnimated=false;
+    if (id==="continuation" && state.continuation) {
+      get("person_id").value=state.continuation.person_id;
+      get("label-stage").value=state.continuation.label_stage;
+      get("guide-enabled").checked=true;
+    }
   }
   async function loadPresets() {
-    try {const result=await requestJson(fetcher,"/api/presets");if(!state.destroyed)state.presets=result.presets;}
+    try {
+      const result=await requestJson(fetcher,"/api/presets");
+      if (!state.destroyed) {
+        state.presets=result.presets;
+        state.continuation=result.continuation;
+        if ((!state.selectedPreset && result.default==="continuation") ||
+            (result.sealed_c && state.selectedPreset!==result.default)) previewPreset(result.default);
+        if (state.selectedPreset==="continuation" && !result.continuation &&
+            state.status?.recording?.state!=="recording") previewPreset(result.default);
+      }
+    }
     catch(error) {if(!state.destroyed)state.error=error.message;}
     finally {if(!state.destroyed)render();}
+  }
+  function selectStep(index) {
+    const step=selectedPreset()?.steps[index];
+    if (get("guide-select").disabled || !step) return;
+    if (state.status?.recording?.state==="recording") return record("select_step",index);
+    state.startStep=index; state.referenceSelected=step.demo_id ?? step.id;
+    state.referenceAnimated=false; render();
   }
   function renderRecord(current) {
     const record = state.status?.recording, active = record?.state === "recording" || record?.state === "collecting";
     const managed = state.status?.managed_capture, control = state.status?.capture_control;
     const pending = ["starting","recording","stopping"].includes(control?.state);
+    const sealed = control?.sealed_c, spent = sealed && control.state!=="idle";
     const incompatibleInput = managed && current.running && state.status?.source_mode !== "live";
-    get("record-start").disabled = !current.current || incompatibleInput || !managed && (!current.running || state.status?.connected !== true || state.status?.source_mode !== "live") || active || pending || Boolean(state.busy) || state.dirty && !managed || !get("record-consent").checked || !get("person_id").value.trim();
+    const automatic=get("guide-mode").value!=="manual", guided=get("guide-enabled").checked;
+    const prepare=Number(get("guide-prepare").value || 7);
+    get("guide-setup").hidden=active || pending || !guided || state.status?.read_only===true;
+    get("guide-prepare-field").hidden=!automatic;
+    get("record-start").disabled = !current.current || incompatibleInput || !managed && (!current.running || state.status?.connected !== true || state.status?.source_mode !== "live") || active || pending || Boolean(state.busy) || state.dirty && !managed || !get("record-consent").checked || !get("person_id").value.trim() || guided && automatic && !(prepare>=3 && prepare<=30);
+    if (sealed && (spent || state.selectedPreset!==control.preset_id)) get("record-start").disabled = true;
     get("record-stop").disabled = !current.current || !(active || pending) || control?.state==="stopping" || Boolean(state.busy); get("record-cancel").disabled = get("record-stop").disabled;
     get("record-start").hidden = active || pending; get("record-stop").hidden = !(active || pending); get("record-cancel").hidden = !(active || pending);
-    get("record-consent").disabled = active || pending || Boolean(state.busy); get("person_id").disabled = active || pending || Boolean(state.busy);
-    get("guide-enabled").disabled = active || pending || Boolean(state.busy);
-    get("label-stage").disabled = active || pending || Boolean(state.busy);
+    get("record-consent").disabled = active || pending || spent || Boolean(state.busy); get("person_id").disabled = get("record-consent").disabled;
+    get("guide-enabled").disabled = sealed || active || pending || Boolean(state.busy);
+    get("label-stage").disabled = sealed || active || pending || Boolean(state.busy);
     get("receive-results").disabled = get("label-stage").disabled || get("label-stage").value === "instant";
     if (get("label-stage").value === "instant") get("receive-results").checked = true;
     const controlText = {starting:"captureStarting",stopping:"captureSaving",completed:"captureComplete",error:"captureError"};
@@ -214,7 +266,14 @@ export function createApp(doc, options = {}) {
     get("capture-stop").disabled = get("stop").disabled;
     const next = incompatibleInput ? "recordCloseInput" : managed ? "captureSelfService" : !get("headset_host").value.trim() ? "recordNeedHeadset" : !current.running ? "recordOpenCamera" :
       !current.video ? "recordWaitCamera" : !get("record-consent").checked ? "recordNeedConsent" : "recordReady";
-    get("record-next").textContent = active ? "" : t(next);
+    get("record-continue").hidden=!current.current || !managed || active || pending || !state.continuation || state.selectedPreset==="continuation";
+    get("record-continue").disabled=Boolean(state.busy);
+    get("record-next").textContent = active ? "" : t(state.selectedPreset==="continuation" && state.continuation ? "guidePickThenStart" : current.current && control?.state==="completed" && record?.guide?.phase==="finished" ? "recordRefit" : next);
+    if (sealed) {
+      const finished = control.state==="completed" && record?.guide?.phase==="finished" && !record.guide.skipped_indices?.length;
+      get("record-next").textContent = active || pending ? "" : t(!spent ? "sealedReady" : !record?.path ? "sealedNoArchive" : finished ? "sealedSaved" : "sealedInterrupted");
+      get("consent-label").textContent = t("sealedConsent");
+    }
     get("record-path").textContent = display(record?.directory ?? record?.path);
     get("record-error").hidden = !(record?.error || control?.error);
     get("record-error").textContent = record?.error || control?.error ? errorMessage(state.language, record?.error || control.error) : "";
@@ -226,15 +285,16 @@ export function createApp(doc, options = {}) {
     const prompt = auto && step ? `${t(guide.paused?"autoPaused":phase==="hold"?"autoHold":"autoPrepare")} ${step.title?.[state.language==="en"?"en":"zh"] ?? step.id}` :
       step && typeof step === "object" ? (step[phase]?.[state.language === "en" ? "en" : "zh"] ?? step.id) : step;
     get("guide").hidden = !active || !current.current || !prompt;
-    get("guide-step").textContent = prompt ?? ""; get("guide-hint").textContent = auto ? t(guide.paused?"autoPausedHelp":!guide.display_ready?"autoShowImage":"autoNext") : t(guide?.phase === "settle" ? "settle" : "hold");
+    const holdHelp = guide?.index+1 === guide?.total ? "autoFinalHoldHelp" : "autoHoldHelp";
+    get("guide-step").textContent = prompt ?? ""; get("guide-hint").textContent = guide?.paused ? t("autoPausedHelp") : auto ? t(!guide.display_ready?"autoShowImage":phase==="hold"?holdHelp:"autoPrepareHelp") : t(phase==="hold"?"guideManualHold":phase==="confirm"?"guideManualReview":"guideManualPrepare");
     get("guide-countdown").hidden = !auto || guide?.paused || !guide?.display_ready;
     get("guide-countdown").textContent = `${Math.ceil(guide?.remaining_seconds ?? 0)} ${t("guideSeconds")}`;
-    get("guide-pause").hidden = !auto || !active;
+    get("guide-pause").hidden = !active;
     get("guide-pause").disabled = Boolean(state.busy) || !current.current;
     get("guide-pause").textContent = t(guide?.paused?"guideResume":"guidePause");
     get("guide-progress").value = guide?.progress ?? 0;
-    for (const [action, enabled] of [["ready", guide?.phase === "prepare" && step?.kind !== "remount"], ["finish", guide?.ready_to_finish], ["confirm", guide?.phase === "review"], ["skip", Boolean(step)]]) {
-      get(`guide-${action}`).disabled = !active || !current.current || !enabled || Boolean(state.busy);
+    for (const [action, enabled] of [["ready", guide?.phase === "prepare"], ["finish", guide?.ready_to_finish], ["confirm", guide?.phase === "review"], ["skip", Boolean(step)]]) {
+      get(`guide-${action}`).disabled = !active || !current.current || !enabled || guide?.paused || Boolean(state.busy);
       get(`guide-${action}`).hidden = !enabled || auto && action!=="skip";
     }
     const available = Boolean(speech && Utterance); get("voice-enabled").disabled = !available;
@@ -253,11 +313,13 @@ export function createApp(doc, options = {}) {
         id: external.running ? step.visual.demo_prompt_ids[0] : state.referenceSelected};
     }
     const record = state.status?.recording, active = current.current && ["recording", "collecting"].includes(record?.state) && (record?.guide?.current ?? record?.guide?.step);
-    return {following: Boolean(active), step: active || null, id: active?.id ?? state.referenceSelected,
+    return {following: Boolean(active), step: active || null, id: active?.demo_id ?? active?.id ?? state.referenceSelected,
       automatic: record?.guide?.automatic, phase: record?.guide?.phase, frame:record?.guide?.frame};
   }
+  function practicePoses() { return (state.reference?.poses ?? []).filter(item => !item.legacy_only); }
   function renderReference(current) {
-    const poses = state.reference?.poses ?? [], guide = referenceStep(current), pose = poses.find(item => item.id === guide.id), hasImage = Boolean(pose?.front);
+    const poses = practicePoses(), guide = referenceStep(current);
+    const pose = state.reference?.poses?.find(item => item.id === guide.id), hasImage = Boolean(pose?.front);
     const selector = get("reference-select"), language = state.language === "en" ? "en" : "zh";
     if (selector.children.length !== poses.length) {
       selector.replaceChildren();
@@ -278,7 +340,7 @@ export function createApp(doc, options = {}) {
       guide.following && guide.automatic ? guide.step.title?.[language] ?? "" : guide.following ? "" : pose?.instruction?.[language] ?? "";
     if (state.referencePose !== guide.id) { state.referencePose = guide.id; state.referenceAnimated = false; }
     const animated = external?.running ? !["hold", "done", "paused", "interrupted"].includes(external.phase) :
-      guide.following && guide.automatic ? guide.phase==="prepare" : state.referenceAnimated;
+      guide.following ? guide.phase==="prepare" || MOVING_STEPS.has(guide.id) : state.referenceAnimated;
     const anchorId = external && guide.id === guide.step.visual.demo_prompt_ids[0] ? guide.step.visual.demo_prompt_ids[1] : null;
     const anchor = poses.find(item => item.id === anchorId)?.front ?? state.reference?.neutral;
     const key = `${guide.id}/${animated}/${pose?.front}/${pose?.profile}/${anchor}/${external?.frame ?? guide.frame ?? ""}`;
@@ -293,7 +355,7 @@ export function createApp(doc, options = {}) {
         get("reference-neutral-image").src = asset(anchor);
         if (pose.profile) get("reference-profile-image").src = asset(pose.profile);
       }
-      if ((external || guide.automatic) && state.page === "recording") get("pose-reference").scrollIntoView?.({block:"start"});
+      if ((external || guide.following) && state.page === "recording") get("pose-reference").scrollIntoView?.({block:"start"});
     }
     get("reference-neutral-caption").textContent = t(anchorId ? "referenceOpening" : "referenceNeutral");
     get("reference-image").setAttribute("alt", `${t("referenceTarget")}: ${pose?.title?.[language] ?? guide.id}`);
@@ -313,7 +375,7 @@ export function createApp(doc, options = {}) {
     get("reference-source").textContent = state.reference?.model ? `${state.reference.model.name} · ${state.reference.model.copyright}` : "";
   }
   function selectReference(id) {
-    if (referenceStep(view()).following || !state.reference?.poses?.some(pose => pose.id === id)) return;
+    if (referenceStep(view()).following || !practicePoses().some(pose => pose.id === id)) return;
     state.referenceSelected = id; state.referenceAnimated = false; render();
   }
   async function loadReference() {
@@ -336,7 +398,7 @@ export function createApp(doc, options = {}) {
       const rect = get(textOnly?"reference-message":"reference-image").getBoundingClientRect?.();
       const height = doc.documentElement.clientHeight ?? Infinity;
       const inView = !rect || rect.height > 0 && (Math.min(rect.bottom,height)-Math.max(rect.top,0))/rect.height >= .8;
-      let ready = (automatic ? current.id===record.guide.step.id : state.selectedPreset===external.case && current.id === current.step?.visual?.demo_prompt_ids?.[0]) && state.page === "recording" &&
+      let ready = (automatic ? current.id===(record.guide.step.demo_id ?? record.guide.step.id) : state.selectedPreset===external.case && current.id === current.step?.visual?.demo_prompt_ids?.[0]) && state.page === "recording" &&
         inView && !state.referenceImageError && (textOnly ? Boolean(get("reference-message").textContent) :
           !get("reference-views").hidden && images.every(image => image.complete && image.naturalWidth > 0));
       if (ready && state.referencePaintedKey !== key) {
@@ -444,11 +506,17 @@ export function createApp(doc, options = {}) {
     get("stock-info").textContent = `${t(association)} · ${JSON.stringify(stock ?? null)}`;
     get("snapshot-state").textContent = t(current.current ? "snapshot" : "expiredSnapshot");
     const replay = state.status?.replay; get("replay-info").textContent = replay?.path ? `${replay.path} · ${display(replay.position)} / ${display(replay.total)} ${t("frames")}${replay.finished ? ` · ${t("replayDone")}` : ""}` : t("replayReady");
-    const focused=state.page==="recording" && state.status?.recording?.state==="recording" && state.status?.recording?.guide?.automatic;
+    const focused=state.page==="recording" && state.status?.recording?.state==="recording" && state.status?.recording?.guide?.step;
     doc.documentElement.setAttribute?.("data-guiding",String(Boolean(focused)));
     renderCapturePlan(current); renderRecord(current); renderReference(current); renderTraining(current); renderReview(current);
     if(state.status?.managed_capture && state.page==="recording") {
-      get("page-intro").textContent=t("captureSelfService");
+      get("page-intro").textContent=t(state.status.capture_control?.sealed_c ? "sealedReady" : "captureSelfService");
+    }
+    const sealed = state.status?.capture_control?.sealed_c;
+    get("review").hidden = Boolean(sealed);
+    if (sealed) {
+      for (const id of ["start", "replay", "train-start", "train-cancel", "model-browse"]) get(id).disabled = true;
+      if (state.status.capture_control.state!=="idle") for (const id of ["capture", "save", "discover", "headset-select"]) get(id).disabled = true;
     }
     if (["starting","recording","stopping"].includes(state.status?.capture_control?.state)) {
       for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled", "start", "capture", "replay", "save", "discover", "headset-select", "model-browse"])
@@ -549,6 +617,13 @@ export function createApp(doc, options = {}) {
       const status = await requestJson(fetcher, "/api/status");
       if (generation !== state.generation || state.destroyed) return;
       state.status = status; applyConfig(status.config ?? await requestJson(fetcher, "/api/config")); state.online = true; state.at = now(); state.pollError = "";
+      const record=status.recording;
+      const saved=status.managed_capture && record?.state==="stopped" && record.session_id &&
+        ["completed","error"].includes(status.capture_control?.state);
+      if (saved && state.archiveKey!==record.session_id) {
+        state.archiveKey=record.session_id;
+        void loadPresets();
+      }
     } catch (error) { if (generation === state.generation && !state.destroyed) { state.online = false; state.pollError = error.message; } }
     finally { state.polling = false; if (!state.destroyed) render(); }
   }
@@ -571,18 +646,21 @@ export function createApp(doc, options = {}) {
   }
   async function save() { if (!get("save").disabled && validate("save", false)) await control("saving", persistConfig); }
   async function start(mode = "live") {
-    if (get("start").disabled || !validate(mode === "capture" ? "live" : mode, mode !== "capture")) return;
+    if (get(mode === "capture" ? "capture" : "start").disabled || !validate(mode === "capture" ? "live" : mode, mode !== "capture")) return;
     await control("starting", async () => { await persistConfig(); await requestJson(fetcher, "/api/start", {mode}, 60000); });
   }
   async function stop() { if (!get("stop").disabled) await control("stopping", () => requestJson(fetcher, "/api/stop", {}, 20000)); }
-  async function record(action) {
-    const button = {begin: "record-start", stop: "record-stop", cancel: "record-cancel", ready: "guide-ready", finish: "guide-finish", confirm: "guide-confirm", skip: "guide-skip", pause:"guide-pause",resume:"guide-pause"}[action]; if (!button || get(button).disabled) return;
+  async function record(action, stepIndex) {
+    const button = {begin: "record-start", stop: "record-stop", cancel: "record-cancel", ready: "guide-ready", finish: "guide-finish", confirm: "guide-confirm", skip: "guide-skip", pause:"guide-pause",resume:"guide-pause",select_step:"guide-select"}[action]; if (!button || get(button).disabled) return;
     if (action === "begin" && !validate(state.status?.managed_capture ? "capture" : "live", false)) return;
     await control("working", async () => {
       if (action === "begin" && state.status?.managed_capture && state.dirty) await persistConfig();
       await requestJson(fetcher, "/api/recording", {action, ...(action === "begin" ? {person_id: get("person_id").value.trim(), confirmed: get("record-consent").checked, guide: get("guide-enabled").checked, stage: get("label-stage").value,
         receive_results: get("receive-results").checked,
-        ...(get("guide-enabled").checked ? {preset_id:state.selectedPreset,automatic:true} : {})} : {})}, 20000);
+        ...(get("guide-enabled").checked ? {preset_id:state.selectedPreset,automatic:get("guide-mode").value!=="manual",
+          prepare_seconds:get("guide-mode").value==="manual"?7:Number(get("guide-prepare").value || 7), step_index:state.startStep,
+          ...(state.selectedPreset==="continuation" && state.continuation?.session_id ? {continuation_session_id:state.continuation.session_id} : {})} : {})} :
+        {guide_frame:state.status?.recording?.guide?.frame,step_index:stepIndex})}, 20000);
       if(action==="begin")state.presetPreview=false;
       get("record-consent").checked = false;
     });
@@ -628,8 +706,14 @@ export function createApp(doc, options = {}) {
   navigation?.addEventListener("hashchange", hashChanged);
   get("language").addEventListener("change", () => setLanguage(get("language").value));
   get("guide-pause").addEventListener("click",()=>record(state.status?.recording?.guide?.paused?"resume":"pause"));
+  get("record-continue").addEventListener("click",()=>selectPreset("continuation"));
+  get("guide-select").addEventListener("change",()=>selectStep(Number(get("guide-select").value)));
+  for (const [id, delta] of [["guide-prev",-1],["guide-next",1]]) get(id).addEventListener("click",()=>{
+    if (!get(id).disabled) return selectStep(Number(get("guide-select").value)+delta);
+  });
   for (const [id, fn] of [["save", save], ["stop", stop], ["capture-stop", stop], ["capture", () => start("capture")], ["replay", () => start("replay")], ["record-start", () => record("begin")], ["record-stop", () => record("stop")], ["record-cancel", () => record("cancel")], ["train-start", () => train()], ["train-cancel", () => train("cancel")], ...["ready", "finish", "confirm", "skip"].map(action => [`guide-${action}`, () => record(action)])]) get(id).addEventListener("click", fn);
-  for (const id of ["preview-enabled", "record-consent", "voice-enabled", "person_id", "label-stage"]) get(id).addEventListener("change", render);
+  for (const id of ["preview-enabled", "record-consent", "voice-enabled", "person_id", "label-stage",
+    "guide-enabled", "guide-mode", "guide-prepare"]) get(id).addEventListener("change", render);
   for (const id of ["review-confirmed", "reviewer"]) get(id).addEventListener("change", render);
   get("review-load").addEventListener("click", () => loadReviews()); get("review-prev").addEventListener("click", () => loadReviews(Math.max(0, state.reviews.offset-24)));
   get("review-next").addEventListener("click", () => loadReviews(state.reviews.offset+24));
@@ -640,7 +724,7 @@ export function createApp(doc, options = {}) {
   get("reference-select").addEventListener("change", () => selectReference(get("reference-select").value));
   get("capture-preset").addEventListener("change",()=>selectPreset(get("capture-preset").value));
   for (const [id, delta] of [["reference-prev", -1], ["reference-next", 1]]) get(id).addEventListener("click", () => {
-    const poses = state.reference?.poses ?? [], index = poses.findIndex(pose => pose.id === state.referenceSelected);
+    const poses = practicePoses(), index = poses.findIndex(pose => pose.id === state.referenceSelected);
     if (!get(id).disabled) selectReference(poses[index+delta].id);
   });
   get("reference-play").addEventListener("click", () => { if (!get("reference-play").disabled && !get("reference-play").hidden) { state.referenceAnimated = !state.referenceAnimated; render(); } });

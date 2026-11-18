@@ -123,6 +123,61 @@ test("preset selection previews its exact action order and count without startin
   assert.equal(f.el("capture-action-list").children[0].textContent,"下颌前伸");
   assert.equal(f.el("capture-progress-count").textContent,"0 / 2");
 });
+test("the server default can offer a saved continuation without granting consent or starting input",async t=>{
+  const f=setup(t), tail={...f.server.presets[1],id:"continuation"};
+  f.server.before = path => path==="/api/presets" ? Response.json({
+    presets:[tail,...f.server.presets], default:tail.id, continuation:{person_id:"same-wearer",label_stage:"raw_only"}
+  }) : null;
+  await f.app.init();
+  assert.equal(f.el("capture-preset").value,"continuation");
+  assert.equal(f.el("person_id").value,"same-wearer");
+  assert.equal(f.el("capture-progress-count").textContent,"0 / 2");
+  assert.equal(f.el("record-consent").checked,false);
+  assert.match(f.el("reference-image").src,/JawForward.webp$/);
+  assert.ok(f.server.calls.every(call=>call.method==="GET"));
+});
+test("sealed JawOpen C requires a recording click, shows reference media and does not offer a restart after disconnect",async t=>{
+  const f=setup(t,{paint:fn=>fn()});
+  const step={id:"c_jaw_open_small_1",demo_id:"JawForward",title:{en:"Open slightly",zh:"小幅张嘴"}};
+  const plan={...f.server.presets[1],id:"sealed-c-jaw",steps:[step]};
+  f.server.presets=[plan];
+  f.server.before=path=>path==="/api/presets" ? Response.json({presets:[plan],default:plan.id,sealed_c:true}) : null;
+  Object.assign(f.server.status,{managed_capture:true,capture_control:{sealed_c:true,preset_id:plan.id,state:"idle"}});
+  await f.app.init(); f.app.navigate("recording");
+  assert.equal(f.el("capture-preset").value,plan.id);
+  assert.equal(f.el("capture-preset").disabled,true);
+  assert.equal(f.el("capture-step-nav").hidden,true);
+  assert.equal(f.el("review").hidden,true);
+  assert.equal(f.el("record-start").disabled,true);
+  assert.equal(f.el("consent-label").textContent,messages.en.sealedConsent);
+  assert.ok(f.server.calls.every(call=>call.method==="GET"));
+  f.el("record-consent").checked=true; f.el("record-consent").emit("change");
+  assert.ok(f.server.calls.every(call=>call.method==="GET"));
+  await f.app.record("begin");
+  const begin=JSON.parse(f.server.calls.find(c=>c.path==="/api/recording").body);
+  assert.equal(begin.preset_id,plan.id);
+  assert.equal(begin.confirmed,true);
+  assert.equal(begin.role,undefined);
+  assert.equal(begin.evaluation_only,undefined);
+  f.server.status.capture_control.state="recording";
+  Object.assign(f.server.status.recording.guide,{step,automatic:true,phase:"prepare",frame:"jaw-frame"});
+  await f.app.pollStatus();
+  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward-motion.webp");
+  for(const id of ["reference-image","reference-neutral-image","reference-profile-image"])
+    Object.assign(f.el(id),{complete:true,naturalWidth:512});
+  await f.app.reportVisual();
+  assert.equal(JSON.parse(f.server.calls.at(-1).body).media_ready,true);
+  f.server.status.capture_control.state="error";
+  f.server.status.capture_control.error="Truncated frame payload (47/2190 bytes)";
+  f.server.status.recording.state="stopped";
+  await f.app.pollStatus();
+  assert.equal(f.el("record-next").textContent,messages.en.sealedInterrupted);
+  assert.equal(f.el("record-continue").hidden,true);
+  assert.equal(f.el("record-start").disabled,true);
+  assert.equal(f.el("capture").disabled,true);
+  await f.app.record("begin");
+  assert.equal(f.server.calls.filter(c=>c.path==="/api/recording").length,1);
+});
 test("recording submits the selected preset and locks it while the real backend guide advances",async t=>{
   const f=setup(t);await f.app.init();f.app.selectPreset("basics");
   await f.app.start("capture");f.el("record-consent").checked=true;f.el("record-consent").emit("change");await f.app.record("begin");
@@ -296,7 +351,7 @@ test("record requires separate consent and a person ID, not an existing model", 
   const {app, server, el} = setup(t); server.config.model_path = ""; await app.init(); await app.record("begin");
   assert.ok(!server.calls.some(c => c.path === "/api/recording")); await app.start("capture"); el("person_id").value = "local-person"; el("record-consent").checked = true; el("person_id").emit("change"); await app.record("begin");
   const body = JSON.parse(server.calls.find(c => c.path === "/api/recording").body);
-  assert.deepEqual(body, {action: "begin", person_id: "local-person", confirmed: true, guide: true, stage: "raw_only",receive_results:true,preset_id:"complete",automatic:true});
+  assert.deepEqual(body, {action: "begin", person_id: "local-person", confirmed: true, guide: true, stage: "raw_only",receive_results:true,preset_id:"complete",automatic:true,prepare_seconds:7,step_index:0});
   assert.equal(el("record-consent").checked, false); assert.equal(el("guide").hidden, false); assert.equal(el("guide-step").textContent, "Relax your mouth");
 });
 test("guide phase controls use real ready/finish/confirm/skip API, never auto-approve labels", async t => {
@@ -651,6 +706,59 @@ test("actual recording can follow a text-only step without skipping, approving o
   assert.equal(el("reference-mode").textContent, messages.en.referenceFollowing); assert.equal(el("reference-message").textContent, missing.unavailable_reason.en);
   assert.equal(el("reference-views").hidden, true); assert.equal(el("reference-select").disabled, true);
   assert.ok(server.calls.every(call => call.method === "GET")); assert.equal(server.status.recording.guide.step.id, "TongueOut");
+});
+test("the archived occlusion entry is not selectable but still renders in a frozen guide", async t => {
+  const {app, server, el} = setup(t);
+  const old = {id: "negative_occluded", legacy_only: true, title: {en: "Occluded"}, unavailable_reason: {en: "Legacy text."}};
+  server.reference.poses.splice(1, 0, old);
+  await app.init();
+  assert.ok(![...el("reference-select").children].some(option => option.value === old.id));
+  app.selectReference(old.id);
+  assert.notEqual(el("reference-select").value, old.id);
+  server.status.recording = {state: "recording", guide: {step: {id: old.id}, phase: "prepare"}};
+  await app.pollStatus();
+  assert.equal(el("reference-message").textContent, old.unavailable_reason.en);
+});
+test("automatic guide text matches the controls that are actually shown", async t => {
+  const f = setup(t);
+  const guide = {automatic: true, paused: false, index: 0, total: 3, preset_id: "complete", phase: "prepare", frame: "f1",
+    display_ready: true, remaining_seconds: 2, step: {id: "JawForward", kind: "pose", title: {en: "Jaw forward", zh: "下颌前伸"}}};
+  f.server.status.recording = {state: "recording", session_id: "auto", guide};
+  await f.app.init(); f.app.navigate("recording");
+  for (const language of ["en", "zh-CN"]) {
+    f.app.setLanguage(language); const text = messages[language];
+    guide.index = 0; guide.phase = "prepare"; await f.app.pollStatus();
+    assert.equal(f.el("guide-step").textContent, `${text.autoPrepare} ${language === "en" ? "Jaw forward" : "下颌前伸"}`);
+    assert.equal(f.el("guide-hint").textContent, text.autoPrepareHelp);
+    assert.equal(f.el("capture-progress-phase").textContent, text.capturePrepare);
+    guide.phase = "hold"; await f.app.pollStatus();
+    assert.equal(f.el("guide-hint").textContent, text.autoHoldHelp);
+    assert.equal(f.el("capture-progress-phase").textContent, text.captureHold);
+    for (const id of ["guide-ready", "guide-finish", "guide-confirm"]) assert.equal(f.el(id).hidden, true, id);
+    guide.index = guide.total - 1; await f.app.pollStatus();
+    assert.equal(f.el("guide-hint").textContent, text.autoFinalHoldHelp);
+    for (const key of ["autoPrepareHelp", "autoHoldHelp", "autoFinalHoldHelp", "autoPausedHelp", "autoShowImage"])
+      assert.doesNotMatch(text[key], /开始保持|结束保持|确认已完成|Start holding|Finish holding|Confirm action/, key);
+  }
+});
+test("moving steps keep their animation during the hold and still steps show the still image", async t => {
+  const f = setup(t);
+  f.server.reference.poses.push({id: "tongue_sweep", title: {en: "Sweep", zh: "往返"}, instruction: {en: "Sweep", zh: "往返"}, front: "tongue_sweep.webp", animation: "tongue_sweep-motion.webp", provenance: []});
+  const guide = {automatic: true, paused: false, index: 0, total: 2, preset_id: "complete", phase: "hold", frame: "f1", display_ready: true,
+    remaining_seconds: 2, step: {id: "tongue_sweep", kind: "continuous", title: {en: "Sweep", zh: "往返"}}};
+  f.server.status.recording = {state: "recording", session_id: "auto", guide};
+  await f.app.init(); f.app.navigate("recording");
+  assert.equal(f.el("reference-image").src, "/static/guide-reference/tongue_sweep-motion.webp");
+  guide.step = {id: "JawForward", kind: "pose", title: {en: "Jaw forward", zh: "下颌前伸"}}; guide.frame = "f2"; await f.app.pollStatus();
+  assert.equal(f.el("reference-image").src, "/static/guide-reference/JawForward.webp");
+});
+test("the optional refit suggestion appears only after a recording is saved", async t => {
+  const f = setup(t); await f.app.init(); f.app.navigate("recording");
+  assert.notEqual(f.el("record-next").textContent, messages.en.recordRefit);
+  f.server.status.capture_control = {state: "completed"}; f.server.status.managed_capture = true;
+  f.server.status.recording = {state:"stopped", guide:{phase:"finished"}}; await f.app.pollStatus();
+  assert.equal(f.el("record-next").textContent, messages.en.recordRefit);
+  assert.ok(!["capturePrepare", "captureHold", "autoPrepareHelp", "autoHoldHelp"].some(key => messages.en[key].includes(messages.en.recordRefit)));
 });
 test("reference follows guide.current consistently with the main recording prompt", async t => {
   const {app, server, el} = setup(t); await app.init();

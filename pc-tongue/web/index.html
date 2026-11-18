@@ -58,6 +58,11 @@
             <label class="capture-preset-choice"><span id="capture-preset-label">Capture preset</span><select id="capture-preset"></select></label>
             <p id="capture-preset-description" class="hint"></p>
             <details id="capture-plan-order"><summary id="capture-plan-order-title">Actions in order</summary><ol id="capture-action-list"></ol></details>
+            <div class="actions capture-step-nav" id="capture-step-nav">
+              <button id="guide-prev" type="button">Previous step</button>
+              <label><span id="guide-select-label">Go to step</span><select id="guide-select"></select></label>
+              <button id="guide-next" type="button">Next step</button>
+            </div>
             <div class="reference-heading"><h2 id="reference-title">Try this expression</h2><span id="reference-mode" class="hint"></span></div>
             <p id="reference-pose" class="reference-pose"></p><p id="reference-instruction"></p>
             <div id="reference-views" class="reference-views" hidden>
@@ -72,8 +77,13 @@
           </section>
         </div>
         <div class="record-controls panel">
+          <div class="actions" id="guide-setup">
+            <label><span id="guide-mode-label">Step advance</span><select id="guide-mode"><option id="guide-auto-option" value="auto">Automatic</option><option id="guide-manual-option" value="manual">Manual</option></select></label>
+            <label id="guide-prepare-field"><span id="guide-prepare-label">Preparation per step (seconds)</span><input id="guide-prepare" type="number" min="3" max="30" step="1" value="7" required></label>
+          </div>
           <label class="check"><input id="voice-enabled" type="checkbox"><span id="voice-label">Spoken instructions</span></label><p id="voice-info" class="hint"></p>
           <label class="check"><input id="record-consent" type="checkbox"><span id="consent-label">I agree to save mouth images on this PC, and I am ready to follow the guide.</span></label>
+          <button id="record-continue" type="button" hidden>Continue last recording</button>
           <div class="actions"><button id="record-start" type="button" disabled>Start recording</button><button id="record-stop" type="button" disabled>Finish recording</button><button id="record-cancel" type="button" disabled>Cancel</button><span id="record-state" role="status"></span></div>
           <p id="record-next" class="hint"></p>
           <div id="guide" hidden><h2 id="guide-step"></h2><output id="guide-countdown" hidden></output><p id="guide-hint"></p><progress id="guide-progress" max="1" value="0"></progress><div class="actions"><button id="guide-pause" type="button" hidden>Pause</button><button id="guide-ready" type="button">Start holding</button><button id="guide-finish" type="button">Finish holding</button><button id="guide-confirm" type="button">Confirm action done</button><button id="guide-skip" type="button">Skip</button></div></div>
@@ -85,7 +95,7 @@
           <label class="check"><input id="guide-enabled" type="checkbox" checked><span id="guided-label">Guide me step by step</span></label>
           <label><span id="label-stage-label">Training label stage</span><select id="label-stage"><option id="raw-only-option" value="raw_only">Raw only · label after review</option><option id="instant-option" value="instant">Instant labels · match stock behavior</option></select></label>
           <label class="check"><input id="receive-results" type="checkbox" checked><span id="receive-results-label">Receive headset mouth results</span></label>
-          <p id="receive-results-hint">Applies only to this recording. The headset must allow mouth result sharing.</p>
+          <p id="receive-results-hint">Applies only to this recording. In the headset companion app, turn on Mouth under Result sharing first.</p>
           <p id="record-path" class="hint"></p>
         </details>
         <details id="review" class="panel disclosure-panel"><summary id="review-title">Review recorded images</summary>

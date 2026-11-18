@@ -235,7 +235,6 @@ html[data-guiding="true"] .sidebar,
 html[data-guiding="true"] .topbar,
 html[data-guiding="true"] .page-heading,
 html[data-guiding="true"] .capture-toolbar,
-html[data-guiding="true"] .camera-slot,
 html[data-guiding="true"] .capture-preset-choice,
 html[data-guiding="true"] #capture-preset-description,
 html[data-guiding="true"] #capture-plan-order,
@@ -249,7 +248,21 @@ html[data-guiding="true"] #review,
 html[data-guiding="true"] .page-footer { display:none; }
 html[data-guiding="true"] .app-shell { display:block; }
 html[data-guiding="true"] .workspace { padding:12px 24px; }
-html[data-guiding="true"] .capture-workspace { display:block; }
+html[data-guiding="true"] .capture-workspace { display:grid; grid-template-columns:minmax(0, 2fr) minmax(0, 1fr); align-items:start; }
+html[data-guiding="true"] .camera-slot { grid-column:2; grid-row:1; }
+html[data-guiding="true"] .pose-reference { grid-column:1; grid-row:1; }
+html[data-guiding="true"] .preview { aspect-ratio:1; max-height:35vh; }
+.capture-step-nav { display:flex; align-items:end; gap:8px; flex-wrap:wrap; }
+.capture-step-nav label { min-width:0; flex:1 1 150px; }
+.capture-step-nav select { width:100%; }
+@media(max-width:540px) {
+  html[data-guiding="true"] .workspace { padding:8px; }
+  html[data-guiding="true"] .capture-workspace { gap:8px; }
+  html[data-guiding="true"] .reference-views { display:block; }
+  html[data-guiding="true"] .reference-neutral, html[data-guiding="true"] .reference-profile { display:none; }
+  html[data-guiding="true"] .camera-panel .panel-heading { padding:8px; }
+  html[data-guiding="true"] .camera-panel .preview { margin:0 6px; }
+}
 html[data-guiding="true"] .pose-reference { padding:12px 18px; }
 html[data-guiding="true"] .capture-step-progress { padding:0 0 8px; margin-bottom:8px; }
 html[data-guiding="true"] .reference-pose { margin:8px 0 4px; font-size:20px; }
