@@ -43,8 +43,8 @@ Combine the reply's source IP with each stream's port and path. IDs and service 
 The bundled discovery client sends through each local IPv4 interface, then checks the HTTP catalog and the PTC1 owner before returning results. This also covers PCs whose default route points at a VPN:
 
 ```powershell
-python pc-tongue/discovery.py --cameras
-python pc-tongue/discovery.py --cameras --host <headset-ip>
+python pc-studio/discovery.py --cameras
+python pc-studio/discovery.py --cameras --host <headset-ip>
 ```
 
 Discovery, catalog requests, `CONTEXT` and `PING` do not subscribe or start tracking.
@@ -123,7 +123,7 @@ Enable **Both eyes** under **LAN broadcast → Result sharing** in the companion
 
 Each little-endian 320-byte record has Python layout `<4sHHII6Q64f`. Its 64-byte header contains magic `PSE1`, version `1`, header size `64`, record size `320`, flags, capture session, verified service generation, result sequence, left and right inference-input timestamps in ns, and production monotonic time in ns. Flags 0/1 mark a new left/right observation; bits 2/3 mark that observation valid. The timestamp is zero for a side not updated; ignore its values.
 
-The payload contains `raw24` (20 expression and four original quality values), `post20` (before clamping), and `final20` (after temporal filtering). Each expression vector is left then right, ten values each: brow down, inner brow up, outer brow up, blink, look down/in/out/up, squint, wide. PSE1 is not a gaze-ray or pupil-position stream. Eye timestamps describe inference inputs; they do not assert a match to individual camera images or independent exposure times. The Python reader is `pc-tongue/stock.py:read_eye`.
+The payload contains `raw24` (20 expression and four original quality values), `post20` (before clamping), and `final20` (after temporal filtering). Each expression vector is left then right, ten values each: brow down, inner brow up, outer brow up, blink, look down/in/out/up, squint, wide. PSE1 is not a gaze-ray or pupil-position stream. Eye timestamps describe inference inputs; they do not assert a match to individual camera images or independent exposure times. The Python reader is `pc-studio/stock.py:read_eye`.
 
 ## Source lifecycle
 

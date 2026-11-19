@@ -21,9 +21,9 @@ The source also exposes independent left-eye and right-eye streams. Other client
 Tested with Windows, Python 3.12 and .NET 10. From this repository's root:
 
 ```powershell
-python -m venv pc-tongue/.venv
-pc-tongue/.venv/Scripts/python.exe -m pip install -r pc-tongue/requirements.txt
-pc-tongue/start.cmd
+python -m venv pc-studio/.venv
+pc-studio/.venv/Scripts/python.exe -m pip install -r pc-studio/requirements.txt
+pc-studio/start.cmd
 ```
 
 Open `http://127.0.0.1:8787`. The default Windows environment uses ONNX Runtime DirectML; it works with DirectX 12 GPUs without requiring NVIDIA. The page starts idle and UDP output is off.
@@ -42,19 +42,19 @@ Create a **separate venv** for each ORT distribution; do not install DirectML, G
 
 | Environment | Requirements |
 |---|---|
-| Windows default / DirectML | `pc-tongue/requirements.txt` |
-| CPU | `pc-tongue/requirements-cpu.txt` |
-| NVIDIA CUDA 12 | `pc-tongue/requirements-cuda.txt` |
-| Intel OpenVINO GPU | `pc-tongue/requirements-openvino.txt` |
+| Windows default / DirectML | `pc-studio/requirements.txt` |
+| CPU | `pc-studio/requirements-cpu.txt` |
+| NVIDIA CUDA 12 | `pc-studio/requirements-cuda.txt` |
+| Intel OpenVINO GPU | `pc-studio/requirements-openvino.txt` |
 
 For the tested CUDA 12.6 setup, install PyTorch's matching wheels first in the new venv:
 
 ```powershell
 python -m pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu126
-python -m pip install -r pc-tongue/requirements-cuda.txt
+python -m pip install -r pc-studio/requirements-cuda.txt
 ```
 
-Run that environment's Python against `pc-tongue/backend.py`. `auto` tries installed CUDA Graph → CUDA → OpenVINO GPU → DirectML → CPU, including first-execution checks. Explicit backend choices are strict. Actual providers and initialization failures appear in folded diagnostics. DirectML has been checked on NVIDIA hardware; AMD/Intel live hardware results remain for testers.
+Run that environment's Python against `pc-studio/backend.py`. `auto` tries installed CUDA Graph → CUDA → OpenVINO GPU → DirectML → CPU, including first-execution checks. Explicit backend choices are strict. Actual providers and initialization failures appear in folded diagnostics. DirectML has been checked on NVIDIA hardware; AMD/Intel live hardware results remain for testers.
 
 ## 2. Build and start the headset source
 
@@ -71,17 +71,17 @@ The official 2.5.2 main payload has no stock-label callback. JPEG remains availa
 Exact association also requires the main payload's `picoet_stock_input_identity_version()` export to return 1. Older development payloads with only the label sink still produce unassociated diagnostics. The matching build reports `association_ready_not_device_verified`: the mechanism is connected, while live-device acceptance remains pending.
 
 ```powershell
-python tongue-source/build.py android --ndk <NDK-directory> --cmake <cmake-executable> --ninja <ninja-executable>
+python camera-source/build.py android --ndk <NDK-directory> --cmake <cmake-executable> --ninja <ninja-executable>
 ```
 
-The outputs are in `tongue-source/build-android/`: `picoet-inject`, `libpicoet_camera_jpeg.so`, `libptj_source.so`, `ptj_ipc_daemon` and the module controller `picoet-camera`. No device libraries or old compiled objects are build inputs. An existing libjpeg-turbo 3.1.2 source checkout can be selected with `--jpeg-source` for an offline build.
+The outputs are in `camera-source/build-android/`: `picoet-inject`, `libpicoet_camera_jpeg.so`, `libptj_source.so`, `ptj_ipc_daemon` and the module controller `picoet-camera`. No device libraries or old compiled objects are build inputs. An existing libjpeg-turbo 3.1.2 source checkout can be selected with `--jpeg-source` for an offline build.
 
-For the matching main payload, build the `picoet_hook` target separately in the configured build directory; its output is `tongue-source/build-android/hook/libpicoet_hook.so`. Update it with the camera adapter, shim, controller and daemon for PTJIPC5. See [eye result subscriptions](CAMERA-PROTOCOL.md#eye-expression-results-pse1); the mouth workbench does not record PSE1.
+For the matching main payload, build the `picoet_hook` target separately in the configured build directory; its output is `camera-source/build-android/hook/libpicoet_hook.so`. Update it with the camera adapter, shim, controller and daemon for PTJIPC5. See [eye result subscriptions](CAMERA-PROTOCOL.md#eye-expression-results-pse1); the mouth workbench does not record PSE1.
 
 Stop all headset eye/face clients before the first injection. Use your own ADB serial:
 
 ```powershell
-python tongue-source/device.py start --serial <serial> --state pc-tongue/user-data/source-session.json
+python camera-source/device.py start --serial <serial> --state pc-studio/user-data/source-session.json
 ```
 
 `--adb <executable>` selects an ADB outside PATH. The command uploads into a unique root-private session directory, labels only its two DSOs `system_file`, serializes injection with the existing PicoET control lock, starts the daemon, sends an owner-bound start command and verifies IPC identity/nonce ACKs. It does not install a module, change SELinux policy or restart the service. On Android, the first image or label subscription starts this source's native tracking lease; the last unsubscribe releases it. Unsubscribed lanes are not copied or encoded. The LAN TCP stream is unencrypted and unauthenticated: use a trusted private network, not an exposed interface/port-forward.
@@ -89,8 +89,8 @@ python tongue-source/device.py start --serial <serial> --state pc-tongue/user-da
 Keep the state file. It identifies the device, boot, service instance and remote directory; subsequent commands use it rather than a remembered PID. For status and stop:
 
 ```powershell
-python tongue-source/device.py status --serial <serial> --state pc-tongue/user-data/source-session.json
-python tongue-source/device.py stop --serial <serial> --state pc-tongue/user-data/source-session.json
+python camera-source/device.py status --serial <serial> --state pc-studio/user-data/source-session.json
+python camera-source/device.py stop --serial <serial> --state pc-studio/user-data/source-session.json
 ```
 
 Stop disarms and drains callbacks, then checks the shim's join ACK before marking the session stopped. The disabled adapter/shim remain resident; do not `dlclose` them. Start with the **same state file** to reuse a successfully stopped adapter with a new daemon/session. Missing ACKs preserve the mapping and block reattach. A hook-install failure is terminal in that service instance: stop the owned unattached daemon and retain diagnostics rather than injecting repeatedly. After a normal service restart or reboot, use a new state file. Remote session files are retained for debugging; there is no broad cleanup command.
@@ -110,7 +110,7 @@ Settings → Connection and performance exposes **One-Euro resting smoothing (ms
 
 ### Whole-mouth model contract
 
-The schema is `pico-mouth50-v1`, ordered by `pc-tongue/face_schema.py`: MouthLink's original 44 fields followed by four independent upper/lower lip horizontal controls and two upper/lower Funnel controls. Preserve the old aggregate heads rather than inventing independent parts from a single stock value.
+The schema is `pico-mouth50-v1`, ordered by `pc-studio/face_schema.py`: MouthLink's original 44 fields followed by four independent upper/lower lip horizontal controls and two upper/lower Funnel controls. Preserve the old aggregate heads rather than inventing independent parts from a single stock value.
 
 The adjacent JSON declares the schema, `channels`, input `width/height`, `trained_channels`, `validated_channels` and `valid_mask`. Training records optimization coverage; only independently validated channels may have an output bit. Runtime also obeys an explicit zero or narrower mask. Export without `--approval` produces a zero-mask candidate, retaining its training provenance. Preprocessing resizes the full grayscale image with Pillow `BILINEAR` and divides by 255; normalization is inside the model. There is no legacy sqrt/mask geometry or horizontal flip of this side-view image.
 
@@ -148,7 +148,7 @@ The source label separates 48 stages made with the original morphs and official 
 Teacher/student training entry:
 
 ```powershell
-pc-tongue/.venv/Scripts/python.exe pc-tongue/face_train.py --help
+pc-studio/.venv/Scripts/python.exe pc-studio/face_train.py --help
 ```
 
 The sequence is teacher fine-tuning on owned data → teacher soft labels → direct-student/distillation comparison → ONNX export. DINO backbone code and checkpoints use explicit local paths, with no automatic downloads. Real training needs your valid data and weights. Mask unknown targets, prioritize reviewed labels over teacher predictions, and split by person/headset-fit session.
@@ -170,17 +170,17 @@ Replay accepts your own NPZ with `images[N,400,400]` uint8, `seq[N]`, and `times
 ## Offline verification
 
 ```powershell
-pc-tongue/.venv/Scripts/python.exe pc-tongue/check.py
+pc-studio/.venv/Scripts/python.exe pc-studio/check.py
 ```
 
 Python checks include real personal-model ONNX export; Node.js is needed for the bilingual UI tests. For native host checks, build from an x64 Visual Studio developer shell (or pass `--vcvars <vcvars64.bat>`):
 
 ```powershell
-python tongue-source/build.py host --cmake <cmake-executable> --ninja <ninja-executable>
-python tongue-source/checks/test_ipc.py
-python tongue-source/checks/test_borrowed.py
-python tongue-source/checks/test_camera.py
-python tongue-source/checks/test_device.py
+python camera-source/build.py host --cmake <cmake-executable> --ninja <ninja-executable>
+python camera-source/checks/test_ipc.py
+python camera-source/checks/test_borrowed.py
+python camera-source/checks/test_camera.py
+python camera-source/checks/test_device.py
 ```
 
 These use synthetic images, temporary files/processes and loopback sockets, never ADB. The current branch has source builds and offline coverage; sustained worn camera input, personal accuracy, original eye/mouth concurrency and VD coexistence still need live acceptance.

@@ -12,7 +12,7 @@ import unittest
 import test_ipc as ipc
 import test_camera as camera
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'pc-tongue'))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'pc-studio'))
 from stock import (StockRecord, STOCK_BYTES, EYE_WIRE, read_eye, read_stock, CaptureContext,
                     CaptureContextUnavailable, read_capture_context)
 from discovery import DISCOVER, discover_cameras, discover_sources

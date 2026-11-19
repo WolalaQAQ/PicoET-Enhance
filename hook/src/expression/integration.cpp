@@ -4,8 +4,8 @@
 #include "state.h"
 #include "high_rate.h"
 #include "mouth.h"
-#include "../../../tongue-source/stock_record.h"
-#include "../../../tongue-source/stock_input.h"
+#include "../../../camera-source/stock_record.h"
+#include "../../../camera-source/stock_input.h"
 
 #include <chrono>
 #include <cmath>

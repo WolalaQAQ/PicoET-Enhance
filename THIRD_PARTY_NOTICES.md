@@ -180,7 +180,7 @@ tool executables are distributed in the module.
 
 ## PC tongue development dependencies and upstream work
 
-The archived `pc-tongue/` segmentation architecture, preprocessing and geometry adapt
+The archived `pc-studio/` segmentation architecture, preprocessing and geometry adapt
 Rulez777's MIT-licensed PicoET-Enhance PR #4, pinned to
 `04fe68ac88e8c1fcaf504eba8223ebf33c629d93` for `shadow_model.py`, with calibration,
 personal mask-head training/acceptance and size hysteresis based on tongue.2
@@ -205,14 +205,14 @@ This software is based in part on the work of the Independent JPEG Group.
 The IJG license covers the libjpeg API and its SIMD implementation (whose source
 also carries zlib notices); the build system and TurboJPEG API carry a
 three-clause BSD license. This integration uses the libjpeg API, not TurboJPEG.
-`tongue-source/build.py` downloads a pinned source archive, builds it separately,
+`camera-source/build.py` downloads a pinned source archive, builds it separately,
 and retains `LICENSE.md` and `README.ijg` with the build outputs. The module includes both in `licenses/libjpeg-turbo/`. Keep those
 notices and this attribution when distributing a linked daemon. ShadowHook and
 the Android C++ runtime use the existing notices above.
 
 ## MouthLink interoperability
 
-The `pc-tongue/mouthlink.py` adapter and whole-mouth regression tools follow the ONNX/JSON contract and
+The `pc-studio/mouthlink.py` adapter and whole-mouth regression tools follow the ONNX/JSON contract and
 Pillow preprocessing of [UndefinedSignal/MouthLink](https://github.com/UndefinedSignal/MouthLink),
 reviewed at `39e091f4191d2ea1ad8536120924cdf61949dae2` (`training/export_onnx.py`,
 `tools/mouthlink_live.py`). Negative-pose sampling, session-wise validation and

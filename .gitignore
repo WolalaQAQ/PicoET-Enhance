@@ -12,14 +12,14 @@ Thumbs.db
 .DS_Store
 
 # PC tongue runtime and source-build outputs
-pc-tongue/.venv*/
-pc-tongue/assets/
-pc-tongue/user-data/
-pc-tongue/tests-work/
-pc-tongue/__pycache__/
-tongue-source/.deps/
-tongue-source/build-*/
-tongue-source/checks/__pycache__/
-tongue-source/__pycache__/
-tongue-source/checks/tests-work/
-tongue-source/checks/*results.json
+pc-studio/.venv*/
+pc-studio/assets/
+pc-studio/user-data/
+pc-studio/tests-work/
+pc-studio/__pycache__/
+camera-source/.deps/
+camera-source/build-*/
+camera-source/checks/__pycache__/
+camera-source/__pycache__/
+camera-source/checks/tests-work/
+camera-source/checks/*results.json

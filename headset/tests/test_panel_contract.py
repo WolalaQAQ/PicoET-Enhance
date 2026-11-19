@@ -329,7 +329,7 @@ class RootlessPanelContract(unittest.TestCase):
         packager = (ROOT/'build-picoet-enhance.ps1').read_text()
         for name in ('picoet-camera', 'ptj_ipc_daemon', 'libpicoet_camera_jpeg.so', 'libptj_source.so', 'licenses/libjpeg-turbo'):
             self.assertIn(name, packager)
-        controller = (ROOT/'tongue-source/camera_service.cpp').read_text()
+        controller = (ROOT/'camera-source/camera_service.cpp').read_text()
         self.assertIn('state_root+"/control.lock"', controller)
         self.assertIn('flock(lock,LOCK_EX)', controller)
         self.assertIn('camera_service::stopped(*c,instance.pid,instance.birth)', controller)

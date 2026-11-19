@@ -327,7 +327,7 @@ class Runtime:
                            'position': 0, 'total': None, 'finished': False}
         source = (lambda: self._replay(path)) if mode == 'replay' else self._receive
         self.threads = [threading.Thread(target=self._inference, name='tongue-inference', daemon=True),
-                        threading.Thread(target=source, name='tongue-source', daemon=True)]
+                        threading.Thread(target=source, name='camera-source', daemon=True)]
         if mode == 'live':
             self.threads.append(threading.Thread(target=self._clock_refresh, name='tongue-clock', daemon=True))
         for thread in self.threads:

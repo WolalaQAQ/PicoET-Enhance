@@ -21,9 +21,9 @@ PICO camera5嘴图lane（400×400灰度、目标90Hz真实新源）
 已使用Windows、Python 3.12与.NET 10验证。在仓库根目录执行：
 
 ```powershell
-python -m venv pc-tongue/.venv
-pc-tongue/.venv/Scripts/python.exe -m pip install -r pc-tongue/requirements.txt
-pc-tongue/start.cmd
+python -m venv pc-studio/.venv
+pc-studio/.venv/Scripts/python.exe -m pip install -r pc-studio/requirements.txt
+pc-studio/start.cmd
 ```
 
 打开`http://127.0.0.1:8787`。Windows默认使用ONNX Runtime DirectML，可用DirectX 12显卡，不要求NVIDIA。网页启动时不采集，UDP默认关闭。
@@ -42,19 +42,19 @@ pc-tongue/start.cmd
 
 | 环境 | 依赖文件 |
 |---|---|
-| Windows默认／DirectML | `pc-tongue/requirements.txt` |
-| CPU | `pc-tongue/requirements-cpu.txt` |
-| NVIDIA CUDA 12 | `pc-tongue/requirements-cuda.txt` |
-| Intel OpenVINO GPU | `pc-tongue/requirements-openvino.txt` |
+| Windows默认／DirectML | `pc-studio/requirements.txt` |
+| CPU | `pc-studio/requirements-cpu.txt` |
+| NVIDIA CUDA 12 | `pc-studio/requirements-cuda.txt` |
+| Intel OpenVINO GPU | `pc-studio/requirements-openvino.txt` |
 
 已测CUDA 12.6环境先在新venv安装匹配的PyTorch：
 
 ```powershell
 python -m pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu126
-python -m pip install -r pc-tongue/requirements-cuda.txt
+python -m pip install -r pc-studio/requirements-cuda.txt
 ```
 
-用该环境的Python运行`pc-tongue/backend.py`。`auto`依次尝试已安装的CUDA Graph→CUDA→OpenVINO GPU→DirectML→CPU，包含首次执行检查；显式选择后端时不自动换用另一后端。实际提供器与初始化失败原因在折叠诊断中显示。DirectML已在NVIDIA上核对，AMD／Intel真机仍待测试者验证。
+用该环境的Python运行`pc-studio/backend.py`。`auto`依次尝试已安装的CUDA Graph→CUDA→OpenVINO GPU→DirectML→CPU，包含首次执行检查；显式选择后端时不自动换用另一后端。实际提供器与初始化失败原因在折叠诊断中显示。DirectML已在NVIDIA上核对，AMD／Intel真机仍待测试者验证。
 
 ## 2. 构建并启动头显源
 
@@ -71,17 +71,17 @@ python -m pip install -r pc-tongue/requirements-cuda.txt
 精确关联还要求主payload导出`picoet_stock_input_identity_version()`并返回1。只有旧标签sink的开发件仍只发送未关联诊断；当前配套件显示`association_ready_not_device_verified`，表示机制已接线，实际设备验收仍待完成。
 
 ```powershell
-python tongue-source/build.py android --ndk <NDK目录> --cmake <cmake可执行文件> --ninja <ninja可执行文件>
+python camera-source/build.py android --ndk <NDK目录> --cmake <cmake可执行文件> --ninja <ninja可执行文件>
 ```
 
-输出在`tongue-source/build-android/`：`picoet-inject`、`libpicoet_camera_jpeg.so`、`libptj_source.so`、`ptj_ipc_daemon`及模块控制器`picoet-camera`，不以设备库或旧编译对象为输入。已有libjpeg-turbo 3.1.2源码可用`--jpeg-source`选择，离线构建。
+输出在`camera-source/build-android/`：`picoet-inject`、`libpicoet_camera_jpeg.so`、`libptj_source.so`、`ptj_ipc_daemon`及模块控制器`picoet-camera`，不以设备库或旧编译对象为输入。已有libjpeg-turbo 3.1.2源码可用`--jpeg-source`选择，离线构建。
 
-需要配套主 payload 时，在配置好的构建目录另构建 `picoet_hook` 目标，产出 `tongue-source/build-android/hook/libpicoet_hook.so`。PTJIPC5 需要与相机 adapter、shim、控制器和 daemon 成套更新。眼部结果订阅见[协议](CAMERA-PROTOCOL.md#eye-expression-results-pse1)；整嘴工作台不录制 PSE1。
+需要配套主 payload 时，在配置好的构建目录另构建 `picoet_hook` 目标，产出 `camera-source/build-android/hook/libpicoet_hook.so`。PTJIPC5 需要与相机 adapter、shim、控制器和 daemon 成套更新。眼部结果订阅见[协议](CAMERA-PROTOCOL.md#eye-expression-results-pse1)；整嘴工作台不录制 PSE1。
 
 首次注入前停止所有头显眼／面部客户端，使用自己的ADB序列号：
 
 ```powershell
-python tongue-source/device.py start --serial <serial> --state pc-tongue/user-data/source-session.json
+python camera-source/device.py start --serial <serial> --state pc-studio/user-data/source-session.json
 ```
 
 ADB不在PATH时用`--adb <可执行文件>`。命令上传到本轮唯一root私有目录，仅将两份DSO标为`system_file`，通过现有PicoET控制锁注入，启动daemon，发送绑定owner的start命令并核对IPC身份／nonce ACK。不安装模块、不改SELinux策略、不重启服务。Android端在第一个图像或标签订阅到来时取得本服务的原生追踪租约，最后一个退订后释放；未被订阅的图像通道不复制、不编码。LAN TCP没有加密或认证，只在可信私网使用，不向外网暴露或转发端口。
@@ -89,8 +89,8 @@ ADB不在PATH时用`--adb <可执行文件>`。命令上传到本轮唯一root�
 保留state文件，其中绑定设备、boot、服务实例和远端目录。查询及停止使用同一个文件，不沿用记忆中的PID：
 
 ```powershell
-python tongue-source/device.py status --serial <serial> --state pc-tongue/user-data/source-session.json
-python tongue-source/device.py stop --serial <serial> --state pc-tongue/user-data/source-session.json
+python camera-source/device.py status --serial <serial> --state pc-studio/user-data/source-session.json
+python camera-source/device.py stop --serial <serial> --state pc-studio/user-data/source-session.json
 ```
 
 Stop先disarm并排空回调，再确认shim的join后ACK才标记停止。禁用的adapter／shim仍驻留，不要`dlclose`。成功停止后再次Start使用**同一个state文件**，复用adapter、新建daemon／session。缺ACK时保留映射、禁止重新attach；hook安装失败在该服务实例中为终态，应停止本轮未attach的daemon、保留诊断，不反复注入。正常重启服务或头显后改用新的state文件。远端会话文件留作诊断，不提供广泛清理命令。
@@ -110,7 +110,7 @@ App不选择PICO／Cymple嘴部来源。日常Cymple嘴＋PICO眼时保持本PIC
 
 ### 整嘴模型契约
 
-schema为`pico-mouth50-v1`，字段顺序由`pc-tongue/face_schema.py`定义：MouthLink原44字段，再追加上下唇各自左右横移四项和上下Funnel两项。保留旧聚合head，不从单个原厂量伪造独立上下／左右。
+schema为`pico-mouth50-v1`，字段顺序由`pc-studio/face_schema.py`定义：MouthLink原44字段，再追加上下唇各自左右横移四项和上下Funnel两项。保留旧聚合head，不从单个原厂量伪造独立上下／左右。
 
 同名JSON声明schema、`channels`、输入`width/height`、`trained_channels`、`validated_channels`和`valid_mask`。训练记录优化覆盖，只有通过独立验证的通道才可置输出位；运行端也遵守显式的零掩码或更窄掩码。不传`--approval`的导出保留训练来源，输出有效位为零。预处理为完整灰度图的Pillow `BILINEAR`缩放后除以255，归一化由模型完成，不使用旧sqrt／mask几何，也不做侧视图水平翻转。
 
@@ -148,7 +148,7 @@ MFR1直接发送命名连续控制值，不套用旧TJR方向.15–.55映射、�
 教师／学生训练入口：
 
 ```powershell
-pc-tongue/.venv/Scripts/python.exe pc-tongue/face_train.py --help
+pc-studio/.venv/Scripts/python.exe pc-studio/face_train.py --help
 ```
 
 流程为自有数据微调教师→教师产软标签→直接监督学生／蒸馏对照→ONNX导出。DINO骨干代码与checkpoint使用显式本地路径，不自动下载；正式训练需要你自己的有效数据和权重。未知标签用mask排除，人工审核标签优先于教师预测，训练／验证按人物和佩戴会话分开。
@@ -170,17 +170,17 @@ CLI子命令包括`split`、`student-baseline`、`teacher-train`、`validate-can
 ## 离线验证
 
 ```powershell
-pc-tongue/.venv/Scripts/python.exe pc-tongue/check.py
+pc-studio/.venv/Scripts/python.exe pc-studio/check.py
 ```
 
 Python测试包含真实个人ONNX导出；双语网页测试需要Node.js。Native host测试从x64 Visual Studio开发终端构建，或传`--vcvars <vcvars64.bat>`：
 
 ```powershell
-python tongue-source/build.py host --cmake <cmake可执行文件> --ninja <ninja可执行文件>
-python tongue-source/checks/test_ipc.py
-python tongue-source/checks/test_borrowed.py
-python tongue-source/checks/test_camera.py
-python tongue-source/checks/test_device.py
+python camera-source/build.py host --cmake <cmake可执行文件> --ninja <ninja可执行文件>
+python camera-source/checks/test_ipc.py
+python camera-source/checks/test_borrowed.py
+python camera-source/checks/test_camera.py
+python camera-source/checks/test_device.py
 ```
 
 这些仅使用合成图、临时文件／进程和环回socket，不调用ADB。当前分支完成源码构建与离线覆盖；真人持续新源、个人准确性、原厂眼嘴并发及VD共存仍待真机验收。

@@ -195,7 +195,7 @@ Building requires Python 3, JDK 17 or newer (`JAVA_HOME`), Android platform 35 a
 
 ```powershell
 pwsh -File hook\build-hook.ps1                 # build the injector and payload
-python tongue-source/build.py android --ndk "$env:ANDROID_HOME/ndk/26.1.10909125" --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe" --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
+python camera-source/build.py android --ndk "$env:ANDROID_HOME/ndk/26.1.10909125" --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe" --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
 pwsh -File build-picoet-enhance.ps1 -Python python # build companion and package the Magisk zip
 ```
 

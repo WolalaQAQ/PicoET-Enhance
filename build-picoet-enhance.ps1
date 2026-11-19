@@ -27,7 +27,7 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $moduleDir = Join-Path $PSScriptRoot 'magisk-picoet-enhance'
 if (-not $HookDir) { $HookDir = Join-Path $PSScriptRoot 'hook' }
-if (-not $CameraDir) { $CameraDir = Join-Path $PSScriptRoot 'tongue-source/build-android' }
+if (-not $CameraDir) { $CameraDir = Join-Path $PSScriptRoot 'camera-source/build-android' }
 if (-not $OutputDir) { $OutputDir = Join-Path $root 'artifacts' }
 
 $scripts = @('module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'picoet.sh',

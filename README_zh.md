@@ -195,7 +195,7 @@ sh "$MOD/picoet.sh" reload-processing
 
 ```powershell
 pwsh -File hook\build-hook.ps1                 # 构建 injector 与 payload
-python tongue-source/build.py android --ndk "$env:ANDROID_HOME/ndk/26.1.10909125" --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe" --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
+python camera-source/build.py android --ndk "$env:ANDROID_HOME/ndk/26.1.10909125" --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe" --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
 pwsh -File build-picoet-enhance.ps1 -Python python # 构建面板并打包 Magisk zip
 ```
 
