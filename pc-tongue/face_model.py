@@ -65,7 +65,8 @@ class FaceModel(TongueModel):
                     unsupported_channels=[name for name in CHANNELS if name not in self.output_channels],
                     image_shape=[400, 400], input_shape=list(self.input_shape),
                     preprocessing='Pillow BILINEAR GRAY8 /255; no crop or horizontal flip',
-                    temporal_smoothing=False, geometry=False, cpu_threads=1, load_ms=self.load_ms)
+                    temporal_smoothing=False, runtime_filter='One-Euro; smoothing_ms=0 bypasses',
+                    geometry=False, cpu_threads=1, load_ms=self.load_ms)
 
     def predict(self, image, config=None):
         if image.shape != (400, 400) or image.dtype != np.uint8:

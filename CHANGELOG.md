@@ -4,10 +4,19 @@ English | [简体中文](CHANGELOG_zh.md)
 
 ## [Unreleased]
 
+### Features
+- Filter valid face50 channels with source-time One-Euro smoothing; expose `smoothing_ms` in the bilingual Settings page and preserve raw predictions alongside filtered logs.
+- Document the matching receiver's native-first Hybrid and exclusive ModelOnly modes, with one module-side selector.
 - Put LAN broadcast and post-processing in two tabs. Keep the tuning sidebar and parameter panel, and group the two independent result switches.
 - Use `--continue-recording` to offer the remaining actions from a stopped guided recording. The continuation saves separately and stays in the same dataset split group.
 - Keep live camera preview visible during guidance. Choose automatic or manual step advance, adjust preparation time, move to any step, and resume the last unfinished guide from the recording page.
 - Distinguish an image stream closing between frames from an incomplete header or payload.
+
+### Design Rationale
+- Use actual image-sensor intervals and a speed-adaptive cutoff to reduce jitter without a fixed frame queue. Keep model inference stateless and filtering in the runtime.
+
+### Notes & Caveats
+- Zero smoothing is exact passthrough. Session/model changes, invalid results, mask changes and long source gaps reset state. Output permission still comes from independently validated manifest bits; smoothing does not repair sustained model errors.
 
 ## [2.6.0-dev.2] - 2026-11-18
 

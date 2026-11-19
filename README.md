@@ -8,6 +8,8 @@ An eye-tracking enhancement Magisk module for the PICO 4 Pro: it opens the eye-t
 
 **End-to-end mouth tracking development:** `feat/tongue-pc` follows [MouthLink](https://github.com/UndefinedSignal/MouthLink)-style whole-mouth regression: the headset captures images, the PC handles configuration, recording, training and inference, and the matching UnifiedPicoModule branch merges the outputs. Personal images, teacher predictions and student weights stay on the user's PC. Follow the [source-build and testing guide](TONGUE.md); this branch's module includes optional LAN cameras, but no validated general-purpose mouth model.
 
+Whole-mouth output supports module-side `Hybrid` (fresh native-first) and `ModelOnly` modes. The PC app offers source-time One-Euro smoothing under Settings; `smoothing_ms=0` passes values through unchanged. See [runtime settings](TONGUE.md#3-run-end-to-end).
+
 ## What it does
 
 The PICO 4 Pro firmware tracks each eye, but its facial expression model mixes the two eyes before output, so blink, look direction, wideness and brows for one eye depend on the other eye's inputs. It also updates these expressions only about 24 times a second, although the eye cameras run at 90 Hz. This module changes three things at runtime:

@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw
 from state import TongueState
 from personalization import Personalization, apply_calibration
 from face_schema import ALL_VALID, CHANNELS, SCHEMA
+from face_filter import FaceFilter
 from wire import END, JPEG, REPLAY, FrameHeader, SourceOrder, read_frame, result_packet, face_result_packet, sync_clock
 
 ROOT = Path(__file__).resolve().parent
@@ -77,6 +78,7 @@ class Runtime:
         self.last_error = None
         self.pending = None
         self.source = self.prediction_source = None
+        self.face_filter = FaceFilter()
         self.prediction = self._invalid('stopped')
         self.model = None
         self.model_key = None
@@ -130,6 +132,7 @@ class Runtime:
     def _invalid(self, reason):
         if self.config['model_kind'] != 'face50':
             return TongueState.invalid(reason)
+        self.face_filter.clear()
         return dict(schema=SCHEMA, values=[0.]*50, channels={}, valid_mask=0,
                     state=reason, fresh=False, override=False)
 
@@ -870,20 +873,26 @@ class Runtime:
                         self.tongue.clear()
                     if config['model_kind'] == 'face50':
                         prediction = self._face_prediction(raw) if upper <= config['stale_ms'] else self._invalid('stale')
+                        prediction = self.face_filter.apply(prediction, header, config)
                     else:
                         raw = apply_calibration(raw, self.personal.profile['calibration'],
                                                 active=self.tongue.visual is not None,
                                                 hysteresis=config['size_hysteresis'])
                         prediction = self.tongue.update(raw, header, config) if upper <= config['stale_ms'] else self._invalid('stale')
+                    published = time.perf_counter_ns()
+                    age, upper = self._age(header, published)
+                    if upper > config['stale_ms']:
+                        prediction = self._invalid('stale')
                     self.prediction = dict(json_value(raw), **prediction)
                     frame_prediction = dict(self.prediction)
                     output_session_id = self.output_session_id
                     preview_version = self.model_version
                     self.prediction_source = self.last_header = header
-                    self.last_result_ns = finished
+                    self.last_result_ns = published
                     self.latencies.append({'source_copy_to_result_ms': age,
                                            'queue_ms': (begin-received)/1e6,
-                                           'pc_total_ms': (finished-received)/1e6,
+                                           'pc_total_ms': (published-received)/1e6,
+                                           'filter_ms': (published-finished)/1e6,
                                            'decode_ms': (decoded-begin)/1e6,
                                            'predict_ms': (finished-decoded)/1e6})
                     self._send_result(header, prediction, upper)
@@ -895,7 +904,7 @@ class Runtime:
                             self.preview = preview
                             self.last_preview_ns = finished
                 entry = dict(asdict(header), received_pc_ns=received, decode_begin_pc_ns=begin,
-                             decoded_pc_ns=decoded, inferred_pc_ns=finished,
+                             decoded_pc_ns=decoded, inferred_pc_ns=finished, published_pc_ns=published,
                              source_age_ms=age, source_age_upper_ms=upper if math.isfinite(upper) else None,
                              output_session_id=output_session_id, prediction=frame_prediction)
                 self.log.write(json.dumps(entry, ensure_ascii=False, allow_nan=False)+'\n')

@@ -1,14 +1,14 @@
 import {errorMessage, initialLanguage, LANGUAGE_KEY, messages} from "./i18n.mjs";
 
 const TEXT_FIELDS = ["headset_host", "model_path", "device", "replay_path"];
-const NUMBER_FIELDS = ["headset_port", "stale_ms", "preview_fps", "output_port"];
+const NUMBER_FIELDS = ["headset_port", "stale_ms", "preview_fps", "output_port", "smoothing_ms"];
 const RELAY_OPTION_IDS = ["cymple-host", "cymple-port", "cymple-left-port", "cymple-right-port", "cymple-left-rotate", "cymple-left-hflip", "cymple-left-vflip", "cymple-right-rotate", "cymple-right-hflip", "cymple-right-vflip"];
 export const PRIMARY_CHANNELS = ["JawOpen", "MouthPucker", "MouthSmileL", "MouthSmileR", "TongueOut", "TongueLeft", "TongueRight", "TongueUp", "TongueDown", "TongueRoll"];
 export const PAGES = ["tracking", "recording", "training", "preferences"];
 const PAGE_NAV = {tracking: "workspace", recording: "recording", training: "training", preferences: "advanced"};
 export function routePage(hash = "") { const page = hash.replace(/^#\/?/, ""); return PAGES.includes(page) ? page : "tracking"; }
 const LABELS = {title: "title", "host-label": "host", "model-label": "model", "model-help": "modelHelp", start: "start", capture: "capture", stop: "stop",
-  "advanced-title": "advanced", "diagnostics-title": "diagnostics", "port-label": "port", "device-label": "device", "expiry-label": "expiry", "fps-label": "fps",
+  "advanced-title": "advanced", "diagnostics-title": "diagnostics", "port-label": "port", "device-label": "device", "expiry-label": "expiry", "fps-label": "fps", "smoothing-label": "smoothing",
   "udp-label": "udp", "output-port-label": "outputPort", "settings-help": "settingsHelp", save: "save", replay: "replay", "replay-path-label": "replayPath",
   "preview-label": "preview", "all-channels-title": "allChannels", "unknown-help": "unknownHelp", migration: "migration",
   "recording-title": "recordingTitle", "record-help": "recordHelp", "person-label": "person", "guided-label": "guided", "voice-label": "voice", "consent-label": "consent",

@@ -182,6 +182,7 @@
           <label><span id="device-label">Inference device</span><select id="device" form="settings"><option value="auto">Auto</option><option value="cuda">CUDA</option><option value="dml">DirectML</option><option value="openvino">OpenVINO GPU</option><option value="cpu">CPU</option></select></label>
           <label><span id="expiry-label">Result expiry (ms)</span><input id="stale_ms" form="settings" type="number" min="1" required></label>
           <label><span id="fps-label">Preview rate (fps)</span><input id="preview_fps" form="settings" type="number" min="1" max="30" required></label>
+          <label><span id="smoothing-label">One-Euro resting smoothing (ms; 0 = off)</span><input id="smoothing_ms" form="settings" type="number" min="0" step="1" required></label>
         </div>
         <label><span id="output-port-label">UDP port on this PC</span><input id="output_port" form="settings" type="number" min="1" max="65535" required></label>
         <p id="migration" class="hint" hidden></p>

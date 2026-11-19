@@ -127,6 +127,16 @@ class FaceRuntimeTests(unittest.TestCase):
         self.runtime.description['validated_channels'] = ['TongueOut']
         self.assertEqual(self.runtime._face_prediction(raw)['valid_mask'], 1 << INDEX['TongueOut'])
 
+    def test_face50_logs_keep_raw_output_and_stop_clears_filter(self):
+        self.start(); self.submit()
+        wait_for(lambda: self.runtime.counts['inferred'] == 1)
+        self.assertEqual(self.runtime.prediction['raw_values'], self.runtime.prediction['values'])
+        self.assertIsNotNone(self.runtime.face_filter.values)
+        self.runtime.stop()
+        self.assertIsNone(self.runtime.face_filter.values)
+        rows = [json.loads(line) for line in (self.runtime.run_dir/'frames.jsonl').read_text().splitlines()]
+        self.assertEqual(rows[0]['prediction']['raw_values'], rows[0]['prediction']['values'])
+
     def test_mfr1_all_fields_stop_expiry_and_session_release(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sink:
             sink.bind(('127.0.0.1', 0)); sink.settimeout(2)

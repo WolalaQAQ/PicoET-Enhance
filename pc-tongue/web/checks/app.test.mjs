@@ -22,7 +22,7 @@ function setup(t, options = {}) {
   elements.get("preview-enabled").checked = true; elements.get("guide-enabled").checked = true; elements.get("label-stage").value = "raw_only"; elements.get("person_id").value = "me"; elements.get("receive-results").checked = true;
   elements.get("cymple-host").value = "127.0.0.1"; elements.get("cymple-port").value = "23303"; elements.get("cymple-left-port").value = "45682"; elements.get("cymple-right-port").value = "45683"; elements.get("cymple-left-rotate").value = "0"; elements.get("cymple-right-rotate").value = "0";
   const doc = {documentElement: {}, hidden: false, title: "", createElement: () => new Element(), getElementById: id => { assert.ok(elements.has(id), id); return elements.get(id); }};
-  const config = {headset_host: "headset.example", headset_port: 45681, model_path: "D:/models/student.onnx", model_kind: "face50", device: "auto", stale_ms: 350, preview_fps: 10,
+  const config = {headset_host: "headset.example", headset_port: 45681, model_path: "D:/models/student.onnx", model_kind: "face50", device: "auto", stale_ms: 350, preview_fps: 10, smoothing_ms: 20,
     replay_path: "D:/data/reference.npz", enabled: false, output_enabled: false, output_host: "127.0.0.1", output_port: 45682};
   const trained = ["JawOpen", "TongueOut", "TongueLeft"];
   const server = {config, calls: [], before: null, failStatus: false, failStart: false, previewStatus: 200, status: {
@@ -384,6 +384,17 @@ test("guide phase controls use real ready/finish/confirm/skip API, never auto-ap
   const {app, el, server} = setup(t); await app.init(); await app.start("capture"); el("person_id").value = "local"; el("record-consent").checked = true; el("person_id").emit("change"); await app.record("begin");
   assert.equal(el("guide-ready").disabled, false); assert.equal(el("guide-confirm").disabled, true); await app.record("ready");
   assert.equal(el("guide-step").textContent, "Hold"); assert.ok(!server.calls.some(c => c.path.includes("review")));
+});
+test("One-Euro smoothing is configurable, bilingual and saving zero never starts tracking", async t => {
+  const {app, server, el} = setup(t); await app.init();
+  assert.equal(el("smoothing_ms").value, "20");
+  el("smoothing_ms").value = "0"; el("settings").emit("input"); app.setLanguage("zh-CN");
+  assert.equal(el("smoothing-label").textContent, messages["zh-CN"].smoothing);
+  assert.equal(el("smoothing_ms").value, "0"); await app.save();
+  const posted = JSON.parse(server.calls.find(c => c.path === "/api/config" && c.method === "POST").body);
+  assert.equal(posted.smoothing_ms, 0);
+  assert.ok(!server.calls.some(c => c.path === "/api/start"));
+  assert.ok(!("mouth_mode" in posted)); assert.ok(!("face_source" in posted));
 });
 test("image-only recording sends an explicit result opt-out and locks it after start", async t => {
   const {app, server, el} = setup(t);

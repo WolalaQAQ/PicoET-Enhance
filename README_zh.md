@@ -8,6 +8,8 @@
 
 **端到端嘴追开发：**`feat/tongue-pc`采用[MouthLink](https://github.com/UndefinedSignal/MouthLink)式整嘴回归：头显取图，PC配置、录制、训练和推理，配套UnifiedPicoModule同名分支合并输出。个人图像、教师预测与学生权重留在用户PC。按[源码构建与测试说明](TONGUE_zh.md)使用；本分支的模块包含可选局域网相机，不附带已验收的通用整嘴权重。
 
+整嘴输出可在模块端选择`Hybrid`（原厂有效新鲜值优先）或`ModelOnly`（完整模型）模式。PC设置页提供按源时间计算的One-Euro平滑，`smoothing_ms=0`逐值直通。见[运行设置](TONGUE_zh.md#3-连通全链路)。
+
 ## 它做什么
 
 PICO 4 Pro 的固件会对左右眼分别追踪，但面部表情模型在输出前把两眼混合，一侧的 Blink、视线方向、Wide 和眉部会受另一侧输入影响。眼部相机以 90 Hz 运行，这些表情却每秒只更新约 24 次。本模块在运行期做三处改动：
