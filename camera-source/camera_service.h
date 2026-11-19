@@ -51,4 +51,10 @@ inline bool unattached_stopped(const ipc::Channel& c) {
     return ipc::valid_header(c) && !c.client_ready && !c.client_pid && c.stop_ack &&
         c.stop_ack_session==c.session && (c.state==ipc::Stopped || c.state==ipc::Failed);
 }
+inline bool fresh_heartbeat(uint64_t beat, uint64_t now, uint64_t limit=ipc::HEARTBEAT_NS) {
+    return beat && (now>=beat ? now-beat<limit : beat-now<limit);
+}
+inline bool unattached_failed(const ipc::Channel& c) {
+    return ipc::valid_header(c) && !c.client_ready && !c.client_pid && c.state==ipc::Failed;
+}
 }

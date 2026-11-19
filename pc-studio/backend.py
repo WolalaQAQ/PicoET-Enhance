@@ -13,6 +13,7 @@ from file_dialog import select_model
 from face_presets import SEALED_PROFILES, capture_continuation, capture_presets
 from capture_control import CaptureControl, LANCameraSource
 from cymple_relay import CympleEyeRelay
+from updater import UpdateChecker
 
 
 def make_guide_server(store, port=57102):
@@ -88,11 +89,12 @@ def _relay_config_path(runtime):
 
 
 def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sources, model_picker=select_model,
-                capture=None, cymple_relay=None):
+                capture=None, cymple_relay=None, update_checker=None):
     web = ROOT/'web'
     control = threading.Lock()
     sealed_c = capture is not None and capture.sealed_preset is not None
     relay = cymple_relay if cymple_relay is not None else CympleEyeRelay(_relay_config_path(runtime), runtime=runtime)
+    checker = update_checker if update_checker is not None else UpdateChecker()
 
     def combined_status():
         return dict((capture or runtime).status(), cymple_relay=relay.status())
@@ -132,6 +134,9 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                     return self.respond(400, {'error': str(error)})
             if path == '/api/status':
                 return self.respond(200, combined_status())
+            if path == '/api/update-check':
+                force = (query.get('force', [''])[0] or '').strip().lower() in ('1', 'true', 'yes')
+                return self.respond(200, checker.check(force=force))
             if path == '/api/discovery':
                 try:
                     return self.respond(200, discover())
@@ -147,7 +152,12 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
             file = (web/relative).resolve()
             if not file.is_relative_to(web.resolve()) or not file.is_file():
                 return self.respond(404, {'error': 'Not found'})
-            content_type = mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
+            if file.name.endswith('.ico'):
+                content_type = 'image/x-icon'
+            elif file.name.endswith('.png'):
+                content_type = 'image/png'
+            else:
+                content_type = mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
             if content_type.startswith('text/') or content_type == 'application/javascript':
                 content_type += '; charset=utf-8'
             return self.respond(200, file.read_bytes(), content_type)

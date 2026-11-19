@@ -288,6 +288,7 @@ class CympleEyeRelay:
                     tcp_sock = socket.create_connection((src_host, src_port), timeout=4)
                     tcp_sock.settimeout(4)
                     tcp_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    wire.enable_keepalive(tcp_sock)
                     with self.lock:
                         if self.stop_event.is_set():
                             break
@@ -298,7 +299,10 @@ class CympleEyeRelay:
                     tcp_sock.sendall(b'JPEG\n')
 
                     while not self.stop_event.is_set():
-                        header, payload = wire.read_frame(tcp_sock)
+                        try:
+                            header, payload = wire.read_frame(tcp_sock)
+                        except wire.IdleStreamTimeout:
+                            continue
                         if header.flags & wire.END:
                             with self.lock:
                                 if not self.stop_event.is_set():

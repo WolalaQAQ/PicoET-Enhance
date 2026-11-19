@@ -90,9 +90,18 @@ struct Channel {
     ipc::Channel* get(){return static_cast<ipc::Channel*>(mapping.address);}
 };
 bool fresh(const ipc::Channel& channel) {
-    int error=0;const uint64_t now=ipc::mono_ns(),beat=channel.daemon_heartbeat;
+    int error=0;
+    const uint64_t beat=channel.daemon_heartbeat.load(std::memory_order_acquire);
+    const uint64_t now=ipc::mono_ns();
     return ipc::valid_header(channel) && ipc::birth(channel.daemon_pid,error)==channel.daemon_birth &&
-        beat && now>=beat && now-beat<ipc::HEARTBEAT_NS;
+        camera_service::fresh_heartbeat(beat,now);
+}
+bool reusable_stopped(const ipc::Channel* c) {
+    if(!c)return true;
+    int error=0;
+    const bool daemon_exited=ipc::birth(c->daemon_pid,error)!=c->daemon_birth;
+    return camera_service::stopped(*c,instance.pid,instance.birth) ||
+        (daemon_exited && (camera_service::unattached_stopped(*c) || camera_service::unattached_failed(*c)));
 }
 void wait(const std::function<bool()>& ready,const char* error) {
     const auto deadline=ipc::mono_ns()+10000000000ULL;
@@ -216,6 +225,11 @@ void retire_dead_instance() {
 void start() {
     retire_dead_instance();
     camera_service::Owner current{};
+    if(owner(current)) {
+        Channel channel;auto* c=channel.get();
+        if(c && fresh(*c) && c->state==ipc::Ready && camera_service::attached(*c,instance.pid,instance.birth) && !std::strcmp(current.state,"armed"))return;
+    }
+    if(address().empty())throw std::runtime_error("service_unavailable");
     if(!owner(current)) {
         if(read("/proc/"+std::to_string(instance.pid)+"/maps").find("libpicoet_camera_jpeg.so")!=std::string::npos)
             throw std::runtime_error("foreign_adapter");
@@ -236,10 +250,7 @@ void start() {
         Channel channel;auto* c=channel.get();
         if(c) {
             if(fresh(*c) && c->state==ipc::Ready && camera_service::attached(*c,instance.pid,instance.birth) && !std::strcmp(current.state,"armed"))return;
-            int error=0;
-            const bool unused_failure=ipc::valid_header(*c) && !c->client_ready && c->state==ipc::Failed &&
-                ipc::birth(c->daemon_pid,error)!=c->daemon_birth;
-            if(!unused_failure && !camera_service::stopped(*c,instance.pid,instance.birth))throw std::runtime_error("stop_pending");
+            if(!reusable_stopped(c))throw std::runtime_error("stop_pending");
         }
     }
     const std::string file=instance.stage+"/video-channel.bin";
@@ -252,8 +263,7 @@ void stop() {
     camera_service::Owner current{};if(!owner(current))return;
     {
         Channel channel;auto* c=channel.get();
-        if(!c && !std::strcmp(current.state,"idle"))return;
-        if(c && camera_service::stopped(*c,instance.pid,instance.birth) && !std::strcmp(current.state,"stopped"))return;
+        if(reusable_stopped(c) && (!std::strcmp(current.state,"idle") || !std::strcmp(current.state,"stopped")))return;
     }
     camera_command("stop");
     {
@@ -262,7 +272,7 @@ void stop() {
             if(kill(pid_t(c->daemon_pid),SIGTERM) && errno!=ESRCH)throw std::runtime_error("stop_pending");
         }
     }
-    wait([]{Channel channel;auto* c=channel.get();return c && (camera_service::stopped(*c,instance.pid,instance.birth)||camera_service::unattached_stopped(*c));},"stop_pending");
+    wait([]{Channel channel;return reusable_stopped(channel.get());},"stop_pending");
 }
 }
 int main(int argc,char** argv) {

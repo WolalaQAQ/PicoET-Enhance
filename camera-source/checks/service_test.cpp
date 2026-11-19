@@ -30,5 +30,14 @@ int main() {
     c.stop_client_nonce[0]=21;check(!camera_service::stopped(c,123,456));c.stop_client_nonce[0]=20;
     c.client_ready=0;c.client_pid=0;check(camera_service::unattached_stopped(c));
     c.client_pid=123;check(!camera_service::unattached_stopped(c));
+    c.state=ipc::Failed;c.stop_ack=0;c.client_ready=0;c.client_pid=0;check(camera_service::unattached_failed(c));
+    c.client_pid=123;check(!camera_service::unattached_failed(c));
+    c.client_pid=0;c.state=ipc::Ready;check(!camera_service::unattached_failed(c));
+    check(!camera_service::fresh_heartbeat(0,1000));
+    check(camera_service::fresh_heartbeat(1000,1000));
+    check(camera_service::fresh_heartbeat(1000,1000+ipc::HEARTBEAT_NS-1));
+    check(!camera_service::fresh_heartbeat(1000,1000+ipc::HEARTBEAT_NS));
+    check(camera_service::fresh_heartbeat(1005,1000));
+    check(!camera_service::fresh_heartbeat(1000+ipc::HEARTBEAT_NS,1000));
     std::cout<<checks<<" camera service ownership and stop checks passed\n";
 }

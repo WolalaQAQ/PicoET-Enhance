@@ -64,11 +64,34 @@ class FrameHeader:
                 self.raw_identity, self.raw_crc32)
 
 
+class IdleStreamTimeout(TimeoutError):
+    """No new PTJ1 frame started before the socket read timeout."""
+
+
+def enable_keepalive(sock, idle_ms=5000, interval_ms=1000):
+    """Enable OS TCP keepalive so dropped wireless links still fail idle reads."""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except (OSError, AttributeError):
+        return
+    sio_keepalive_vals = getattr(socket, 'SIO_KEEPALIVE_VALS', None)
+    if sio_keepalive_vals is not None and hasattr(sock, 'ioctl'):
+        try:
+            sock.ioctl(sio_keepalive_vals, (1, int(idle_ms), int(interval_ms)))
+        except (OSError, AttributeError, ValueError):
+            pass
+
+
 def read_exact(sock, size, *, part=None):
     result = bytearray(size)
     view = memoryview(result)
     while view:
-        count = sock.recv_into(view)
+        try:
+            count = sock.recv_into(view)
+        except TimeoutError as exc:
+            if part == 'header' and len(view) == size:
+                raise IdleStreamTimeout('Waiting for next PTJ1 frame') from exc
+            raise
         if count == 0:
             if part == 'header' and len(view) == size:
                 raise EOFError('PTJ1 stream closed between frames')
