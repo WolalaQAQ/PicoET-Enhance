@@ -43,6 +43,46 @@
         </section>
       </div>
       <p id="first-model-help" class="task-tip"><span id="first-model-text">No model yet?</span> <a id="go-capture" href="#/recording">Record your expressions</a></p>
+      <section id="cymple-relay" class="panel cymple-relay-panel" aria-labelledby="cymple-relay-title">
+        <div class="cymple-relay-head">
+          <div><span id="cymple-relay-eyebrow" class="eyebrow">EYE CAMERA RELAY</span><h2 id="cymple-relay-title">Forward eye cameras to Cymple</h2></div>
+          <span id="cymple-relay-status" class="status-pill" role="status"></span>
+        </div>
+        <p id="cymple-relay-help" class="hint"></p>
+        <div class="actions">
+          <button id="cymple-relay-start" type="button" disabled>Start eye relay</button>
+          <button id="cymple-relay-stop" type="button" disabled hidden>Stop eye relay</button>
+          <span id="cymple-relay-endpoint" class="hint"></span>
+        </div>
+        <div class="cymple-eye-grid">
+          <div class="cymple-eye-card"><div class="card-kicker"><strong id="cymple-left-title">Left eye</strong><span id="cymple-left-state" class="small-badge"></span></div><output id="cymple-left-metrics">—</output></div>
+          <div class="cymple-eye-card"><div class="card-kicker"><strong id="cymple-right-title">Right eye</strong><span id="cymple-right-state" class="small-badge"></span></div><output id="cymple-right-metrics">—</output></div>
+        </div>
+        <p id="cymple-relay-error" role="alert" hidden></p>
+        <details id="cymple-relay-options" class="disclosure-panel">
+          <summary id="cymple-relay-options-title">Relay ports and orientation</summary>
+          <div class="fields">
+            <label><span id="cymple-host-label">Cymple host</span><input id="cymple-host" value="127.0.0.1" autocomplete="off" spellcheck="false" required></label>
+            <label><span id="cymple-port-label">Cymple UDP port</span><input id="cymple-port" type="number" min="1" max="65535" value="23303" required></label>
+            <label><span id="cymple-left-port-label">Left eye port</span><input id="cymple-left-port" type="number" min="1" max="65535" value="45682" required></label>
+            <label><span id="cymple-right-port-label">Right eye port</span><input id="cymple-right-port" type="number" min="1" max="65535" value="45683" required></label>
+          </div>
+          <div class="cymple-orient-grid">
+            <div class="cymple-orient-group">
+              <strong id="cymple-left-orient-title">Left eye</strong>
+              <label><span id="cymple-left-rotate-label">Rotate clockwise</span><select id="cymple-left-rotate"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+              <label class="check"><input id="cymple-left-hflip" type="checkbox"><span id="cymple-left-hflip-label">Horizontal flip</span></label>
+              <label class="check"><input id="cymple-left-vflip" type="checkbox"><span id="cymple-left-vflip-label">Vertical flip</span></label>
+            </div>
+            <div class="cymple-orient-group">
+              <strong id="cymple-right-orient-title">Right eye</strong>
+              <label><span id="cymple-right-rotate-label">Rotate clockwise</span><select id="cymple-right-rotate"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+              <label class="check"><input id="cymple-right-hflip" type="checkbox"><span id="cymple-right-hflip-label">Horizontal flip</span></label>
+              <label class="check"><input id="cymple-right-vflip" type="checkbox"><span id="cymple-right-vflip-label">Vertical flip</span></label>
+            </div>
+          </div>
+        </details>
+      </section>
     </section>
 
     <section id="page-recording" class="task-page" aria-labelledby="title" hidden>

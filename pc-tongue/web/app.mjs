@@ -2,6 +2,7 @@ import {errorMessage, initialLanguage, LANGUAGE_KEY, messages} from "./i18n.mjs"
 
 const TEXT_FIELDS = ["headset_host", "model_path", "device", "replay_path"];
 const NUMBER_FIELDS = ["headset_port", "stale_ms", "preview_fps", "output_port"];
+const RELAY_OPTION_IDS = ["cymple-host", "cymple-port", "cymple-left-port", "cymple-right-port", "cymple-left-rotate", "cymple-left-hflip", "cymple-left-vflip", "cymple-right-rotate", "cymple-right-hflip", "cymple-right-vflip"];
 export const PRIMARY_CHANNELS = ["JawOpen", "MouthPucker", "MouthSmileL", "MouthSmileR", "TongueOut", "TongueLeft", "TongueRight", "TongueUp", "TongueDown", "TongueRoll"];
 export const PAGES = ["tracking", "recording", "training", "preferences"];
 const PAGE_NAV = {tracking: "workspace", recording: "recording", training: "training", preferences: "advanced"};
@@ -35,7 +36,15 @@ const LABELS = {title: "title", "host-label": "host", "model-label": "model", "m
   "reference-picker-title": "referencePicker", "record-options-title": "recordOptions", "replay-tools-title": "replayTools",
   "train-go-record": "goCapture", "train-go-review": "goReview",
   "train-step-one": "trainStepOne", "train-step-one-help": "trainStepOneHelp", "train-step-two": "trainStepTwo", "train-step-two-help": "trainStepTwoHelp",
-  "train-step-three": "trainStepThree", "train-step-three-help": "trainStepThreeHelp", "training-tools-title": "trainingTools", "training-tools-help": "trainingToolsHelp", "technical-error-title": "technicalError"};
+  "train-step-three": "trainStepThree", "train-step-three-help": "trainStepThreeHelp", "training-tools-title": "trainingTools", "training-tools-help": "trainingToolsHelp", "technical-error-title": "technicalError",
+  "cymple-relay-eyebrow": "cympleRelayEyebrow", "cymple-relay-title": "cympleRelayTitle", "cymple-relay-help": "cympleRelayHelp",
+  "cymple-relay-start": "cympleRelayStart", "cymple-relay-stop": "cympleRelayStop", "cymple-left-title": "cympleLeftEye", "cymple-right-title": "cympleRightEye",
+  "cymple-relay-options-title": "cympleRelayOptions", "cymple-host-label": "cympleHost", "cymple-port-label": "cymplePort",
+  "cymple-left-port-label": "cympleLeftPort", "cymple-right-port-label": "cympleRightPort",
+  "cymple-left-orient-title": "cympleLeftEye", "cymple-right-orient-title": "cympleRightEye",
+  "cymple-left-rotate-label": "cympleRotate", "cymple-right-rotate-label": "cympleRotate",
+  "cymple-left-hflip-label": "cympleHflip", "cymple-right-hflip-label": "cympleHflip",
+  "cymple-left-vflip-label": "cympleVflip", "cymple-right-vflip-label": "cympleVflip"};
 const MOVING_STEPS = new Set(["tongue_sweep", "negative_pucker_release", "negative_speech"]);
 const display = x => x == null || x === "" ? "—" : String(x);
 const fixed = (x, n = 1) => x != null && Number.isFinite(Number(x)) ? Number(x).toFixed(n) : "—";
@@ -95,7 +104,7 @@ export function createApp(doc, options = {}) {
     discovering: false, discovered: [], discoveryError: "", discoveryDone: false, discoveryKey: "", pickingModel: false,
     page: routePage(navigation?.location.hash), cameraPage: "", referencePaintedKey: "", visualReporting: false,
     presets: [], selectedPreset: null, presetPreview: false, presetOptionsKey: "", presetListKey: "", externalCase: null,
-    startStep: 0, archiveKey: ""};
+    startStep: 0, archiveKey: "", relayDirty: false, relayPortsManual: false, relayPortsAuto: false, relayError: "", relayErrorKey: ""};
   const t = key => messages[state.language][key] ?? key, view = () => deriveView(state.status, state.online, now()-state.at);
   const choiceLabel = value => messages[state.language][`choice-${value}`] ?? value;
   const fieldLabel = name => t(name === "device" ? "trainDevice" : name === "split" ? "splitPath" : name);
@@ -477,7 +486,9 @@ export function createApp(doc, options = {}) {
     renderConnection(current); renderPages();
     const error = state.error || state.pollError || state.status?.last_error;
     get("error").hidden = !error && !state.errorKey; get("error").textContent = state.errorKey ? t(state.errorKey) : error ? errorMessage(state.language, error) : "";
-    get("technical-error").textContent = [error, state.discoveryError, state.status?.recording?.error, state.status?.training?.error].filter(Boolean).join("\n\n") || "—";
+    const relayEyeErrors = ["eye_left", "eye_right"].map(k => state.status?.cymple_relay?.eyes?.[k]?.error).filter(Boolean);
+    const technicalParts = [...new Set([error, state.discoveryError, state.relayError, state.status?.cymple_relay?.error, ...relayEyeErrors, state.status?.recording?.error, state.status?.training?.error].filter(Boolean))];
+    get("technical-error").textContent = technicalParts.join("\n\n") || "—";
     get("migration").hidden = !state.status?.legacy_configuration_available;
     get("placeholder").textContent = t(!get("preview-enabled").checked ? "previewOff" : state.previewError ? "previewError" : "noVideo");
     makeRows();
@@ -508,7 +519,7 @@ export function createApp(doc, options = {}) {
     const replay = state.status?.replay; get("replay-info").textContent = replay?.path ? `${replay.path} · ${display(replay.position)} / ${display(replay.total)} ${t("frames")}${replay.finished ? ` · ${t("replayDone")}` : ""}` : t("replayReady");
     const focused=state.page==="recording" && state.status?.recording?.state==="recording" && state.status?.recording?.guide?.step;
     doc.documentElement.setAttribute?.("data-guiding",String(Boolean(focused)));
-    renderCapturePlan(current); renderRecord(current); renderReference(current); renderTraining(current); renderReview(current);
+    renderCapturePlan(current); renderRecord(current); renderReference(current); renderTraining(current); renderReview(current); renderCympleRelay(current);
     if(state.status?.managed_capture && state.page==="recording") {
       get("page-intro").textContent=t(state.status.capture_control?.sealed_c ? "sealedReady" : "captureSelfService");
     }
@@ -534,6 +545,79 @@ export function createApp(doc, options = {}) {
   function applyConfig(config) {
     state.config = config;
     if (!state.dirty) { for (const key of [...TEXT_FIELDS, ...NUMBER_FIELDS]) get(key).value = config[key] == null ? "" : String(config[key]); get("output_enabled").checked = config.output_enabled === true; }
+  }
+  function applyCympleRelay(relay) {
+    if (!relay?.config || state.relayDirty) return;
+    const cfg = relay.config;
+    get("cymple-host").value = cfg.cymple_host ?? "127.0.0.1";
+    get("cymple-port").value = String(cfg.cymple_port ?? 23303);
+    if (!state.relayPortsAuto) {
+      get("cymple-left-port").value = String(relay.left_port ?? cfg.left_port ?? 45682);
+      get("cymple-right-port").value = String(relay.right_port ?? cfg.right_port ?? 45683);
+    }
+    get("cymple-left-rotate").value = String(cfg.left_rotate ?? 0);
+    get("cymple-right-rotate").value = String(cfg.right_rotate ?? 0);
+    get("cymple-left-hflip").checked = cfg.left_hflip === true;
+    get("cymple-left-vflip").checked = cfg.left_vflip === true;
+    get("cymple-right-hflip").checked = cfg.right_hflip === true;
+    get("cymple-right-vflip").checked = cfg.right_vflip === true;
+  }
+  function applyDiscoveredEyePorts(device) {
+    if (!device?.streams || state.relayPortsManual || state.status?.cymple_relay?.running) return;
+    const left = device.streams.find(s => s.id === "eye_left")?.port;
+    const right = device.streams.find(s => s.id === "eye_right")?.port;
+    if (left) { get("cymple-left-port").value = String(left); state.relayPortsAuto = true; }
+    if (right) { get("cymple-right-port").value = String(right); state.relayPortsAuto = true; }
+  }
+  function readCympleRelayOptions() {
+    return {
+      headset_host: get("headset_host").value.trim(),
+      cymple_host: get("cymple-host").value.trim(),
+      cymple_port: Number(get("cymple-port").value),
+      left_port: Number(get("cymple-left-port").value),
+      right_port: Number(get("cymple-right-port").value),
+      left_rotate: Number(get("cymple-left-rotate").value),
+      left_hflip: get("cymple-left-hflip").checked === true,
+      left_vflip: get("cymple-left-vflip").checked === true,
+      right_rotate: Number(get("cymple-right-rotate").value),
+      right_hflip: get("cymple-right-hflip").checked === true,
+      right_vflip: get("cymple-right-vflip").checked === true,
+    };
+  }
+  function renderCympleRelay(current) {
+    const sealed = Boolean(state.status?.capture_control?.sealed_c);
+    const readOnly = Boolean(state.status?.read_only);
+    get("cymple-relay").hidden = sealed || readOnly;
+    const relay = state.status?.cymple_relay;
+    const relayRunning = relay?.running === true;
+    const capturePending = ["starting", "recording", "stopping"].includes(state.status?.capture_control?.state);
+    const blocked = !current.current || Boolean(state.busy) || sealed || readOnly || capturePending;
+    const relayState = current.current ? (relay?.state ?? "idle") : "offline";
+    const statusKey = {idle: "cympleStateIdle", connecting: "cympleStateConnecting", running: "cympleStateRunning",
+      reconnecting: "cympleStateReconnecting", offline: "offline"}[relayState] ?? "cympleStateIdle";
+    get("cymple-relay-status").textContent = t(statusKey);
+    get("cymple-relay-status").setAttribute("data-state", !current.current ? "offline" :
+      relayState === "running" ? "running" : ["connecting", "reconnecting"].includes(relayState) ? "connecting" : "stopped");
+    get("cymple-relay-start").hidden = relayRunning;
+    get("cymple-relay-stop").hidden = !relayRunning;
+    get("cymple-relay-start").disabled = blocked || relayRunning;
+    get("cymple-relay-stop").disabled = blocked || !relayRunning;
+    for (const id of RELAY_OPTION_IDS) get(id).disabled = blocked || relayRunning;
+    get("cymple-relay-endpoint").textContent = current.current && relayRunning && relay?.source_host ?
+      `${relay.source_host} (${relay.left_port}/${relay.right_port}) → ${relay.cymple_host}:${relay.cymple_port}` :
+      `→ ${get("cymple-host").value.trim() || "127.0.0.1"}:${get("cymple-port").value || 23303}`;
+    for (const [side, key] of [["left", "eye_left"], ["right", "eye_right"]]) {
+      const eye = current.current ? relay?.eyes?.[key] : null;
+      const eyeStateKey = {idle: "cympleStateIdle", connecting: "cympleStateConnecting",
+        streaming: "cympleStateStreaming", reconnecting: "cympleStateReconnecting"}[eye?.state ?? "idle"] ?? "cympleStateIdle";
+      get(`cymple-${side}-state`).textContent = t(eyeStateKey);
+      get(`cymple-${side}-metrics`).textContent = !eye || (!relayRunning && !(eye.frames > 0)) ? "—" :
+        `${fixed(eye.fps)} fps · ${fixed(eye.avg_kb)} KB/f · ${eye.frames} ${t("cympleRelayFrames")}`;
+    }
+    const eyeErrors = current.current ? ["eye_left", "eye_right"].map(k => relay?.eyes?.[k]?.error).filter(Boolean) : [];
+    const rawErr = state.relayError || (current.current ? relay?.error : "") || eyeErrors.join(" · ");
+    get("cymple-relay-error").hidden = !state.relayErrorKey && !rawErr;
+    get("cymple-relay-error").textContent = state.relayErrorKey ? t(state.relayErrorKey) : rawErr ? errorMessage(state.language, rawErr) : "";
   }
   function renderPages() {
     for (const page of PAGES) {
@@ -595,6 +679,7 @@ export function createApp(doc, options = {}) {
       state.discovered = result.devices; state.discoveryDone = true;
       if (result.devices.length === 1 && !state.dirty && !view().running) {
         const device = result.devices[0];
+        applyDiscoveredEyePorts(device);
         if (get("headset_host").value !== device.host || Number(get("headset_port").value) !== device.port) {
           get("headset_host").value = device.host; get("headset_port").value = String(device.port); state.dirty = true;
         }
@@ -616,7 +701,7 @@ export function createApp(doc, options = {}) {
     try {
       const status = await requestJson(fetcher, "/api/status");
       if (generation !== state.generation || state.destroyed) return;
-      state.status = status; applyConfig(status.config ?? await requestJson(fetcher, "/api/config")); state.online = true; state.at = now(); state.pollError = "";
+      state.status = status; applyConfig(status.config ?? await requestJson(fetcher, "/api/config")); applyCympleRelay(status.cymple_relay); state.online = true; state.at = now(); state.pollError = "";
       const record=status.recording;
       const saved=status.managed_capture && record?.state==="stopped" && record.session_id &&
         ["completed","error"].includes(status.capture_control?.state);
@@ -634,7 +719,7 @@ export function createApp(doc, options = {}) {
   }
   async function control(key, action) {
     if (state.busy || state.destroyed || state.status?.read_only) return; state.busy = key; state.generation++; state.error = ""; state.errorKey = ""; render();
-    try { await action(); state.status = await requestJson(fetcher, "/api/status"); applyConfig(state.status.config ?? state.config); state.online = true; state.at = now(); state.pollError = ""; }
+    try { await action(); state.status = await requestJson(fetcher, "/api/status"); applyConfig(state.status.config ?? state.config); applyCympleRelay(state.status.cymple_relay); state.online = true; state.at = now(); state.pollError = ""; }
     catch (error) { state.error = error.message; }
     finally { state.busy = ""; if (!state.destroyed) render(); }
   }
@@ -650,6 +735,29 @@ export function createApp(doc, options = {}) {
     await control("starting", async () => { await persistConfig(); await requestJson(fetcher, "/api/start", {mode}, 60000); });
   }
   async function stop() { if (!get("stop").disabled) await control("stopping", () => requestJson(fetcher, "/api/stop", {}, 20000)); }
+  async function cympleRelay(action) {
+    if (state.status?.read_only || state.status?.capture_control?.sealed_c) return;
+    const btn = get(action === "start" ? "cymple-relay-start" : "cymple-relay-stop");
+    if (btn.disabled) return;
+    state.relayError = ""; state.relayErrorKey = "";
+    const options = action === "start" ? readCympleRelayOptions() : null;
+    const validPort = p => Number.isInteger(p) && p >= 1 && p <= 65535;
+    if (action === "start" && !(options.cymple_host && validPort(options.cymple_port) && validPort(options.left_port) && validPort(options.right_port) && [0, 90, 180, 270].includes(options.left_rotate) && [0, 90, 180, 270].includes(options.right_rotate))) {
+      state.relayErrorKey = "cympleInvalidConfig";
+      render();
+      return;
+    }
+    await control(action === "start" ? "starting" : "stopping", async () => {
+      try {
+        await requestJson(fetcher, "/api/cymple-relay", {action, ...(options ?? {})}, 15000);
+        state.relayDirty = false;
+        state.relayPortsAuto = false;
+      } catch (error) {
+        state.relayError = error.message;
+        throw error;
+      }
+    });
+  }
   async function record(action, stepIndex) {
     const button = {begin: "record-start", stop: "record-stop", cancel: "record-cancel", ready: "guide-ready", finish: "guide-finish", confirm: "guide-confirm", skip: "guide-skip", pause:"guide-pause",resume:"guide-pause",select_step:"guide-select"}[action]; if (!button || get(button).disabled) return;
     if (action === "begin" && !validate(state.status?.managed_capture ? "capture" : "live", false)) return;
@@ -696,7 +804,7 @@ export function createApp(doc, options = {}) {
   get("model-browse").addEventListener("click", chooseModel);
   get("headset-select").addEventListener("change", () => {
     const device = state.discovered.find(item => `${item.host}:${item.port}` === get("headset-select").value);
-    if (device) { get("headset_host").value = device.host; get("headset_port").value = String(device.port); state.dirty = true; render(); }
+    if (device) { get("headset_host").value = device.host; get("headset_port").value = String(device.port); applyDiscoveredEyePorts(device); state.dirty = true; render(); }
     else if (!get("headset-select").value) { get("headset_host").value = ""; state.dirty = true; render(); }
   });
   for (const page of PAGES) get(`nav-${PAGE_NAV[page]}`).addEventListener("click", event => { event.preventDefault(); navigate(page); });
@@ -711,7 +819,17 @@ export function createApp(doc, options = {}) {
   for (const [id, delta] of [["guide-prev",-1],["guide-next",1]]) get(id).addEventListener("click",()=>{
     if (!get(id).disabled) return selectStep(Number(get("guide-select").value)+delta);
   });
-  for (const [id, fn] of [["save", save], ["stop", stop], ["capture-stop", stop], ["capture", () => start("capture")], ["replay", () => start("replay")], ["record-start", () => record("begin")], ["record-stop", () => record("stop")], ["record-cancel", () => record("cancel")], ["train-start", () => train()], ["train-cancel", () => train("cancel")], ...["ready", "finish", "confirm", "skip"].map(action => [`guide-${action}`, () => record(action)])]) get(id).addEventListener("click", fn);
+  for (const [id, fn] of [["save", save], ["stop", stop], ["capture-stop", stop], ["cymple-relay-start", () => cympleRelay("start")], ["cymple-relay-stop", () => cympleRelay("stop")], ["capture", () => start("capture")], ["replay", () => start("replay")], ["record-start", () => record("begin")], ["record-stop", () => record("stop")], ["record-cancel", () => record("cancel")], ["train-start", () => train()], ["train-cancel", () => train("cancel")], ...["ready", "finish", "confirm", "skip"].map(action => [`guide-${action}`, () => record(action)])]) get(id).addEventListener("click", fn);
+  for (const id of RELAY_OPTION_IDS) {
+    for (const event of ["input", "change"]) {
+      get(id).addEventListener(event, () => {
+        state.relayDirty = true;
+        if (id === "cymple-left-port" || id === "cymple-right-port") state.relayPortsManual = true;
+        state.relayError = ""; state.relayErrorKey = "";
+        render();
+      });
+    }
+  }
   for (const id of ["preview-enabled", "record-consent", "voice-enabled", "person_id", "label-stage",
     "guide-enabled", "guide-mode", "guide-prepare"]) get(id).addEventListener("change", render);
   for (const id of ["review-confirmed", "reviewer"]) get(id).addEventListener("change", render);
@@ -731,7 +849,7 @@ export function createApp(doc, options = {}) {
   for (const id of ["reference-image", "reference-neutral-image", "reference-profile-image"]) get(id).addEventListener("error", () => { state.referenceImageError = true; render(); });
   async function init() { render(); await Promise.all([pollStatus(), loadReference(), loadPresets()]); if (!state.destroyed) { state.interval = timers.setInterval(() => { render(); void pollStatus(); }, 500); state.visualTimer=timers.setInterval(() => {void reportVisual().catch(error => {state.error=error.message;});},200); previewLoop(); await discover(); } }
   function destroy() { state.destroyed = true; state.generation++; navigation?.removeEventListener("hashchange", hashChanged); speech?.cancel(); timers.clearInterval(state.interval); timers.clearInterval(state.visualTimer); timers.clearTimeout(state.previewTimer); clearPreview(); }
-  return {init, destroy, start, stop, save, record, train, loadReviews, applyReview, readForm, pollStatus, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs};
+  return {init, destroy, start, stop, save, record, train, cympleRelay, loadReviews, applyReview, readForm, pollStatus, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs};
 }
 if (typeof document !== "undefined") {
   let storage; try { storage = window.localStorage; } catch {}

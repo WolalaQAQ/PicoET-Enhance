@@ -280,3 +280,21 @@ html[data-guiding="true"] #guide-step { display:none; }
 #guide-countdown { font-size:28px; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; }
 html[data-guiding="true"] #guide { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; padding:8px 12px; margin:8px 0 0; }
 html[data-guiding="true"] #guide-hint { font-size:12px; flex:1; margin:0; }
+.cymple-relay-panel { padding:20px 22px; margin-top:20px; }
+.cymple-relay-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+.cymple-relay-panel .hint { margin:0 0 14px; }
+.cymple-relay-panel .actions { margin-bottom:14px; }
+.cymple-relay-panel #cymple-relay-endpoint { margin:0; }
+#cymple-relay-start { background:var(--accent); color:white; border-color:var(--accent); }
+#cymple-relay-start:hover:not(:disabled) { background:#116358; }
+.cymple-eye-grid, .cymple-orient-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.cymple-eye-card, .cymple-orient-group { background:#fafcfb; border:1px solid var(--line); border-radius:9px; padding:12px 14px; min-width:0; }
+.cymple-eye-card .card-kicker { margin-bottom:6px; }
+.cymple-eye-card strong, .cymple-orient-group strong { font-size:12px; color:#2b4440; }
+.cymple-orient-group strong { display:block; margin-bottom:10px; }
+.cymple-eye-card output { display:block; font-size:11px; color:#354d4c; }
+#cymple-relay-error { color:#a54b45; border-radius:8px; padding:12px 16px; background:#fff0ec; overflow-wrap:anywhere; font-size:12px; margin:12px 0 0; }
+#cymple-relay-options { padding:14px 0 0; margin-top:14px; border-top:1px solid var(--line); }
+#cymple-relay-options .cymple-orient-grid { margin-top:4px; }
+#cymple-relay-options .check { margin:8px 0 0; }
+@media (max-width:540px) { .cymple-eye-grid, .cymple-orient-grid { grid-template-columns:1fr; } }

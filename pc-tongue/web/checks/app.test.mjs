@@ -20,6 +20,7 @@ class Element {
 function setup(t, options = {}) {
   const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [id, new Element()]));
   elements.get("preview-enabled").checked = true; elements.get("guide-enabled").checked = true; elements.get("label-stage").value = "raw_only"; elements.get("person_id").value = "me"; elements.get("receive-results").checked = true;
+  elements.get("cymple-host").value = "127.0.0.1"; elements.get("cymple-port").value = "23303"; elements.get("cymple-left-port").value = "45682"; elements.get("cymple-right-port").value = "45683"; elements.get("cymple-left-rotate").value = "0"; elements.get("cymple-right-rotate").value = "0";
   const doc = {documentElement: {}, hidden: false, title: "", createElement: () => new Element(), getElementById: id => { assert.ok(elements.has(id), id); return elements.get(id); }};
   const config = {headset_host: "headset.example", headset_port: 45681, model_path: "D:/models/student.onnx", model_kind: "face50", device: "auto", stale_ms: 350, preview_fps: 10,
     replay_path: "D:/data/reference.npz", enabled: false, output_enabled: false, output_host: "127.0.0.1", output_port: 45682};
@@ -28,6 +29,10 @@ function setup(t, options = {}) {
     running: false, connected: false, config, source: {session_id: "18446744073709551000", source_seq: "9007199254740993"},
     contract: {schema: "pico-mouth50-v1", channels}, model: {trained_channels: trained}, output_session_id: "test-output",
     prediction: {fresh: false, state: "stopped", valid_mask: 0, channels: {JawOpen: .3, TongueOut: .1, TongueLeft: .2}},
+    cymple_relay: {running: false, state: "idle", source_host: "", left_port: 45682, right_port: 45683, cymple_host: "127.0.0.1", cymple_port: 23303, error: "",
+      config: {cymple_host: "127.0.0.1", cymple_port: 23303, left_port: 45682, right_port: 45683, left_rotate: 0, left_hflip: false, left_vflip: false, right_rotate: 0, right_hflip: false, right_vflip: false},
+      eyes: {eye_left: {channel: 0, port: 45682, state: "idle", connected: false, fps: 0, frames: 0, avg_kb: 0, error: null},
+        eye_right: {channel: 1, port: 45683, state: "idle", connected: false, fps: 0, frames: 0, avg_kb: 0, error: null}}},
     metrics: {source_fresh: false, video_fresh: false}, recording: {state: "idle"}, training: {state: "idle", running: false, operations: {
       export: [{name: "checkpoint", required: true}, {name: "output", required: true}],
        "local-adapt": [{name: "dataset", required: true}, {name: "initial", required: false}, {name: "teacher_approval", required: false}]}}}};
@@ -64,6 +69,27 @@ function setup(t, options = {}) {
     }
     if (path === "/api/start") { if (server.failStart) return Response.json({error: "ONNX model does not exist: fixture"}, {status: 400}); const {mode} = JSON.parse(opts.body); active(mode); return Response.json(server.status); }
     if (path === "/api/stop") { Object.assign(server.status, {running: false, connected: false}); config.enabled = false; return Response.json(server.status); }
+    if (path === "/api/cymple-relay") {
+      const req = JSON.parse(opts.body);
+      if (req.action === "start") {
+        const {action, headset_host, ...cfg} = req;
+        Object.assign(server.status.cymple_relay.config, cfg);
+        Object.assign(server.status.cymple_relay, {
+          running: true, state: "running", source_host: headset_host || "192.0.2.10",
+          left_port: cfg.left_port ?? 45682, right_port: cfg.right_port ?? 45683,
+          cymple_host: cfg.cymple_host ?? "127.0.0.1", cymple_port: cfg.cymple_port ?? 23303, error: ""
+        });
+        server.status.cymple_relay.eyes = {
+          eye_left: {channel: 0, port: cfg.left_port ?? 45682, state: "streaming", connected: true, fps: 90.0, frames: 45, avg_kb: 28.4, error: null},
+          eye_right: {channel: 1, port: cfg.right_port ?? 45683, state: "streaming", connected: true, fps: 89.8, frames: 44, avg_kb: 27.9, error: null}
+        };
+      } else if (req.action === "stop") {
+        Object.assign(server.status.cymple_relay, {running: false, state: "idle", source_host: ""});
+        server.status.cymple_relay.eyes.eye_left.state = "idle";
+        server.status.cymple_relay.eyes.eye_right.state = "idle";
+      }
+      return Response.json(server.status.cymple_relay);
+    }
     if (path === "/api/recording") {
       const body = JSON.parse(opts.body);
       if (body.action === "begin") { Object.assign(server.status.recording, {state: "recording", session_id: "local", path: "D:/local/recording", guide: {index: 0, phase: "prepare", progress: 0, preset_id:body.preset_id,total:server.presets.find(p=>p.id===body.preset_id)?.steps.length,
@@ -264,7 +290,7 @@ test("leaving the original capture page or expiring status cannot grant visual r
 test("task pages keep advanced tools folded and preserve every existing capability", () => {
   for (const opening of html.matchAll(/<details\b[^>]*>/g)) assert.doesNotMatch(opening[0], /\bopen\b/);
   for (const id of ["advanced", "diagnostics", "recording", "training", "capture", "model_path", "start", "stop", "preview"]) assert.ok(html.includes(`id="${id}"`));
-  assert.doesNotMatch(html, /segmentation|size_hysteresis|calibrate|face_source|Cymple|upload|type="file"/);
+  assert.doesNotMatch(html, /segmentation|size_hysteresis|calibrate|face_source|upload|type="file"/);
 });
 test("both languages are complete and browser defaults respect the first preference", () => {
   assert.deepEqual(Object.keys(messages.en).sort(), Object.keys(messages["zh-CN"]).sort());
@@ -867,4 +893,112 @@ test("plain errors are shown in context while raw request details stay in diagno
   assert.equal(el("error").textContent, messages.en.modelMissing);
   assert.doesNotMatch(el("error").textContent, /POST|HTTP|fixture/);
   assert.match(el("technical-error").textContent, /POST \/api\/start.*fixture/);
+});
+
+
+test("Cymple eye relay starts idle, keeps options folded, never auto-POSTs, and translates labels", async t => {
+  const f = setup(t);
+  await f.app.init();
+  assert.ok(f.server.calls.every(c => c.method === "GET"));
+  assert.equal(f.el("cymple-relay").hidden, false);
+  assert.equal(f.el("cymple-relay-options").open, false);
+  assert.equal(f.el("cymple-relay-status").textContent, messages.en.cympleStateIdle);
+  assert.equal(f.el("cymple-relay-start").disabled, false);
+  assert.equal(f.el("cymple-relay-stop").hidden, true);
+  assert.equal(f.el("cymple-left-metrics").textContent, "—");
+  const n = f.server.calls.length;
+  f.app.setLanguage("zh-CN");
+  assert.equal(f.server.calls.length, n);
+  assert.equal(f.el("cymple-relay-title").textContent, messages["zh-CN"].cympleRelayTitle);
+  assert.equal(f.el("cymple-relay-start").textContent, messages["zh-CN"].cympleRelayStart);
+  assert.equal(f.el("cymple-relay-status").textContent, messages["zh-CN"].cympleStateIdle);
+});
+
+test("Cymple eye relay starts/stops without a mouth model and never dirties mouth settings", async t => {
+  const f = setup(t);
+  f.server.config.model_path = "";
+  await f.app.init();
+  assert.equal(f.el("cymple-relay-start").disabled, false);
+
+  f.el("cymple-left-rotate").value = "90"; f.el("cymple-left-rotate").emit("change");
+  f.el("cymple-right-vflip").checked = true; f.el("cymple-right-vflip").emit("change");
+  f.el("cymple-port").value = "23309"; f.el("cymple-port").emit("input");
+  assert.equal(f.app.state.relayDirty, true);
+  assert.equal(f.app.state.dirty, false);
+  assert.equal(f.el("save").disabled, true);
+
+  await f.el("cymple-relay-start").emit("click");
+  const relayCall = f.server.calls.find(c => c.path === "/api/cymple-relay");
+  const reqBody = JSON.parse(relayCall.body);
+  assert.equal(reqBody.action, "start");
+  assert.equal(reqBody.headset_host, "headset.example");
+  assert.equal(reqBody.cymple_port, 23309);
+  assert.equal(reqBody.left_rotate, 90);
+  assert.equal(reqBody.right_vflip, true);
+
+  assert.equal(f.el("cymple-relay-status").textContent, messages.en.cympleStateRunning);
+  assert.equal(f.el("cymple-relay-start").hidden, true);
+  assert.equal(f.el("cymple-relay-stop").hidden, false);
+  assert.equal(f.el("cymple-relay-stop").disabled, false);
+  assert.equal(f.el("cymple-left-rotate").disabled, true);
+  assert.match(f.el("cymple-relay-endpoint").textContent, /headset\.example \(45682\/45683\) → 127\.0\.0\.1:23309/);
+  assert.match(f.el("cymple-left-metrics").textContent, /90\.0 fps · 28\.4 KB\/f · 45 frames/);
+
+  await f.el("cymple-relay-stop").emit("click");
+  assert.equal(f.el("cymple-relay-status").textContent, messages.en.cympleStateIdle);
+  assert.equal(f.el("cymple-relay-start").hidden, false);
+  assert.equal(f.el("cymple-left-rotate").disabled, false);
+});
+
+test("discovered 3-camera PICO device auto-fills left/right eye ports without dirtying mouth Save", async t => {
+  const f = setup(t);
+  f.server.config.headset_host = "";
+  f.server.discovered = [
+    {host: "198.51.100.8", port: 45681, name: "PICO Cameras", streams: [
+      {id: "mouth", port: 45681, path: "/stream.mjpg"},
+      {id: "eye_left", port: 46101, path: "/stream.mjpg"},
+      {id: "eye_right", port: 46102, path: "/stream.mjpg"}
+    ]},
+    {host: "198.51.100.9", port: 45681, name: "PICO Cameras", streams: [
+      {id: "mouth", port: 45681, path: "/stream.mjpg"},
+      {id: "eye_left", port: 46201, path: "/stream.mjpg"},
+      {id: "eye_right", port: 46202, path: "/stream.mjpg"}
+    ]}
+  ];
+  await f.app.init();
+  f.el("headset-select").value = "198.51.100.9:45681";
+  f.el("headset-select").emit("change");
+  assert.equal(f.el("cymple-left-port").value, "46201");
+  assert.equal(f.el("cymple-right-port").value, "46202");
+
+  const fSingle = setup(t);
+  fSingle.server.config.headset_host = "";
+  fSingle.server.discovered = [f.server.discovered[0]];
+  await fSingle.app.init();
+  assert.equal(fSingle.el("cymple-left-port").value, "46101");
+  assert.equal(fSingle.el("cymple-right-port").value, "46102");
+  await fSingle.app.pollStatus();
+  assert.equal(fSingle.el("cymple-left-port").value, "46101");
+});
+
+test("read_only, sealed_c and active managed capture disable or hide Cymple relay controls", async t => {
+  const fSealed = setup(t);
+  fSealed.server.status.capture_control = {sealed_c: true, state: "idle"};
+  await fSealed.app.init();
+  assert.equal(fSealed.el("cymple-relay").hidden, true);
+  assert.equal(fSealed.el("cymple-relay-start").disabled, true);
+  await fSealed.app.cympleRelay("start");
+  assert.ok(!fSealed.server.calls.some(c => c.path === "/api/cymple-relay"));
+
+  const fReadOnly = setup(t);
+  externalGuide(fReadOnly);
+  await fReadOnly.app.init();
+  assert.equal(fReadOnly.el("cymple-relay").hidden, true);
+  assert.equal(fReadOnly.el("cymple-relay-start").disabled, true);
+
+  const fCapture = setup(t);
+  fCapture.server.status.capture_control = {state: "recording"};
+  await fCapture.app.init();
+  assert.equal(fCapture.el("cymple-relay").hidden, false);
+  assert.equal(fCapture.el("cymple-relay-start").disabled, true);
 });

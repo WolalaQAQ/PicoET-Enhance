@@ -12,6 +12,7 @@ from discovery import discover_sources
 from file_dialog import select_model
 from face_presets import SEALED_PROFILES, capture_continuation, capture_presets
 from capture_control import CaptureControl, LANCameraSource
+from cymple_relay import CympleEyeRelay
 
 
 def make_guide_server(store, port=57102):
@@ -39,6 +40,7 @@ def make_guide_server(store, port=57102):
                 return self.respond(200, dict(read_only=True, running=False, connected=False,
                     config=dict(DEFAULT_CONFIG), recording=dict(state='idle'),
                     training=dict(state='idle', running=False, operations={}),
+                    cymple_relay=dict(running=False, state='idle', eyes={}),
                     external_guide=store.status()))
             if path == '/api/config':
                 return self.respond(200, dict(DEFAULT_CONFIG))
@@ -80,11 +82,20 @@ def make_guide_server(store, port=57102):
     return ThreadingHTTPServer(('127.0.0.1', port), GuideHandler)
 
 
+def _relay_config_path(runtime):
+    config_path = getattr(runtime, 'config_path', None)
+    return config_path.parent/'cymple_relay.json' if isinstance(config_path, Path) else None
+
+
 def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sources, model_picker=select_model,
-                capture=None):
+                capture=None, cymple_relay=None):
     web = ROOT/'web'
     control = threading.Lock()
     sealed_c = capture is not None and capture.sealed_preset is not None
+    relay = cymple_relay if cymple_relay is not None else CympleEyeRelay(_relay_config_path(runtime), runtime=runtime)
+
+    def combined_status():
+        return dict((capture or runtime).status(), cymple_relay=relay.status())
 
     class Handler(BaseHTTPRequestHandler):
         def respond(self, code, data=b'', content_type='application/json; charset=utf-8'):
@@ -120,7 +131,7 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                 except (ValueError, OSError) as error:
                     return self.respond(400, {'error': str(error)})
             if path == '/api/status':
-                return self.respond(200, (capture or runtime).status())
+                return self.respond(200, combined_status())
             if path == '/api/discovery':
                 try:
                     return self.respond(200, discover())
@@ -216,10 +227,23 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                     with control:
                         result = runtime.train(body.get('action'), body.get('operation'), body.get('args'))
                     return self.respond(200, result)
+                if path == '/api/cymple-relay':
+                    with control:
+                        action = body.get('action')
+                        payload = {k: v for k, v in body.items() if k != 'action'}
+                        if action == 'start':
+                            result = relay.start(payload)
+                        elif action == 'stop':
+                            result = relay.stop()
+                        elif action == 'configure':
+                            result = relay.configure(payload)
+                        else:
+                            raise ValueError('Unknown Cymple relay action')
+                    return self.respond(200, result)
                 if path == '/api/stop':
                     with control:
                         (capture or runtime).stop()
-                    return self.respond(200, (capture or runtime).status())
+                    return self.respond(200, combined_status())
                 return self.respond(404, {'error': 'Not found'})
             except (ValueError, OSError, RuntimeError) as error:
                 return self.respond(400, {'error': str(error)})
@@ -264,7 +288,8 @@ def main(argv=None):
     profile = args.sealed_c_profile or 'mouth'
     sealed_preset = SEALED_PROFILES[profile] if args.sealed_c else None
     capture = CaptureControl(runtime, LANCameraSource(runtime), continuation=continuation, sealed_preset=sealed_preset)
-    server = make_server(runtime, port=args.port, capture=capture)
+    cymple_relay = CympleEyeRelay(_relay_config_path(runtime), runtime=runtime)
+    server = make_server(runtime, port=args.port, capture=capture, cymple_relay=cymple_relay)
     if args.sealed_c:
         print(f'Sealed C [{profile}] (awaiting explicit start): '
               f'http://127.0.0.1:{server.server_port}/#/recording', flush=True)
@@ -277,6 +302,7 @@ def main(argv=None):
     finally:
         runtime.train('cancel')
         capture.close()
+        cymple_relay.close()
         runtime.udp.close()
         server.server_close()
 

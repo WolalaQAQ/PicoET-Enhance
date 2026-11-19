@@ -115,6 +115,17 @@ export const messages = {
     cameraStreamClosed: "The headset camera stream disconnected.",
     modelMissing: "The ONNX model, or the manifest file next to it, was not found.", manifestInvalid: "The model manifest needs the schema pico-mouth50-v1 and a trained_channels list.",
     providerMissing: "The execution provider for the selected device is not installed. Pick another inference device under Settings → Connection and performance.", providerInitFailed: "The execution provider for the selected device failed to start. Pick another inference device under Settings → Connection and performance.",
+    cympleRelayEyebrow: "EYE CAMERA RELAY", cympleRelayTitle: "Forward eye cameras to Cymple",
+    cympleRelayHelp: "Streams left and right headset eye cameras directly to Cymple's native UDP ingress, independent of whole-mouth tracking and without modifying your mouth settings.",
+    cympleRelayStart: "Start eye relay", cympleRelayStop: "Stop eye relay", cympleRelayOptions: "Relay ports and orientation",
+    cympleHost: "Cymple host", cymplePort: "Cymple UDP port", cympleLeftPort: "Left eye port", cympleRightPort: "Right eye port",
+    cympleLeftEye: "Left eye", cympleRightEye: "Right eye", cympleRotate: "Rotate clockwise", cympleHflip: "Horizontal flip", cympleVflip: "Vertical flip",
+    cympleStateIdle: "Stopped", cympleStateConnecting: "Connecting…", cympleStateRunning: "Forwarding", cympleStateReconnecting: "Reconnecting…", cympleStateStreaming: "Streaming",
+    cympleNoDevice: "No PICO camera service was found. Turn on LAN cameras in the headset app or pick a headset above.",
+    cympleMultiDevice: "Multiple PICO camera services were found. Choose one headset above first.",
+    cympleInvalidConfig: "Check the Cymple relay host, ports (1-65535) and rotation settings.",
+    cympleRelayRunningErr: "Stop the eye relay before changing relay settings.",
+    cympleRelayFrames: "frames",
   },
   "zh-CN": {
     guidePrevStep:"上一步", guideNextStep:"下一步", guideSelect:"跳到步骤",
@@ -226,13 +237,26 @@ export const messages = {
     cameraStreamClosed: "头显相机画面连接已断开。",
     modelMissing: "找不到 ONNX 模型文件，或它旁边的同名 manifest 文件。", manifestInvalid: "模型 manifest 需要声明 pico-mouth50-v1，并列出 trained_channels。",
     providerMissing: "所选设备对应的执行提供器未安装。请在「设置」→「连接与性能」中换一个推理设备。", providerInitFailed: "所选设备对应的执行提供器启动失败。请在「设置」→「连接与性能」中换一个推理设备。",
+    cympleRelayEyebrow: "眼动相机转发", cympleRelayTitle: "把头显眼动相机转发给 Cymple",
+    cympleRelayHelp: "将头显左右眼画面直接转发到 Cymple 原生 UDP 入口；可与整嘴追踪独立启停，也不影响整嘴设置。",
+    cympleRelayStart: "开启眼动转发", cympleRelayStop: "停止眼动转发", cympleRelayOptions: "转发端口与画面方向",
+    cympleHost: "Cymple 目标主机", cymplePort: "Cymple UDP 端口", cympleLeftPort: "左眼端口", cympleRightPort: "右眼端口",
+    cympleLeftEye: "左眼", cympleRightEye: "右眼", cympleRotate: "顺时针旋转", cympleHflip: "水平镜像", cympleVflip: "垂直翻转",
+    cympleStateIdle: "未开启", cympleStateConnecting: "正在连接…", cympleStateRunning: "转发中", cympleStateReconnecting: "重连中…", cympleStateStreaming: "传输中",
+    cympleNoDevice: "没有找到 PICO 相机广播服务。请在头显配套应用中开启局域网相机，或在上方选择头显。",
+    cympleMultiDevice: "局域网里发现多个 PICO 相机服务，请先在上方选定一个头显。",
+    cympleInvalidConfig: "请检查 Cymple 转发的主机地址、端口号（1–65535）和旋转设置。",
+    cympleRelayRunningErr: "请先停止眼动转发，再修改转发端口或方向设置。",
+    cympleRelayFrames: "帧",
   }
 };
 const knownErrors = [["Configure a model checkpoint", "modelRequired"], ["Confirm local", "consentRequired"],
   ["Start capture-only", "captureRequired"], ["CONTEXT refused", "contextUnavailable"], ["PTJ1 session contradicts", "contextMismatch"],
   ["trained_channels", "manifestInvalid"], ["manifest schema", "manifestInvalid"], ["No such file", "modelMissing"],
   ["ONNX model does not exist", "modelMissing"], ["model manifest was not found", "modelMissing"], ["is not installed", "providerMissing"], ["did not initialize", "providerInitFailed"],
-  ["PTJ1 connection ended within a frame", "cameraStreamClosed"], ["PTJ1 stream closed", "cameraStreamClosed"], ["request timed out", "requestTimeout"], ["Failed to fetch", "serviceUnavailable"]];
+  ["PTJ1 connection ended within a frame", "cameraStreamClosed"], ["PTJ1 stream closed", "cameraStreamClosed"], ["request timed out", "requestTimeout"], ["Failed to fetch", "serviceUnavailable"],
+  ["No PICO camera service found", "cympleNoDevice"], ["Multiple PICO camera services found", "cympleMultiDevice"],
+  ["Invalid Cymple relay settings", "cympleInvalidConfig"], ["Stop the Cymple eye relay before changing", "cympleRelayRunningErr"], ["Cymple eye relay is already running", "cympleRelayRunningErr"]];
 export function errorMessage(language, raw) {
   const key = knownErrors.find(([text]) => raw.includes(text))?.[1];
   return messages[language][key ?? "requestError"];
