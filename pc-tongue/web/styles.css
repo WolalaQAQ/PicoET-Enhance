@@ -280,8 +280,14 @@ html[data-guiding="true"] #guide-step { display:none; }
 #guide-countdown { font-size:28px; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; }
 html[data-guiding="true"] #guide { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; padding:8px 12px; margin:8px 0 0; }
 html[data-guiding="true"] #guide-hint { font-size:12px; flex:1; margin:0; }
-.cymple-relay-panel { padding:20px 22px; margin-top:20px; }
-.cymple-relay-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+.cymple-relay-panel { padding:18px 22px; margin-top:20px; }
+.cymple-relay-head { gap:12px; }
+.cymple-relay-heading { display:block; min-width:0; }
+.cymple-relay-heading .eyebrow { margin-bottom:3px; }
+.cymple-relay-title { display:block; font-size:15px; font-weight:650; color:#2b4440; line-height:1.35; }
+#cymple-relay > summary::after { margin-left:2px; flex-shrink:0; }
+#cymple-relay-status { margin-left:auto; flex-shrink:0; }
+#cymple-relay[open] > summary { margin-bottom:12px; }
 .cymple-relay-panel .hint { margin:0 0 14px; }
 .cymple-relay-panel .actions { margin-bottom:14px; }
 .cymple-relay-panel #cymple-relay-endpoint { margin:0; }

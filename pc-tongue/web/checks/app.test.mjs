@@ -896,19 +896,23 @@ test("plain errors are shown in context while raw request details stay in diagno
 });
 
 
-test("Cymple eye relay starts idle, keeps options folded, never auto-POSTs, and translates labels", async t => {
+test("Cymple eye relay starts folded and idle, keeps options folded, never auto-POSTs, and translates labels", async t => {
   const f = setup(t);
   await f.app.init();
   assert.ok(f.server.calls.every(c => c.method === "GET"));
   assert.equal(f.el("cymple-relay").hidden, false);
+  assert.equal(f.el("cymple-relay").open, false);
   assert.equal(f.el("cymple-relay-options").open, false);
   assert.equal(f.el("cymple-relay-status").textContent, messages.en.cympleStateIdle);
   assert.equal(f.el("cymple-relay-start").disabled, false);
   assert.equal(f.el("cymple-relay-stop").hidden, true);
   assert.equal(f.el("cymple-left-metrics").textContent, "—");
   const n = f.server.calls.length;
+  f.el("cymple-relay").open = true;
   f.app.setLanguage("zh-CN");
-  assert.equal(f.server.calls.length, n);
+  await f.app.pollStatus();
+  assert.equal(f.el("cymple-relay").open, true);
+  assert.equal(f.server.calls.length, n + 1);
   assert.equal(f.el("cymple-relay-title").textContent, messages["zh-CN"].cympleRelayTitle);
   assert.equal(f.el("cymple-relay-start").textContent, messages["zh-CN"].cympleRelayStart);
   assert.equal(f.el("cymple-relay-status").textContent, messages["zh-CN"].cympleStateIdle);
