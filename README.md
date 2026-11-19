@@ -4,7 +4,7 @@ English | [简体中文](README_zh.md)
 
 An eye-tracking enhancement Magisk module for the PICO 4 Pro: it opens the eye-tracking service's per-eye gate for real pupil data, decouples the facial expression model so each eye is processed on its own, and targets 90 Hz for both eye and mouth expressions by default instead of the stock rate of about 24 Hz. Use it with [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) and [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule).
 
-> v2.5.2 · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
+> v2.6.0 · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
 
 ## What it does
 
@@ -68,8 +68,8 @@ The installer verifies the SHA-256 of the device's eye-tracking libraries and st
 2. Flash it in the Magisk app under Install from storage, or from a command line:
 
    ```sh
-    adb push magisk-picoet-enhance-v2.5.2.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.5.2.zip'
+    adb push magisk-picoet-enhance-v2.6.0.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.0.zip'
    ```
 
 3. Reboot the headset.
@@ -77,6 +77,12 @@ The installer verifies the SHA-256 of the device's eye-tracking libraries and st
 Fresh installs enable enhanced mode (`dual/on`) at 90/90 Hz after reboot. If you switched to normal mode before upgrading, it stays off.
 
 ## Usage
+
+Open **PicoET-Enhance** from the application library. The **LAN broadcast** tab has the master switch, service status, and addresses and client counts for the three cameras. The **Post-processing** tab shows the full tuning panel, with its original left sidebar on the headset.
+
+Under **Result sharing**, **Mouth** and **Both eyes** independently allow clients to subscribe to mouth tracking or [eye expression results](CAMERA-PROTOCOL.md#eye-expression-results-pse1). Both default off and do not affect camera images or Facial Bridge.
+
+Sharing defaults off and remembers your choice. Clients can discover and independently subscribe to all three streams; cameras run only while subscribed. Switching off disconnects every stream; closing the app leaves the service running. Close other eye/face clients once before the first attachment so the adapter can initialize while tracking is idle. Images are unencrypted and unauthenticated, for trusted private networks. The switch does not change processing settings; ordinary expression forwarding still uses Bridge. For a PC-side viewer see [LAN broadcast and PC Studio](#lan-broadcast-and-pc-studio).
 
 Run as root on the headset:
 
@@ -130,6 +136,8 @@ Rates set in 2.4.0 or later survive reinstalls and upgrades. Only the first migr
 
 ### Headset postprocessing
 
+Open **Expression tuning** from the app home screen. Its Start page, movement list and save/apply controls form the existing independent tuning panel.
+
 PICO's stock firmware postprocesses the expression model's output: brow curves and links, Blink endpoint snapping, adaptive/composite/Kalman filters, mouth baseline removal, log compression, the tongue threshold and smoothing. Its parameters were fixed. Since 2.5.0 this module exposes 44 of them as settings whose defaults are the stock values; the processing algorithms themselves remain PICO's.
 
 The module includes a separate **PicoET-Enhance** settings app. Open it from the headset application library after installation and reboot; uninstalling the module and rebooting removes it together with the module. Start offers four presets. The list on the left names 15 movements to check in a mirror, such as a blink, raising the brows or talking. Each movement page draws what the model outputs and what the avatar receives for that movement, says what usually goes wrong and which slider to move, and shows the settings that shape it; the chart recalculates as you drag. These charts are worked examples at a fixed 90 updates per second, for comparing settings. All settings lists all 44 values in processing order. A switch at the top shows the same settings in Simple wording or Technical wording (variables, formulas and calculation conditions) without changing any setting. Drag a slider for larger changes or tap ◀ / ▶ at either end for one fine step. Tap a value for precise input or an individual reset; no configuration-text editing is needed. Both the panel and PicoFacialBridge remain rootless: the panel submits fixed requests from its private Android sandbox to the module-owned worker. The VRCFT module manages only PC-side processing.
@@ -150,6 +158,26 @@ sh "$MOD/picoet.sh" reload-processing
 ```
 
 Changes load at the next payload startup and survive reinstalls/upgrades. To adopt an updated preset, select it again, then save and apply it. Invalid, duplicate or unknown fields reject a save; malformed or incorrectly owned files at startup report failure rather than silently restoring filters. A missing file keeps existing behavior. Headset native numerical tests, companion boot integration and rootless IPC save/apply/restore pass on PICO 4 Pro / PICO OS 5.13.7 with SELinux enforcing. Worn response and noise still need comparison.
+
+## LAN broadcast and PC Studio
+
+With LAN broadcast on, the headset serves the mouth, left-eye and right-eye cameras as ordinary MJPEG streams (default ports 45681, 45682 and 45683) and announces them for discovery. The wire formats, discovery and result messages are in [CAMERA-PROTOCOL.md](CAMERA-PROTOCOL.md).
+
+PC Studio in [pc-studio](pc-studio) is a Windows app that forwards and previews these streams. Install it with `PicoET-PC-Studio-Setup-v<version>.exe` from [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) (installs to `%LOCALAPPDATA%\Programs\PicoET PC Studio` without administrator rights, creates a Start menu shortcut, and opens in an Edge/Chrome app window), or unpack the portable archive `picoet-pc-studio-v<version>.zip` and run `PicoET-PC-Studio.exe`. You can also run it directly from source with Python 3 and Pillow:
+
+```powershell
+pip install -r pc-studio/requirements.txt
+pc-studio\start.cmd          # opens http://127.0.0.1:8787
+```
+
+It offers:
+
+- headset discovery on the local network, or a manually entered address;
+- live preview switching across the mouth, left-eye and right-eye cameras, along with each stream's MJPEG URL (`http://<headset address>:<port>/stream.mjpg`) for other tools;
+- an eye relay that sends the two eye streams' PTJ1 data to Cymple's native UDP input (`127.0.0.1:23303`), with configurable ports and per-eye rotation/flip;
+- an in-app version check against GitHub Releases (with direct download links for new PC Studio and headset module releases) and a Quit button to stop the background service.
+
+`python pc-studio/check.py` runs its tests, and `python pc-studio/package_release.py` builds the standalone bundle, portable ZIP and Inno Setup installer.
 
 ## About the enterprise gate
 
@@ -183,6 +211,7 @@ Building requires Python 3, JDK 17 or newer (`JAVA_HOME`), Android platform 35 a
 
 ```powershell
 pwsh -File hook\build-hook.ps1                 # build the injector and payload
+python camera-source/build.py android --ndk "$env:ANDROID_HOME/ndk/26.1.10909125" --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe" --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
 pwsh -File build-picoet-enhance.ps1 -Python python # build companion and package the Magisk zip
 ```
 

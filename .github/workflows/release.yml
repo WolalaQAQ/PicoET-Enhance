@@ -53,6 +53,12 @@ jobs:
       - name: Check companion permission boundary
         run: python -B -X utf8 -m unittest discover -s headset/tests -p "test_*.py" -v
 
+      - name: Check PC Studio forwarding and web UI
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -B -X utf8 -m pip install --disable-pip-version-check -r pc-studio/requirements.txt
+          python -B -X utf8 pc-studio/check.py
+
       - name: Verify version
         run: |
           $ErrorActionPreference = 'Stop'
@@ -69,6 +75,13 @@ jobs:
           ./hook/build-hook.ps1
           -Ndk "$env:ANDROID_HOME/ndk/26.1.10909125"
           -CmakeBin "$env:ANDROID_HOME/cmake/3.22.1/bin"
+
+      - name: Build LAN camera components
+        run: >-
+          python -B -X utf8 camera-source/build.py android
+          --ndk "$env:ANDROID_HOME/ndk/26.1.10909125"
+          --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe"
+          --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
 
       - name: Package Magisk module
         env:
@@ -97,6 +110,23 @@ jobs:
           Copy-Item -LiteralPath $zip -Destination $destination -Force
           $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $([IO.Path]::GetFileName($destination))" | Set-Content "$destination.sha256" -Encoding ascii
+          python -B -X utf8 -m pip install --disable-pip-version-check pyinstaller==6.12.0
+          $sysIscc = @(
+            (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
+            (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+          ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
+          if (-not $sysIscc) {
+            $innoTmp = Join-Path $env:RUNNER_TEMP 'inno-setup'
+            New-Item -ItemType Directory -Force -Path $innoTmp | Out-Null
+            $innoExe = Join-Path $innoTmp 'innosetup-6.7.3.exe'
+            Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $innoExe
+            $innoDir = Join-Path $innoTmp 'compiler'
+            $proc = Start-Process -FilePath $innoExe -ArgumentList "/PORTABLE=1 /CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /NOICONS /DIR=`"$innoDir`"" -Wait -PassThru
+            if ($proc.ExitCode -ne 0) { throw "Inno Setup portable extract failed: $($proc.ExitCode)" }
+            $sysIscc = Join-Path $innoDir 'ISCC.exe'
+          }
+          python -B -X utf8 pc-studio/package_release.py --version $env:MODULE_VERSION --output-dir $directory.FullName --iscc $sysIscc
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md $directory.FullName -Force
           function Get-VersionNotes([string]$path) {
             $text = Get-Content -Raw -Encoding utf8 $path
@@ -140,8 +170,8 @@ jobs:
         run: |
           set -euo pipefail
           cd release
-          sha256sum --check --strict -- *.zip.sha256
+          sha256sum --check --strict -- *.zip.sha256 *.exe.sha256
           gh release create "$RELEASE_TAG" \
             --verify-tag --notes-file release-notes.md \
             --title "PicoET-Enhance $RELEASE_TAG" \
-            *.zip *.zip.sha256 LICENSE THIRD_PARTY_NOTICES.md
+            *.zip *.zip.sha256 *.exe *.exe.sha256 LICENSE THIRD_PARTY_NOTICES.md

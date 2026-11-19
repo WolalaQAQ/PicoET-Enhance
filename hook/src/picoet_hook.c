@@ -372,7 +372,11 @@ init_fn_t g_original_init;
 pipeline_fn_t g_original_pipeline;
 expression_independent::Merge g_original_merge;
 destroy_fn_t g_original_destroy;
-struct PipelineFrame { void* owner = nullptr; uint64_t sources[3] {}; };
+struct PipelineFrame {
+    void* owner = nullptr;
+    uint64_t sources[3] {};
+    expression_independent::MouthInputIdentity mouth_input;
+};
 thread_local PipelineFrame pipeline_frame;
 struct PipelineScope {
     PipelineFrame previous = pipeline_frame;
@@ -389,7 +393,8 @@ __attribute__((noinline)) void pipeline_proxy(void* tracking, const void* input)
         pipeline_frame.owner = owner;
         pipeline_frame.sources[0] = load<uint64_t>(input, 8);
         pipeline_frame.sources[1] = load<uint64_t>(input, 0x88);
-        pipeline_frame.sources[2] = load<uint64_t>(input, 0x108);
+        pipeline_frame.mouth_input = expression_independent::capture_mouth_input_identity(input);
+        pipeline_frame.sources[2] = pipeline_frame.mouth_input.sensor_ns;
     }
     g_original_pipeline(tracking, input); // Stock releases the input slot inside this call.
 }
@@ -415,7 +420,8 @@ __attribute__((noinline)) expr_output trackor_proxy(void* owner, const expr_mat*
         append_log("trackor: missing pipeline source identity; refusing unsourced inference");
         return {};
     }
-    return expression_high_rate::dispatch(owner, eye0, eye1, mouth, pipeline_frame.sources);
+    return expression_high_rate::dispatch(owner, eye0, eye1, mouth, pipeline_frame.sources,
+                                          &pipeline_frame.mouth_input);
 }
 void initialization_proxy(void* owner)
 {

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PicoET PC Studio</title><link rel="icon" type="image/png" sizes="256x256" href="/static/icon.png?v=2"><link rel="icon" type="image/x-icon" href="/favicon.ico?v=2"><link rel="apple-touch-icon" href="/static/icon.png?v=2">
+  <link rel="stylesheet" href="/static/styles.css?v=2"><script type="module" src="/static/app.mjs?v=2"></script>
+</head>
+<body><main class="app-shell">
+  <aside class="sidebar">
+    <a class="brand" href="#/tracking"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>PICO<span class="brand-sub">PC STUDIO</span></span></a>
+    <span id="nav-caption" class="nav-caption">WORKSPACE</span>
+    <nav aria-label="Workspace">
+      <a id="nav-workspace" class="nav-link active" href="#/tracking" aria-current="page"><span aria-hidden="true">◫</span><span id="nav-live-label">Cameras &amp; relay</span></a>
+      <a id="nav-advanced" class="nav-link" href="#/preferences"><span aria-hidden="true">≡</span><span id="nav-settings-label">Settings</span></a>
+    </nav>
+    <div class="sidebar-note"><span class="local-dot"></span><span id="local-label">Runs on your PC</span><p id="privacy-note">Images stay on this PC.</p></div>
+  </aside>
+  <div id="workspace" class="workspace">
+    <header class="topbar">
+      <span id="workspace-caption">CAMERA &amp; RELAY WORKSPACE</span>
+      <div class="topbar-right">
+        <span class="local-badge" id="service-state">Local service</span>
+        <span class="version-pill" id="version-badge">v2.6.0</span>
+        <button id="check-update" class="topbar-btn" type="button">Check updates</button>
+        <select id="language" aria-label="Language"><option value="en">English</option><option value="zh-CN">简体中文</option></select>
+        <button id="quit-service" class="topbar-btn topbar-quit" type="button">Quit</button>
+      </div>
+    </header>
+    <div class="page-heading"><div><p id="page-eyebrow" class="eyebrow" hidden>PICO / PC STUDIO</p><h1 id="title" tabindex="-1">Cameras &amp; relay</h1><p id="page-intro">Choose your headset to preview cameras or forward eye cameras to Cymple.</p></div><span id="status" class="status-pill" role="status"></span></div>
+    <section id="update-banner" class="update-banner" role="status" hidden>
+      <div class="update-head"><strong id="update-message"></strong><button id="update-dismiss" class="update-dismiss" type="button">Dismiss</button></div>
+      <ul id="update-notes" class="update-notes" hidden></ul>
+      <div id="update-links" class="update-links actions"></div>
+    </section>
+    <p id="error" role="alert" hidden></p>
+    <form id="settings" novalidate>
+      <div id="connection-setup" class="setup-grid capture-setup">
+        <section class="setup-card"><div class="card-kicker"><h2 id="headset-title">Headset connection</h2><span id="discovery-badge" class="small-badge"></span></div>
+          <label for="headset-select" id="headset-select-label">Available headsets</label><div class="input-action"><select id="headset-select"></select><button id="discover" type="button">Find again</button></div>
+          <p id="discovery-info" class="hint" role="status"></p>
+        </section>
+      </div>
+    </form>
+
+    <section id="page-tracking" class="task-page" aria-labelledby="title">
+      <div class="run-toolbar"><div class="actions"><button id="capture" form="settings" type="submit" disabled>Open camera</button><button id="stop" type="button" disabled hidden>Close camera</button></div><span id="run-help" class="hint">Preview mouth or eye cameras here, or forward eye cameras directly to Cymple below.</span></div>
+      <div id="camera-slot-tracking" class="camera-slot">
+        <section id="camera-panel" class="camera-panel panel">
+          <div class="panel-heading">
+            <div><h2 id="camera-title">Camera preview</h2><span class="eyebrow" id="camera-eyebrow" hidden>LIVE INPUT</span></div>
+            <div class="camera-controls">
+              <select id="preview-camera" aria-label="Camera">
+                <option id="camera-mouth-option" value="mouth">Mouth camera</option>
+                <option id="camera-left-option" value="eye_left">Left eye camera</option>
+                <option id="camera-right-option" value="eye_right">Right eye camera</option>
+              </select>
+              <label class="check preview-switch"><input id="preview-enabled" type="checkbox" checked><span id="preview-label">Show preview</span></label>
+            </div>
+          </div>
+          <div class="preview"><img id="preview" width="400" height="400" alt="Camera preview image" hidden><div id="empty-camera"><svg class="camera-glyph" width="90" height="72" viewBox="0 0 90 72" fill="none" aria-hidden="true"><path d="M22 14H12v12m56-12h10v12M12 46v12h10m56-12v12H68" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M27 36c7-10 29-10 36 0-7 12-29 12-36 0Z" stroke="currentColor" stroke-width="2"/><path d="M29 36h32" stroke="currentColor" stroke-width="1.5"/></svg><strong id="placeholder">Waiting for camera images</strong><span id="camera-empty-help"></span></div></div>
+          <div class="camera-footer"><span id="camera-privacy">LOCAL ONLY</span><span id="camera-stream-url"></span></div>
+        </section>
+      </div>
+      <details id="cymple-relay" class="panel disclosure-panel cymple-relay-panel">
+        <summary class="cymple-relay-head">
+          <span class="cymple-relay-heading"><span id="cymple-relay-eyebrow" class="eyebrow">EYE CAMERA RELAY</span><span id="cymple-relay-title" class="cymple-relay-title">Forward eye cameras to Cymple</span></span>
+          <span id="cymple-relay-status" class="status-pill" role="status"></span>
+        </summary>
+        <p id="cymple-relay-help" class="hint"></p>
+        <div class="actions">
+          <button id="cymple-relay-start" type="button" disabled>Start eye relay</button>
+          <button id="cymple-relay-stop" type="button" disabled hidden>Stop eye relay</button>
+          <span id="cymple-relay-endpoint" class="hint"></span>
+        </div>
+        <div class="cymple-eye-grid">
+          <div class="cymple-eye-card"><div class="card-kicker"><strong id="cymple-left-title">Left eye</strong><span id="cymple-left-state" class="small-badge"></span></div><output id="cymple-left-metrics">—</output></div>
+          <div class="cymple-eye-card"><div class="card-kicker"><strong id="cymple-right-title">Right eye</strong><span id="cymple-right-state" class="small-badge"></span></div><output id="cymple-right-metrics">—</output></div>
+        </div>
+        <p id="cymple-relay-error" role="alert" hidden></p>
+        <details id="cymple-relay-options" class="disclosure-panel">
+          <summary id="cymple-relay-options-title">Relay ports and orientation</summary>
+          <div class="fields">
+            <label><span id="cymple-host-label">Cymple host</span><input id="cymple-host" value="127.0.0.1" autocomplete="off" spellcheck="false" required></label>
+            <label><span id="cymple-port-label">Cymple UDP port</span><input id="cymple-port" type="number" min="1" max="65535" value="23303" required></label>
+            <label><span id="cymple-left-port-label">Left eye port</span><input id="cymple-left-port" type="number" min="1" max="65535" value="45682" required></label>
+            <label><span id="cymple-right-port-label">Right eye port</span><input id="cymple-right-port" type="number" min="1" max="65535" value="45683" required></label>
+          </div>
+          <div class="cymple-orient-grid">
+            <div class="cymple-orient-group">
+              <strong id="cymple-left-orient-title">Left eye</strong>
+              <label><span id="cymple-left-rotate-label">Rotate clockwise</span><select id="cymple-left-rotate"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+              <label class="check"><input id="cymple-left-hflip" type="checkbox"><span id="cymple-left-hflip-label">Horizontal flip</span></label>
+              <label class="check"><input id="cymple-left-vflip" type="checkbox"><span id="cymple-left-vflip-label">Vertical flip</span></label>
+            </div>
+            <div class="cymple-orient-group">
+              <strong id="cymple-right-orient-title">Right eye</strong>
+              <label><span id="cymple-right-rotate-label">Rotate clockwise</span><select id="cymple-right-rotate"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+              <label class="check"><input id="cymple-right-hflip" type="checkbox"><span id="cymple-right-hflip-label">Horizontal flip</span></label>
+              <label class="check"><input id="cymple-right-vflip" type="checkbox"><span id="cymple-right-vflip-label">Vertical flip</span></label>
+            </div>
+          </div>
+        </details>
+      </details>
+    </section>
+
+    <section id="page-preferences" class="task-page" aria-labelledby="title" hidden>
+      <details id="advanced" class="panel disclosure-panel" open><summary id="advanced-title">Connection and performance</summary>
+        <label><span id="host-label">Manual headset address</span><input id="headset_host" form="settings" autocomplete="off" spellcheck="false"></label>
+        <div class="fields">
+          <label><span id="port-label">Mouth port</span><input id="headset_port" form="settings" type="number" min="1" max="65535" required></label>
+          <label><span id="eye-left-port-label">Left eye port</span><input id="eye_left_port" form="settings" type="number" min="1" max="65535" required></label>
+          <label><span id="eye-right-port-label">Right eye port</span><input id="eye_right_port" form="settings" type="number" min="1" max="65535" required></label>
+          <label><span id="fps-label">Preview rate (fps)</span><input id="preview_fps" form="settings" type="number" min="1" max="30" required></label>
+        </div>
+      </details>
+      <div class="actions settings-save"><button id="save" type="button" disabled>Save settings</button><span id="config-state"></span></div>
+      <details id="diagnostics" class="panel disclosure-panel"><summary id="diagnostics-title">Diagnostics</summary>
+        <h2 id="technical-error-title">Troubleshooting details</h2><pre id="technical-error" class="technical-error"></pre>
+        <dl><dt id="source-label"></dt><dd id="source-info">—</dd><dt>raw_identity</dt><dd id="raw-identity">—</dd>
+          <dt>mouth_sensor_ns</dt><dd id="time-mouth">—</dd><dt id="source-age-label"></dt><dd id="source-age">—</dd><dt id="receive-age-label"></dt><dd id="receive-age">—</dd><dt id="rate-label"></dt><dd id="rates">—</dd>
+          <dt id="drop-label"></dt><dd id="drops">—</dd>
+        </dl><p id="snapshot-state" class="hint"></p>
+      </details>
+    </section>
+    <footer class="page-footer"><span>PICO PC STUDIO</span><span id="footer-note">Your camera streams stay on this PC.</span></footer>
+  </div>
+</main></body></html>

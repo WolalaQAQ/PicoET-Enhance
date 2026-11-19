@@ -178,6 +178,25 @@ portions embedded by compilation. See the [LLVM license](https://llvm.org/LICENS
 and the fixed NDK's `NOTICE.toolchain` for its license and exception text. No NDK
 tool executables are distributed in the module.
 
+## LAN camera JPEG daemon and PC Studio dependencies
+
+The optional JPEG daemon links the libjpeg API from
+[libjpeg-turbo 3.1.2](https://github.com/libjpeg-turbo/libjpeg-turbo/tree/3.1.2).
+This software is based in part on the work of the Independent JPEG Group.
+The IJG license covers the libjpeg API and its SIMD implementation (whose source
+also carries zlib notices); the build system and TurboJPEG API carry a
+three-clause BSD license. This integration uses the libjpeg API, not TurboJPEG.
+`camera-source/build.py` downloads a pinned source archive, builds it separately,
+and retains `LICENSE.md` and `README.ijg` with the build outputs. The module
+includes both in `licenses/libjpeg-turbo/`. Keep those notices and this
+attribution when distributing a linked daemon. ShadowHook and the Android C++
+runtime use the existing notices above.
+
+The PC Studio web companion (`pc-studio/`) uses Pillow (MIT-CMU / HPND license);
+release packages bundle Python, Pillow and OpenSSL via PyInstaller and build the
+Windows installer with Inno Setup 6. No third-party Python package or wheel is
+committed to this repository.
+
 ## PICO system software
 
 This project does not contain or redistribute any PICO binary. It references the

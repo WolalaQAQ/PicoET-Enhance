@@ -10,3 +10,16 @@ artifacts/
 *.tmp
 Thumbs.db
 .DS_Store
+
+# PC Studio runtime and LAN camera source build outputs
+pc-studio/.venv*/
+pc-studio/user-data/
+pc-studio/tests-work/
+pc-studio/build-*/
+pc-studio/__pycache__/
+camera-source/.deps/
+camera-source/build-*/
+camera-source/checks/__pycache__/
+camera-source/__pycache__/
+camera-source/checks/tests-work/
+camera-source/checks/*results.json

@@ -1,11 +1,13 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include "source_identity.h"
 
 namespace expression_independent {
 using Merge = void (*)(const void*, const void*, void*);
 struct FrameTiming {
     uint64_t source_ns[3] {};
+    MouthInputIdentity mouth_input;
     bool slow = true;
     bool attempted = true;
     bool skipped = false; // Explicit rate skip, not a failed observation.

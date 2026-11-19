@@ -33,12 +33,13 @@ def build(output, version, code, keystore=None, alias='panel'):
     tests.mkdir()
     sources = ROOT/'headset/src/dev/pico/etenhance'
     run([java('javac'), '-J-Dfile.encoding=UTF-8', '-J-Duser.language=en', '-encoding', 'UTF-8', '--release', '8', '-d', tests,
-         *[sources/name for name in ('PanelChannel.java', 'ProcessingSettings.java', 'PanelState.java', 'Scope.java', 'Catalog.java')],
+         *[sources/name for name in ('PanelChannel.java', 'ProcessingSettings.java', 'PanelState.java', 'Scope.java', 'Catalog.java', 'CameraState.java')],
          ROOT/'headset/tests/PanelChannelTest.java', ROOT/'headset/tests/ProcessingSettingsTest.java',
-         ROOT/'headset/tests/ScopeTest.java'], environment)
+         ROOT/'headset/tests/ScopeTest.java', ROOT/'headset/tests/CameraStateTest.java'], environment)
     log = run([java('java'), '-cp', tests, 'dev.pico.etenhance.PanelChannelTest', output/'fixtures'], environment)
     log += run([java('java'), '-cp', tests, 'dev.pico.etenhance.ProcessingSettingsTest', ROOT/'magisk-picoet-enhance'], environment)
     log += run([java('java'), '-cp', tests, 'dev.pico.etenhance.ScopeTest', ROOT/'magisk-picoet-enhance'], environment)
+    log += run([java('java'), '-cp', tests, 'dev.pico.etenhance.CameraStateTest'], environment)
     (output/'host-tests.txt').write_text(log, encoding='utf-8')
     resources = output/'resources.zip'
     generated = output/'generated'
