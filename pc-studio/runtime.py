@@ -18,7 +18,12 @@ from PIL import Image, ImageDraw
 
 from state import TongueState
 from personalization import Personalization, apply_calibration
-from face_schema import ALL_VALID, CHANNELS, INDEX, SCHEMA, STOCK_CHANNELS
+from face_schema import (
+    AGGREGATE_CHILDREN, AGGREGATE_STOCK_CHANNELS, ALL_VALID, CHANNELS, INDEX,
+    MOUTH_MODES, MOUTH_PRESETS, PRESET_MODES, PURE_EXTENDED_CHANNELS, ROUTABLE_CHANNELS,
+    SCHEMA, STOCK_AGGREGATE_PARENTS, STOCK_CHANNELS,
+    matching_preset, resolve_channel_sources, validate_channel_sources,
+)
 from face_filter import FaceFilter
 from wire import END, JPEG, REPLAY, FrameHeader, SourceOrder, read_frame, result_packet, face_result_packet, sync_clock
 
@@ -29,7 +34,7 @@ DEFAULT_CONFIG = dict(enabled=False, headset_host='',
                        device='auto', smoothing_ms=20.,
                       uncertain_hold_ms=100., stale_ms=350., preview_fps=10, size_hysteresis=True,
                       replay_path='',
-                      mouth_mode='hybrid', hybrid_channels=None,
+                      mouth_mode='curated', hybrid_channels=None, channel_sources=None,
                       output_enabled=False, output_host='127.0.0.1', output_port=45682)
 
 
@@ -68,14 +73,29 @@ class Runtime:
                 saved = {key: value for key, value in saved.items() if key not in ('model_kind', 'model_path')}
             self.config.update(saved)
         self.config.pop('face_source', None)  # Obsolete PC-side override; VRCFT owns source selection.
-        if self.config.get('mouth_mode') not in ('hybrid', 'model_only'):
-            self.config['mouth_mode'] = 'hybrid'
+        if self.config.get('mouth_mode') not in MOUTH_MODES:
+            self.config['mouth_mode'] = 'curated'
         saved_hybrid = self.config.get('hybrid_channels')
         if isinstance(saved_hybrid, list) and all(isinstance(name, str) for name in saved_hybrid):
             allowed = set(saved_hybrid)
             self.config['hybrid_channels'] = [name for name in STOCK_CHANNELS if name in allowed]
         else:
             self.config['hybrid_channels'] = None
+        saved_sources = self.config.get('channel_sources')
+        try:
+            validated_sources = validate_channel_sources(saved_sources) if saved_sources is not None else None
+        except ValueError:
+            validated_sources = None
+        if validated_sources is not None:
+            full = resolve_channel_sources(self.config['mouth_mode'], self.config['hybrid_channels'], validated_sources)
+            detected = matching_preset(full)
+            self.config['mouth_mode'] = detected
+            self.config['channel_sources'] = None if detected in PRESET_MODES else full
+            self.config['hybrid_channels'] = None
+        else:
+            self.config['channel_sources'] = None
+            if self.config['mouth_mode'] == 'custom':
+                self.config['mouth_mode'] = 'curated'
         self.config['enabled'] = False  # Opening the local service never starts capture.
         self.model_factory = model_factory
         self.run_root = Path(run_root or self.config_path.parent/'runs')
@@ -179,6 +199,10 @@ class Runtime:
                 return False
         return True
 
+    def _resolved_sources(self, config=None):
+        cfg = self.config if config is None else config
+        return resolve_channel_sources(cfg['mouth_mode'], cfg.get('hybrid_channels'), cfg.get('channel_sources'))
+
     def _merge_mouth(self, prediction, header, config, now_pc_ns):
         model_values = list(prediction['values'])
         model_channels = dict(prediction['channels'])
@@ -186,21 +210,59 @@ class Runtime:
         values = list(model_values)
         mask = model_mask
         native_channels = []
-        if config['mouth_mode'] == 'hybrid':
-            hc = config['hybrid_channels']
-            allowed = set(STOCK_CHANNELS) if hc is None else set(hc)
-            record, received_ns = self.latest_stock if self.latest_stock else (None, None)
-            if allowed and self._stock_is_fresh(record, received_ns, header.session_id, config, now_pc_ns):
-                for i, name in enumerate(STOCK_CHANNELS):
-                    if name in allowed and i < len(record.final33):
-                        value = float(record.final33[i])
-                        if math.isfinite(value):
-                            values[i] = min(1., max(0., value))
-                            mask |= 1 << i
-                            native_channels.append(name)
+        sources = self._resolved_sources(config)
+        record, received_ns = self.latest_stock if self.latest_stock else (None, None)
+        stock_ok = any(src == 'stock' for src in sources.values()) and self._stock_is_fresh(
+            record, received_ns, header.session_id, config, now_pc_ns)
+        for i, name in enumerate(STOCK_CHANNELS):
+            if name in AGGREGATE_STOCK_CHANNELS:
+                continue
+            src = sources[name]
+            if src == 'off':
+                values[i] = 0.
+                mask &= ~(1 << i)
+            elif src == 'stock' and stock_ok and i < len(record.final33):
+                value = float(record.final33[i])
+                if math.isfinite(value):
+                    values[i] = min(1., max(0., value))
+                    mask |= 1 << i
+                    native_channels.append(name)
+        for name, parent in STOCK_AGGREGATE_PARENTS.items():
+            sub_i, parent_i = INDEX[name], INDEX[parent]
+            src = sources[name]
+            if src == 'off':
+                values[sub_i] = 0.
+                mask &= ~(1 << sub_i)
+            elif src == 'stock' and stock_ok and parent_i < len(record.final33):
+                value = float(record.final33[parent_i])
+                if math.isfinite(value):
+                    values[sub_i] = min(1., max(0., value))
+                    mask |= 1 << sub_i
+                    native_channels.append(name)
+            elif not (model_mask & (1 << sub_i)) and (model_mask & (1 << parent_i)):
+                values[sub_i] = model_values[parent_i]
+                mask |= 1 << sub_i
+        for parent, children in AGGREGATE_CHILDREN.items():
+            parent_i = INDEX[parent]
+            if any(sources[c] == 'off' for c in children):
+                values[parent_i] = 0.
+                mask &= ~(1 << parent_i)
+            elif all(sources[c] == 'stock' for c in children) and stock_ok and parent_i < len(record.final33):
+                value = float(record.final33[parent_i])
+                if math.isfinite(value):
+                    values[parent_i] = min(1., max(0., value))
+                    mask |= 1 << parent_i
+                    native_channels.append(parent)
+        for name in PURE_EXTENDED_CHANNELS:
+            if sources[name] == 'off':
+                ext_i = INDEX[name]
+                values[ext_i] = 0.
+                mask &= ~(1 << ext_i)
+        native_set = set(native_channels)
+        ordered_native = [name for name in CHANNELS if name in native_set]
         return dict(prediction,
                     model_values=model_values, model_channels=model_channels, model_valid_mask=model_mask,
-                    native_channels=native_channels,
+                    native_channels=ordered_native,
                     values=values, valid_mask=mask,
                     channels={name: values[i] for i, name in enumerate(CHANNELS) if mask & (1 << i)},
                     fresh=bool(mask), override=bool(mask),
@@ -213,8 +275,8 @@ class Runtime:
         updated = dict(self.config, **changes)
         if updated['model_kind'] not in ('face50', 'segmentation', 'mouthlink'):
             raise ValueError('Unknown model kind')
-        if updated['mouth_mode'] not in ('hybrid', 'model_only'):
-            raise ValueError("mouth_mode must be 'hybrid' or 'model_only'")
+        if updated['mouth_mode'] not in MOUTH_MODES:
+            raise ValueError("mouth_mode must be 'curated', 'hybrid', 'model_only', or 'custom'")
         hc = updated['hybrid_channels']
         if hc is not None:
             if (not isinstance(hc, (list, tuple)) or any(not isinstance(name, str) for name in hc)
@@ -222,6 +284,38 @@ class Runtime:
                 raise ValueError('hybrid_channels must be null or a unique list of native STOCK_CHANNELS')
             allowed = set(hc)
             updated['hybrid_channels'] = [name for name in STOCK_CHANNELS if name in allowed]
+        if 'channel_sources' in changes:
+            if changes['channel_sources'] is None:
+                updated['channel_sources'] = None
+                if updated['mouth_mode'] == 'custom':
+                    raise ValueError("mouth_mode 'custom' cannot have null channel_sources")
+            else:
+                validated = validate_channel_sources(changes['channel_sources'])
+                if 'mouth_mode' in changes and changes['mouth_mode'] in PRESET_MODES:
+                    base = resolve_channel_sources(changes['mouth_mode'], None, None)
+                elif 'mouth_mode' in changes and changes['mouth_mode'] == 'custom':
+                    base = resolve_channel_sources('curated', None, self.config.get('channel_sources'))
+                else:
+                    base = resolve_channel_sources(
+                        self.config['mouth_mode'], self.config.get('hybrid_channels'), self.config.get('channel_sources'))
+                base.update(validated)
+                full = {name: base[name] for name in ROUTABLE_CHANNELS}
+                detected = matching_preset(full)
+                updated['mouth_mode'] = detected
+                updated['channel_sources'] = None if detected in PRESET_MODES else full
+                updated['hybrid_channels'] = None
+        elif 'mouth_mode' in changes:
+            if updated['mouth_mode'] == 'custom':
+                if not self.config.get('channel_sources'):
+                    raise ValueError("mouth_mode 'custom' requires channel_sources")
+                updated['channel_sources'] = dict(self.config['channel_sources'])
+                updated['hybrid_channels'] = None
+            else:
+                updated['channel_sources'] = None
+                if 'hybrid_channels' not in changes:
+                    updated['hybrid_channels'] = None
+        elif 'hybrid_channels' in changes and updated['mouth_mode'] == 'hybrid':
+            updated['channel_sources'] = None
         for key in ('smoothing_ms', 'uncertain_hold_ms', 'stale_ms'):
             if not math.isfinite(float(updated[key])) or float(updated[key]) < 0:
                 raise ValueError(key+' must be a finite nonnegative number')
@@ -482,10 +576,10 @@ class Runtime:
                 return False
             if self.record_wants_stock:
                 return True
-            if self.capture_only or self.config['mouth_mode'] != 'hybrid':
+            if self.capture_only:
                 return False
-            hc = self.config['hybrid_channels']
-            return hc is None or len(hc) > 0
+            sources = self._resolved_sources()
+            return any(src == 'stock' for src in sources.values())
 
     def _psl_worker(self):
         while not self.stock_stop.is_set() and self._wants_psl():
@@ -1155,7 +1249,9 @@ class Runtime:
                                     pc_total_ms=self.latencies[-1]['pc_total_ms'] if self.latencies else None,
                                     latency_ms=latency, clock_uncertainty_ms=self.clock['uncertainty_ms'] if self.clock else None),
                     'prediction': json_value(self.prediction), 'config': dict(self.config),
-                      'contract': dict(schema=SCHEMA, channels=list(CHANNELS), stock_channels=list(STOCK_CHANNELS)),
+                      'contract': dict(schema=SCHEMA, channels=list(CHANNELS), stock_channels=list(STOCK_CHANNELS),
+                                     routable_channels=list(ROUTABLE_CHANNELS),
+                                     presets={k: dict(v) for k, v in MOUTH_PRESETS.items()}),
                        'live_stock': dict(wanted=self._wants_psl(), active=bool(self.stock_status['active']),
                                           fresh=bool(stock_fresh), age_ms=stock_age_ms,
                                           error=self.stock_status.get('error')),

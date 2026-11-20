@@ -177,14 +177,29 @@
         <label class="check"><input id="output_enabled" form="settings" type="checkbox"><span id="udp-label">Send expressions to VRCFaceTracking</span></label>
         <p id="settings-help" class="hint"></p>
         <div id="mouth-routing" class="mouth-routing">
-          <label><span id="mouth-mode-label">Channel routing mode</span><select id="mouth_mode" form="settings"><option id="mouth-mode-hybrid" value="hybrid">Hybrid · prefer native 0-32, model fills gaps and 33-49</option><option id="mouth-mode-model" value="model_only">Model only · all 50 channels from model</option></select></label>
-          <p id="mouth-mode-help" class="hint"></p>
+          <div class="routing-head">
+            <div><strong id="mouth-mode-label" class="routing-title">Channel routing presets</strong><p id="mouth-mode-help" class="hint"></p></div>
+            <span id="routing-preset-badge" class="status-pill" role="status"></span>
+          </div>
+          <div id="preset-cards" class="preset-cards" role="group" aria-labelledby="mouth-mode-label">
+            <button id="preset-curated" class="preset-card" type="button"><strong id="preset-curated-title">Curated hybrid · Recommended</strong><span id="preset-curated-desc">Clean native channels use headset output; weak, biased and missing channels use the new model.</span></button>
+            <button id="preset-hybrid" class="preset-card" type="button"><strong id="preset-hybrid-title">Full native hybrid</strong><span id="preset-hybrid-desc">All 37 headset-supported targets use native output; 9 missing targets use the new model.</span></button>
+            <button id="preset-model-only" class="preset-card" type="button"><strong id="preset-model-title">Model only</strong><span id="preset-model-desc">All 46 morph targets use the new PC model (no headset result sharing needed).</span></button>
+          </div>
           <p id="hybrid-live-hint" class="hint" hidden></p>
           <details id="hybrid-channels-panel" class="disclosure-panel">
-            <summary id="hybrid-channels-title">Native-preferred channels (Hybrid)</summary>
+            <summary><span id="hybrid-channels-title">Adjust source per morph target</span><span id="hybrid-channels-summary" class="small-badge"></span></summary>
             <p id="hybrid-channels-help" class="hint"></p>
-            <div class="actions hybrid-actions"><button id="hybrid-select-all" type="button">Select all 33</button><button id="hybrid-clear-all" type="button">Use model for all</button><span id="hybrid-channels-summary" class="hint"></span></div>
-            <div id="hybrid-channels-list" class="hybrid-channel-grid"></div>
+            <div class="routing-toolbar">
+              <div class="actions routing-filters">
+                <button id="filter-all" class="filter-chip" type="button">All</button>
+                <button id="filter-stock" class="filter-chip" type="button">Native</button>
+                <button id="filter-model" class="filter-chip" type="button">New model</button>
+                <button id="filter-good" class="filter-chip" type="button">Native clean / merged</button>
+              </div>
+              <input id="channel-search" class="routing-search" type="search" autocomplete="off" spellcheck="false" placeholder="Filter morph targets…">
+            </div>
+            <div id="hybrid-channels-list" class="morph-groups"></div>
           </details>
         </div>
       </div>

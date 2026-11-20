@@ -15,8 +15,11 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 from backend import make_server
-from face_schema import CHANNELS, INDEX, SCHEMA
-from runtime import ROOT, Runtime
+from face_schema import (
+    CURATED_STOCK_TARGETS, MOUTH_PRESETS, PURE_EXTENDED_CHANNELS, ROUTABLE_CHANNELS,
+    CHANNELS, INDEX, SCHEMA,
+)
+from runtime import DEFAULT_CONFIG, ROOT, Runtime
 from stock import CaptureContext, StockRecord
 from test_runtime import header, jpeg, wait_for
 from wire import FACE_RESULT
@@ -545,6 +548,79 @@ class FaceRuntimeTests(unittest.TestCase):
             done.set()
             runtime.stop(); runtime.udp.close(); server.shutdown(); serving.join(); server.server_close()
 
+
+    def test_curated_preset_and_per_morph_target_routing_validation_and_merge(self):
+        self.assertEqual(DEFAULT_CONFIG['mouth_mode'], 'curated')
+        self.assertEqual(len(ROUTABLE_CHANNELS), 46)
+        self.assertEqual(len(PURE_EXTENDED_CHANNELS), 9)
+        with self.assertRaisesRegex(ValueError, 'ROUTABLE_CHANNELS'):
+            self.runtime.configure(dict(channel_sources={'CheekPuff': 'stock'}))
+        with self.assertRaisesRegex(ValueError, 'only supports model or off'):
+            self.runtime.configure(dict(channel_sources={'TongueRoll': 'stock'}))
+        with self.assertRaisesRegex(ValueError, 'requires channel_sources'):
+            self.runtime.configure(dict(mouth_mode='custom'))
+
+        curated_eq = self.runtime.configure(dict(mouth_mode='custom', channel_sources=dict(MOUTH_PRESETS['curated'])))
+        self.assertEqual(curated_eq['mouth_mode'], 'curated')
+        self.assertIsNone(curated_eq['channel_sources'])
+
+        all_model_off_missing = dict(MOUTH_PRESETS['model_only'], TongueLeft='off')
+        custom_saved = self.runtime.configure(dict(mouth_mode='custom', channel_sources=all_model_off_missing))
+        self.assertEqual(custom_saved['mouth_mode'], 'custom')
+        self.assertEqual(custom_saved['channel_sources']['TongueLeft'], 'off')
+
+        back_to_model = self.runtime.configure(dict(channel_sources={'TongueLeft': 'model'}))
+        self.assertEqual(back_to_model['mouth_mode'], 'model_only')
+        self.assertIsNone(back_to_model['channel_sources'])
+
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sink:
+            sink.bind(('127.0.0.1', 0)); sink.settimeout(2)
+            self.runtime.configure(dict(output_enabled=True, output_port=sink.getsockname()[1], mouth_mode='curated'))
+            self.start()
+            final33 = [0.05] * 33
+            final33[INDEX['JawOpen']] = 0.88
+            final33[INDEX['MouthPucker']] = 0.61
+            final33[INDEX['MouthFunnel']] = 0.72
+            final33[INDEX['MouthRollLower']] = 0.44
+            final33[INDEX['MouthShrugUpper']] = 0.39
+            final33[INDEX['MouthSmileL']] = 0.91
+            final33[INDEX['CheekPuff']] = 0.85
+            final33[INDEX['TongueOut']] = 0.95
+            record = StockRecord(1, 99, 10, 10 * 11_111_111, final33, final33, final33, [1., 1.], True, warmup=False)
+            with self.runtime.lock:
+                self.runtime.latest_stock = (record, time.perf_counter_ns())
+            self.submit(20, 1)
+            fields = FACE_RESULT.unpack(sink.recv(1024))
+            self.assertAlmostEqual(fields[10 + INDEX['JawOpen']], 0.88, places=5)
+            self.assertAlmostEqual(fields[10 + INDEX['MouthPucker']], 0.61, places=5)
+            self.assertAlmostEqual(fields[10 + INDEX['LipFunnelUpper']], 0.72, places=5)
+            self.assertAlmostEqual(fields[10 + INDEX['LipFunnelLower']], 0.72, places=5)
+            self.assertAlmostEqual(fields[10 + INDEX['MouthRollLower']], 0.44, places=5)
+            self.assertAlmostEqual(fields[10 + INDEX['MouthShrugUpper']], 0.39, places=5)
+            self.assertAlmostEqual(fields[10 + INDEX['TongueOut']], 0.1, places=5)
+            self.assertAlmostEqual(fields[10 + INDEX['TongueLeft']], 0.2, places=5)
+            self.assertFalse(fields[7] & (1 << INDEX['MouthSmileL']))
+            self.assertEqual(set(self.runtime.prediction['native_channels']),
+                             set(CURATED_STOCK_TARGETS) | {'MouthFunnel'})
+
+            # Subdivided split: LipFunnelUpper from stock, LipFunnelLower from model, CheekPuffLeft from stock, TongueLeft off
+            self.runtime.configure(dict(
+                mouth_mode='curated',
+                channel_sources={'LipFunnelLower': 'model', 'CheekPuffLeft': 'stock', 'TongueLeft': 'off'},
+            ))
+            self.assertEqual(self.runtime.config['mouth_mode'], 'custom')
+            with self.runtime.lock:
+                self.runtime.latest_stock = (record, time.perf_counter_ns())
+            self.submit(21, 1)
+            fields = FACE_RESULT.unpack(sink.recv(1024))
+            self.assertAlmostEqual(fields[10 + INDEX['LipFunnelUpper']], 0.72, places=5)
+            self.assertAlmostEqual(fields[10 + INDEX['LipFunnelLower']], 0.7, places=5)
+            self.assertAlmostEqual(fields[10 + INDEX['CheekPuffLeft']], 0.85, places=5)
+            self.assertFalse(fields[7] & (1 << INDEX['CheekPuff']))
+            self.assertFalse(fields[7] & (1 << INDEX['CheekPuffRight']))
+            self.assertFalse(fields[7] & (1 << INDEX['TongueLeft']))
+            self.assertIn('contract', self.runtime.status())
+            self.assertEqual(len(self.runtime.status()['contract']['routable_channels']), 46)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

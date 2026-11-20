@@ -5,8 +5,8 @@ English | [简体中文](CHANGELOG_zh.md)
 ## [Unreleased]
 
 ### Features
-- Move whole-mouth channel routing (`mouth_mode`: `hybrid` / `model_only`, and per-channel `hybrid_channels` whitelist over the 33 native stock channels) into PC Studio, with bilingual Settings controls that hot-switch live without stopping camera tracking or restarting VRCFaceTracking.
-- Share one single headset `LABELS\n` (`PSL1`) TCP subscription whenever live `hybrid` routing or `receive_results` recording requires native scalars, merging fresh `final33` values (including valid zero) with One-Euro-filtered model outputs before emitting merged 50-channel `MFR1` packets.
+- Upgrade PC Studio whole-mouth channel routing to three presets (`curated` recommended default, `hybrid` full native, and `model_only`) backed by a unified 46-morph-target per-channel source editor (`channel_sources`, grouped by anatomy with native-quality tags, quick group/filter controls, and instant search). Changes hot-switch live without stopping camera tracking or restarting VRCFaceTracking, while preserving backward compatibility for saved `hybrid_channels` configs.
+- Share one single headset `LABELS\n` (`PSL1`) TCP subscription whenever any routed morph target selects native stock or `receive_results` recording is active, merging fresh `final33` values (including valid zero, and mapping aggregate channels cleanly onto subdivided targets without overwrite leaks) with One-Euro-filtered model outputs before emitting `MFR1` packets.
 - Filter valid face50 channels with source-time One-Euro smoothing; expose `smoothing_ms` in the bilingual Settings page and preserve raw predictions alongside filtered logs.
 - Pair with the simplified `UnifiedPicoModule` pure-sink receiver (which writes `MFR1` directly and yields `BridgeSplit` face demand via `PXR_SUB` while keeping eye tracking uninterrupted).
 - Put LAN broadcast and post-processing in two tabs. Keep the tuning sidebar and parameter panel, and group the two independent result switches.
@@ -19,7 +19,7 @@ English | [简体中文](CHANGELOG_zh.md)
 - Use actual image-sensor intervals and a speed-adaptive cutoff to reduce jitter without a fixed frame queue. Keep model inference stateless and filtering in the runtime.
 
 ### Notes & Caveats
-- Live `hybrid` native-first merging requires turning on Mouth under Result sharing in the headset companion app; missing or stale `PSL1` records automatically fall back to valid model channels. Selecting `model_only` skips `LABELS\n` unless recording requests it.
+- Routing presets or custom configurations that keep at least one channel on native stock require turning on Mouth under Result sharing in the headset companion app; missing or stale `PSL1` records automatically fall back to valid model channels. When zero targets use native stock (such as `model_only`), `LABELS\n` is skipped unless recording requests it.
 - Zero smoothing is exact passthrough. Session/model changes, invalid results, mask changes and long source gaps reset state. Output permission still comes from independently validated manifest bits; smoothing does not repair sustained model errors.
 
 ## [2.6.0] - 2026-11-20

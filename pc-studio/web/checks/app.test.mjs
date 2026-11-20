@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {createApp, captureProgress, deriveView, channelValue, requestJson, PRIMARY_CHANNELS, PAGES, routePage} from "../app.mjs";
+import {createApp, captureProgress, deriveView, channelValue, requestJson, PRIMARY_CHANNELS, ROUTABLE_CHANNELS, MOUTH_PRESETS, PAGES, routePage} from "../app.mjs";
 import {messages, preferredLanguage, initialLanguage, errorMessage, LANGUAGE_KEY} from "../i18n.mjs";
 
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
@@ -23,7 +23,7 @@ function setup(t, options = {}) {
   elements.get("cymple-host").value = "127.0.0.1"; elements.get("cymple-port").value = "23303"; elements.get("cymple-left-port").value = "45682"; elements.get("cymple-right-port").value = "45683"; elements.get("cymple-left-rotate").value = "0"; elements.get("cymple-right-rotate").value = "0";
   const doc = {documentElement: {}, hidden: false, title: "", createElement: () => new Element(), getElementById: id => { assert.ok(elements.has(id), id); return elements.get(id); }};
   const config = {headset_host: "headset.example", headset_port: 45681, model_path: "D:/models/student.onnx", model_kind: "face50", device: "auto", stale_ms: 350, preview_fps: 10, smoothing_ms: 20,
-    replay_path: "D:/data/reference.npz", mouth_mode: "hybrid", hybrid_channels: null, enabled: false, output_enabled: false, output_host: "127.0.0.1", output_port: 45682};
+    replay_path: "D:/data/reference.npz", mouth_mode: "curated", hybrid_channels: null, channel_sources: null, enabled: false, output_enabled: false, output_host: "127.0.0.1", output_port: 45682};
   const trained = ["JawOpen", "TongueOut", "TongueLeft"];
   const server = {config, calls: [], before: null, failStatus: false, failStart: false, previewStatus: 200, status: {
     running: false, connected: false, config, source: {session_id: "18446744073709551000", source_seq: "9007199254740993"},
@@ -394,7 +394,7 @@ test("One-Euro smoothing is configurable, bilingual and saving zero never starts
   const posted = JSON.parse(server.calls.find(c => c.path === "/api/config" && c.method === "POST").body);
   assert.equal(posted.smoothing_ms, 0);
   assert.ok(!server.calls.some(c => c.path === "/api/start"));
-  assert.equal(posted.mouth_mode, "hybrid"); assert.equal(posted.hybrid_channels, null); assert.ok(!("face_source" in posted));
+  assert.equal(posted.mouth_mode, "curated"); assert.equal(posted.hybrid_channels, null); assert.equal(posted.channel_sources, null); assert.ok(!("face_source" in posted));
 });
 test("image-only recording sends an explicit result opt-out and locks it after start", async t => {
   const {app, server, el} = setup(t);
@@ -1018,49 +1018,111 @@ test("read_only, sealed_c and active managed capture disable or hide Cymple rela
   assert.equal(fCapture.el("cymple-relay-start").disabled, true);
 });
 
-test("channel routing and Hybrid whitelist save live without stopping and display native channels", async t => {
+test("three routing presets, 46-target customization, filters and bilingual switching apply live without stopping", async t => {
   const {app, server, el, row} = setup(t);
   await app.init();
   await app.start();
-  assert.equal(app.hybridInputs.size, 33);
-  assert.equal(el("hybrid-channels-panel").hidden, false);
-  assert.match(el("hybrid-channels-summary").textContent, /33 \/ 33/);
+  assert.equal(app.morphControls.size, 46);
+  assert.equal(ROUTABLE_CHANNELS.length, 46);
+  assert.equal(app.morphGroups.length, 6);
+  assert.equal(el("routing-preset-badge").textContent, messages.en.presetStateCurated);
+  assert.equal(el("preset-curated").attributes["aria-pressed"], "true");
+  assert.equal(el("preset-hybrid").attributes["aria-pressed"], "false");
+  assert.equal(el("preset-model-only").attributes["aria-pressed"], "false");
+  assert.match(el("hybrid-channels-summary").textContent, /Native 6 · Model 40/);
   assert.equal(el("hybrid-live-hint").hidden, false);
   assert.equal(el("hybrid-live-hint").textContent, messages.en.hybridStockWaiting);
-  app.hybridInputs.get("MouthSmileL").checked = false;
-  app.hybridInputs.get("MouthSmileR").checked = false;
-  app.hybridInputs.get("MouthSmileR").emit("change");
-  assert.match(el("hybrid-channels-summary").textContent, /31 \/ 33/);
+
+  // Switch to Full native hybrid preset (37 native, 9 missing on model).
+  el("preset-hybrid").emit("click");
+  assert.equal(el("routing-preset-badge").textContent, messages.en.presetStateHybrid);
+  assert.match(el("hybrid-channels-summary").textContent, /Native 37 · Model 9/);
   await app.save();
-  const firstPost = JSON.parse(server.calls.filter(c => c.path === "/api/config" && c.method === "POST").at(-1).body);
-  assert.equal(firstPost.mouth_mode, "hybrid");
-  assert.equal(firstPost.hybrid_channels.length, 31);
-  assert.ok(!firstPost.hybrid_channels.includes("MouthSmileL"));
+  const hybridPost = JSON.parse(server.calls.filter(c => c.path === "/api/config" && c.method === "POST").at(-1).body);
+  assert.equal(hybridPost.mouth_mode, "hybrid");
+  assert.equal(hybridPost.channel_sources, null);
   assert.equal(server.status.running, true);
-  el("hybrid-clear-all").emit("click");
-  await app.save();
-  const clearedPost = JSON.parse(server.calls.filter(c => c.path === "/api/config" && c.method === "POST").at(-1).body);
-  assert.deepEqual(clearedPost.hybrid_channels, []);
+
+  // Switch to Model only preset (0 native, 46 model) and verify panel stays accessible for per-target overrides.
+  el("preset-model-only").emit("click");
+  assert.equal(el("routing-preset-badge").textContent, messages.en.presetStateModel);
+  assert.match(el("hybrid-channels-summary").textContent, /Native 0 · Model 46/);
   assert.equal(el("hybrid-live-hint").hidden, true);
-  el("hybrid-select-all").emit("click");
-  await app.save();
-  const allPost = JSON.parse(server.calls.filter(c => c.path === "/api/config" && c.method === "POST").at(-1).body);
-  assert.equal(allPost.hybrid_channels, null);
-  el("mouth_mode").value = "model_only"; el("mouth_mode").emit("change");
-  assert.equal(el("hybrid-channels-panel").hidden, true);
   await app.save();
   const modelPost = JSON.parse(server.calls.filter(c => c.path === "/api/config" && c.method === "POST").at(-1).body);
   assert.equal(modelPost.mouth_mode, "model_only");
+  assert.equal(modelPost.channel_sources, null);
+
+  // Customize individual morph targets (preset -> custom routing -> bilingual switch preserves edits -> save).
+  el("preset-curated").emit("click");
+  app.morphControls.get("MouthSmileL").stockBtn.emit("click");
+  app.morphControls.get("TongueRoll").offBtn.emit("click");
+  assert.equal(app.state.dirty, true);
+  assert.equal(el("routing-preset-badge").textContent, messages.en.presetStateCustom);
+  assert.match(el("hybrid-channels-summary").textContent, /Native 7 · Model 38 · Off 1/);
+
+  app.setLanguage("zh-CN");
+  assert.equal(el("routing-preset-badge").textContent, messages["zh-CN"].presetStateCustom);
+  assert.equal(el("preset-curated-title").textContent, messages["zh-CN"].presetCuratedTitle);
+  assert.equal(app.morphControls.get("JawOpen").tagEl.textContent, messages["zh-CN"].tagGood);
+  assert.equal(el("channel-search").attributes.placeholder, messages["zh-CN"].channelSearchPlaceholder);
+
+  await app.save();
+  const customPost = JSON.parse(server.calls.filter(c => c.path === "/api/config" && c.method === "POST").at(-1).body);
+  assert.equal(customPost.mouth_mode, "custom");
+  assert.equal(customPost.channel_sources.MouthSmileL, "stock");
+  assert.equal(customPost.channel_sources.TongueRoll, "off");
+  assert.equal(customPost.channel_sources.JawOpen, "stock");
   assert.equal(server.status.running, true);
+
+  // Filter chips and search do not mark settings dirty.
+  el("filter-stock").emit("click");
+  assert.equal(app.state.dirty, false);
+  assert.equal(app.morphControls.get("MouthSmileL").rowEl.hidden, false);
+  assert.equal(app.morphControls.get("TongueLeft").rowEl.hidden, true);
+  el("filter-good").emit("click");
+  assert.equal(app.morphControls.get("LipFunnelUpper").rowEl.hidden, false);
+  assert.equal(app.morphControls.get("CheekPuffLeft").rowEl.hidden, false);
+  assert.equal(app.morphControls.get("MouthSmileL").rowEl.hidden, true);
+  el("filter-all").emit("click");
+  el("channel-search").value = "funnel";
+  el("channel-search").emit("input");
+  assert.equal(app.state.dirty, false);
+  assert.equal(app.morphControls.get("LipFunnelUpper").rowEl.hidden, false);
+  assert.equal(app.morphControls.get("JawOpen").rowEl.hidden, true);
+  el("channel-search").value = "";
+  el("channel-search").emit("input");
+
+  // Returning individual overrides to match a preset restores preset identity.
+  app.morphControls.get("MouthSmileL").modelBtn.emit("click");
+  app.morphControls.get("TongueRoll").modelBtn.emit("click");
+  assert.equal(el("routing-preset-badge").textContent, messages["zh-CN"].presetStateCurated);
+  await app.save();
+  const restoredPost = JSON.parse(server.calls.filter(c => c.path === "/api/config" && c.method === "POST").at(-1).body);
+  assert.equal(restoredPost.mouth_mode, "curated");
+  assert.equal(restoredPost.channel_sources, null);
+
   Object.assign(server.status.prediction, {
-    valid_mask: String(1n << BigInt(server.status.contract.channels.indexOf("MouthSmileL"))),
-    native_channels: ["MouthSmileL"],
-    channels: {JawOpen: .3, MouthSmileL: .45}
+    valid_mask: String(1n << BigInt(server.status.contract.channels.indexOf("JawOpen"))),
+    native_channels: ["JawOpen"],
+    channels: {JawOpen: .45}
   });
   server.status.live_stock = {wanted: true, active: true, fresh: true};
-  el("mouth_mode").value = "hybrid"; el("mouth_mode").emit("change"); await app.save();
   await app.pollStatus();
-  assert.equal(row("MouthSmileL").output.textContent, "0.450");
+  assert.equal(row("JawOpen").output.textContent, "0.450");
   assert.equal(row("TongueUp").output.textContent, "—");
-  assert.equal(el("hybrid-live-hint").textContent, messages.en.hybridStockFresh);
+  assert.equal(el("hybrid-live-hint").textContent, messages["zh-CN"].hybridStockFresh);
+});
+
+test("legacy hybrid_channels array migrates cleanly into per-morph-target routing", async t => {
+  const {app, server, el} = setup(t);
+  server.config.mouth_mode = "hybrid";
+  server.config.hybrid_channels = ["MouthFunnel", "JawOpen"];
+  server.config.channel_sources = null;
+  await app.init();
+  assert.equal(app.morphControls.get("JawOpen").stockBtn.attributes["aria-pressed"], "true");
+  assert.equal(app.morphControls.get("LipFunnelUpper").stockBtn.attributes["aria-pressed"], "true");
+  assert.equal(app.morphControls.get("LipFunnelLower").stockBtn.attributes["aria-pressed"], "true");
+  assert.equal(app.morphControls.get("MouthSmileL").modelBtn.attributes["aria-pressed"], "true");
+  assert.match(el("hybrid-channels-summary").textContent, /Native 3 · Model 43/);
 });
