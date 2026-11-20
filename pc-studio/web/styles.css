@@ -304,3 +304,7 @@ html[data-guiding="true"] #guide-hint { font-size:12px; flex:1; margin:0; }
 #cymple-relay-options .cymple-orient-grid { margin-top:4px; }
 #cymple-relay-options .check { margin:8px 0 0; }
 @media (max-width:540px) { .cymple-eye-grid, .cymple-orient-grid { grid-template-columns:1fr; } }
+.mouth-routing { margin-top:16px; padding-top:16px; border-top:1px solid var(--line); }
+.hybrid-actions { margin:10px 0 12px; align-items:center; }
+.hybrid-channel-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(168px, 1fr)); gap:8px 12px; }
+.hybrid-channel-grid .check { margin:0; padding:6px 10px; background:#fafcfb; border:1px solid var(--line); border-radius:8px; }

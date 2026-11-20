@@ -428,6 +428,123 @@ class FaceRuntimeTests(unittest.TestCase):
         finally:
             runtime.stop(); runtime.udp.close(); server.shutdown(); serving.join(); server.server_close()
 
+    def test_mouth_mode_and_hybrid_channels_validate_and_hot_switch_while_running(self):
+        with self.assertRaisesRegex(ValueError, 'mouth_mode'):
+            self.runtime.configure(dict(mouth_mode='invalid'))
+        with self.assertRaisesRegex(ValueError, 'STOCK_CHANNELS'):
+            self.runtime.configure(dict(hybrid_channels=['TongueRoll']))
+        with self.assertRaisesRegex(ValueError, 'STOCK_CHANNELS'):
+            self.runtime.configure(dict(hybrid_channels=['JawOpen', 'JawOpen']))
+        saved = self.runtime.configure(dict(mouth_mode='hybrid', hybrid_channels=['MouthSmileL', 'JawOpen']))
+        self.assertEqual(saved['hybrid_channels'], ['JawOpen', 'MouthSmileL'])
+        self.start()
+        self.runtime.configure(dict(mouth_mode='model_only'))
+        self.assertTrue(self.runtime.running and self.runtime.connected)
+        self.runtime.configure(dict(mouth_mode='hybrid', hybrid_channels=['JawOpen']))
+        self.assertTrue(self.runtime.running and self.runtime.connected)
+
+    def test_hybrid_merge_prefers_fresh_stock_including_zero_and_keeps_unpicked_on_model(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sink:
+            sink.bind(('127.0.0.1', 0)); sink.settimeout(2)
+            self.runtime.configure(dict(output_enabled=True, output_port=sink.getsockname()[1],
+                                        mouth_mode='hybrid', hybrid_channels=['JawOpen', 'CheekSquintL']))
+            self.start()
+            final33 = [.5] * 33
+            final33[INDEX['JawOpen']] = 0.0
+            final33[INDEX['CheekSquintL']] = 0.65
+            final33[INDEX['MouthSmileL']] = 0.92
+            record = StockRecord(1, 99, 10, 10 * 11_111_111, final33, final33, final33, [1., 1.], True, warmup=False)
+            with self.runtime.lock:
+                self.runtime.latest_stock = (record, time.perf_counter_ns())
+            self.submit(10, 1)
+            fields = FACE_RESULT.unpack(sink.recv(1024))
+            self.assertAlmostEqual(fields[10 + INDEX['JawOpen']], 0.0)
+            self.assertAlmostEqual(fields[10 + INDEX['CheekSquintL']], 0.65)
+            self.assertFalse(fields[7] & (1 << INDEX['MouthSmileL']))
+            self.assertAlmostEqual(fields[10 + INDEX['TongueLeft']], 0.2)
+            self.assertEqual(self.runtime.prediction['native_channels'], ['CheekSquintL', 'JawOpen'])
+            self.assertAlmostEqual(self.runtime.prediction['model_channels']['JawOpen'], 0.3)
+            self.runtime.configure(dict(mouth_mode='model_only'))
+            self.submit(11, 1)
+            fields = FACE_RESULT.unpack(sink.recv(1024))
+            self.assertAlmostEqual(fields[10 + INDEX['JawOpen']], 0.3)
+            self.assertFalse(fields[7] & (1 << INDEX['CheekSquintL']))
+            self.assertEqual(fields[7].bit_count(), 4)
+            self.runtime.configure(dict(mouth_mode='hybrid', hybrid_channels=['JawOpen', 'CheekSquintL']))
+            with self.runtime.lock:
+                self.runtime.latest_stock = (record, time.perf_counter_ns() - 1_000_000_000)
+            self.submit(12, 1)
+            fields = FACE_RESULT.unpack(sink.recv(1024))
+            self.assertAlmostEqual(fields[10 + INDEX['JawOpen']], 0.3)
+            self.assertEqual(fields[7].bit_count(), 4)
+
+    def test_live_hybrid_shares_single_psl_connection_across_recording_and_model_only_skips_labels(self):
+        labels_connections = []
+        done = threading.Event()
+        payload = jpeg(); context = CaptureContext(1, 99)
+        class Source(socketserver.BaseRequestHandler):
+            def handle(inner):
+                command = bytearray()
+                while not command.endswith(b'\n'):
+                    part = inner.request.recv(1)
+                    if not part: return
+                    command.extend(part)
+                if command == b'PING\n':
+                    now = time.perf_counter_ns(); inner.request.sendall(struct.pack('<QQ', now, now))
+                elif command == b'CONTEXT\n':
+                    inner.request.sendall(context.pack())
+                elif command == b'JPEG\n':
+                    seq = 10
+                    while seq < 500 and not done.is_set():
+                        try:
+                            h = replace(header(seq), payload_bytes=len(payload))
+                            inner.request.sendall(h.pack() + payload)
+                            seq += 1
+                            time.sleep(.01)
+                        except OSError:
+                            break
+                elif command == b'LABELS\n':
+                    labels_connections.append(1)
+                    final33 = [.0] * 33; final33[INDEX['JawOpen']] = 0.05; final33[INDEX['CheekSquintL']] = 0.77
+                    for lseq in range(1, 500):
+                        if done.is_set():
+                            break
+                        sseq = 10 + lseq
+                        record = StockRecord(1, 99, sseq, sseq * 11_111_111, final33, final33, final33, [1., 1.],
+                                             True, association_valid=True, raw_identity=sseq, label_seq=lseq, warmup=False)
+                        try:
+                            inner.request.sendall(record.pack())
+                            time.sleep(.02)
+                        except OSError:
+                            break
+        server = socketserver.ThreadingTCPServer(('127.0.0.1', 0), Source); server.daemon_threads = True
+        serving = threading.Thread(target=server.serve_forever); serving.start()
+        runtime = Runtime(self.root/'shared_psl.json', lambda c: self.model)
+        try:
+            runtime.configure(dict(headset_host='127.0.0.1', headset_port=server.server_address[1],
+                                   model_path='fixture.onnx', mouth_mode='model_only', stale_ms=1000))
+            runtime.start(); wait_for(lambda: runtime.counts['inferred'] >= 1)
+            time.sleep(.05)
+            self.assertEqual(len(labels_connections), 0)
+            runtime.configure(dict(mouth_mode='hybrid', hybrid_channels=['JawOpen', 'CheekSquintL']))
+            wait_for(lambda: len(labels_connections) == 1 and runtime.status()['live_stock']['fresh'])
+            wait_for(lambda: 'CheekSquintL' in runtime.prediction.get('native_channels', []))
+            runtime.recording('begin', person_id='local', confirmed=True, guide=True, preset_id='basics', automatic=True)
+            wait_for(lambda: runtime.recorder.status()['stocks'] >= 1)
+            self.assertEqual(len(labels_connections), 1)
+            total = runtime.recorder.guide.status()['total']
+            for _ in range(total):
+                runtime.recording('skip')
+            wait_for(lambda: runtime.recorder.status()['state'] == 'stopped' and not runtime.record_wants_stock)
+            self.assertTrue(runtime.running and runtime.status()['live_stock']['wanted'])
+            self.assertEqual(len(labels_connections), 1)
+            runtime.configure(dict(mouth_mode='model_only'))
+            wait_for(lambda: not runtime.status()['live_stock']['active'])
+            self.assertTrue(runtime.running)
+        finally:
+            done.set()
+            runtime.stop(); runtime.udp.close(); server.shutdown(); serving.join(); server.server_close()
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

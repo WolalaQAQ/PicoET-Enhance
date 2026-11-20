@@ -23,7 +23,7 @@ function setup(t, options = {}) {
   elements.get("cymple-host").value = "127.0.0.1"; elements.get("cymple-port").value = "23303"; elements.get("cymple-left-port").value = "45682"; elements.get("cymple-right-port").value = "45683"; elements.get("cymple-left-rotate").value = "0"; elements.get("cymple-right-rotate").value = "0";
   const doc = {documentElement: {}, hidden: false, title: "", createElement: () => new Element(), getElementById: id => { assert.ok(elements.has(id), id); return elements.get(id); }};
   const config = {headset_host: "headset.example", headset_port: 45681, model_path: "D:/models/student.onnx", model_kind: "face50", device: "auto", stale_ms: 350, preview_fps: 10, smoothing_ms: 20,
-    replay_path: "D:/data/reference.npz", enabled: false, output_enabled: false, output_host: "127.0.0.1", output_port: 45682};
+    replay_path: "D:/data/reference.npz", mouth_mode: "hybrid", hybrid_channels: null, enabled: false, output_enabled: false, output_host: "127.0.0.1", output_port: 45682};
   const trained = ["JawOpen", "TongueOut", "TongueLeft"];
   const server = {config, calls: [], before: null, failStatus: false, failStart: false, previewStatus: 200, status: {
     running: false, connected: false, config, source: {session_id: "18446744073709551000", source_seq: "9007199254740993"},
@@ -394,7 +394,7 @@ test("One-Euro smoothing is configurable, bilingual and saving zero never starts
   const posted = JSON.parse(server.calls.find(c => c.path === "/api/config" && c.method === "POST").body);
   assert.equal(posted.smoothing_ms, 0);
   assert.ok(!server.calls.some(c => c.path === "/api/start"));
-  assert.ok(!("mouth_mode" in posted)); assert.ok(!("face_source" in posted));
+  assert.equal(posted.mouth_mode, "hybrid"); assert.equal(posted.hybrid_channels, null); assert.ok(!("face_source" in posted));
 });
 test("image-only recording sends an explicit result opt-out and locks it after start", async t => {
   const {app, server, el} = setup(t);
@@ -1016,4 +1016,51 @@ test("read_only, sealed_c and active managed capture disable or hide Cymple rela
   await fCapture.app.init();
   assert.equal(fCapture.el("cymple-relay").hidden, false);
   assert.equal(fCapture.el("cymple-relay-start").disabled, true);
+});
+
+test("channel routing and Hybrid whitelist save live without stopping and display native channels", async t => {
+  const {app, server, el, row} = setup(t);
+  await app.init();
+  await app.start();
+  assert.equal(app.hybridInputs.size, 33);
+  assert.equal(el("hybrid-channels-panel").hidden, false);
+  assert.match(el("hybrid-channels-summary").textContent, /33 \/ 33/);
+  assert.equal(el("hybrid-live-hint").hidden, false);
+  assert.equal(el("hybrid-live-hint").textContent, messages.en.hybridStockWaiting);
+  app.hybridInputs.get("MouthSmileL").checked = false;
+  app.hybridInputs.get("MouthSmileR").checked = false;
+  app.hybridInputs.get("MouthSmileR").emit("change");
+  assert.match(el("hybrid-channels-summary").textContent, /31 \/ 33/);
+  await app.save();
+  const firstPost = JSON.parse(server.calls.filter(c => c.path === "/api/config" && c.method === "POST").at(-1).body);
+  assert.equal(firstPost.mouth_mode, "hybrid");
+  assert.equal(firstPost.hybrid_channels.length, 31);
+  assert.ok(!firstPost.hybrid_channels.includes("MouthSmileL"));
+  assert.equal(server.status.running, true);
+  el("hybrid-clear-all").emit("click");
+  await app.save();
+  const clearedPost = JSON.parse(server.calls.filter(c => c.path === "/api/config" && c.method === "POST").at(-1).body);
+  assert.deepEqual(clearedPost.hybrid_channels, []);
+  assert.equal(el("hybrid-live-hint").hidden, true);
+  el("hybrid-select-all").emit("click");
+  await app.save();
+  const allPost = JSON.parse(server.calls.filter(c => c.path === "/api/config" && c.method === "POST").at(-1).body);
+  assert.equal(allPost.hybrid_channels, null);
+  el("mouth_mode").value = "model_only"; el("mouth_mode").emit("change");
+  assert.equal(el("hybrid-channels-panel").hidden, true);
+  await app.save();
+  const modelPost = JSON.parse(server.calls.filter(c => c.path === "/api/config" && c.method === "POST").at(-1).body);
+  assert.equal(modelPost.mouth_mode, "model_only");
+  assert.equal(server.status.running, true);
+  Object.assign(server.status.prediction, {
+    valid_mask: String(1n << BigInt(server.status.contract.channels.indexOf("MouthSmileL"))),
+    native_channels: ["MouthSmileL"],
+    channels: {JawOpen: .3, MouthSmileL: .45}
+  });
+  server.status.live_stock = {wanted: true, active: true, fresh: true};
+  el("mouth_mode").value = "hybrid"; el("mouth_mode").emit("change"); await app.save();
+  await app.pollStatus();
+  assert.equal(row("MouthSmileL").output.textContent, "0.450");
+  assert.equal(row("TongueUp").output.textContent, "—");
+  assert.equal(el("hybrid-live-hint").textContent, messages.en.hybridStockFresh);
 });

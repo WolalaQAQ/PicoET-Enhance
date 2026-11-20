@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw
 
 from state import TongueState
 from personalization import Personalization, apply_calibration
-from face_schema import ALL_VALID, CHANNELS, SCHEMA
+from face_schema import ALL_VALID, CHANNELS, INDEX, SCHEMA, STOCK_CHANNELS
 from face_filter import FaceFilter
 from wire import END, JPEG, REPLAY, FrameHeader, SourceOrder, read_frame, result_packet, face_result_packet, sync_clock
 
@@ -29,6 +29,7 @@ DEFAULT_CONFIG = dict(enabled=False, headset_host='',
                        device='auto', smoothing_ms=20.,
                       uncertain_hold_ms=100., stale_ms=350., preview_fps=10, size_hysteresis=True,
                       replay_path='',
+                      mouth_mode='hybrid', hybrid_channels=None,
                       output_enabled=False, output_host='127.0.0.1', output_port=45682)
 
 
@@ -67,6 +68,14 @@ class Runtime:
                 saved = {key: value for key, value in saved.items() if key not in ('model_kind', 'model_path')}
             self.config.update(saved)
         self.config.pop('face_source', None)  # Obsolete PC-side override; VRCFT owns source selection.
+        if self.config.get('mouth_mode') not in ('hybrid', 'model_only'):
+            self.config['mouth_mode'] = 'hybrid'
+        saved_hybrid = self.config.get('hybrid_channels')
+        if isinstance(saved_hybrid, list) and all(isinstance(name, str) for name in saved_hybrid):
+            allowed = set(saved_hybrid)
+            self.config['hybrid_channels'] = [name for name in STOCK_CHANNELS if name in allowed]
+        else:
+            self.config['hybrid_channels'] = None
         self.config['enabled'] = False  # Opening the local service never starts capture.
         self.model_factory = model_factory
         self.run_root = Path(run_root or self.config_path.parent/'runs')
@@ -119,6 +128,11 @@ class Runtime:
         self.record_stopping = False
         self.record_cancelled = False
         self.record_thread = None
+        self.psl_lock = threading.Lock()
+        self.psl_thread = None
+        self.latest_stock = None
+        self.record_wants_stock = False
+        self.source_closed = False
         self.stock_socket = None
         self.stock_stop = threading.Event()
         self.stock_thread = None
@@ -134,7 +148,7 @@ class Runtime:
             return TongueState.invalid(reason)
         self.face_filter.clear()
         return dict(schema=SCHEMA, values=[0.]*50, channels={}, valid_mask=0,
-                    state=reason, fresh=False, override=False)
+                    native_channels=[], state=reason, fresh=False, override=False)
 
     def _face_prediction(self, raw):
         values = raw['values']
@@ -149,7 +163,48 @@ class Runtime:
             raise ValueError('Whole-mouth supported controls must be finite and in [0,1]')
         return dict(schema=SCHEMA, values=controls,
                     channels={name: controls[i] for i, name in enumerate(CHANNELS) if mask & (1 << i)},
-                    valid_mask=mask, fresh=bool(mask), override=bool(mask), state='valid' if mask else 'untrained')
+                    valid_mask=mask, native_channels=[], fresh=bool(mask), override=bool(mask),
+                    state='valid' if mask else 'untrained')
+
+    def _stock_is_fresh(self, record, received_ns, session_id, config, now_pc_ns):
+        if record is None or not record.valid:
+            return False
+        if session_id and record.capture_session_id not in (0, session_id):
+            return False
+        if (now_pc_ns - received_ns) / 1e6 > config['stale_ms']:
+            return False
+        if record.produced_mono_ns > 0 and self.clock is not None:
+            source_age = (now_pc_ns + self.clock['offset_ns'] - record.produced_mono_ns) / 1e6 + self.clock['uncertainty_ms']
+            if source_age > config['stale_ms']:
+                return False
+        return True
+
+    def _merge_mouth(self, prediction, header, config, now_pc_ns):
+        model_values = list(prediction['values'])
+        model_channels = dict(prediction['channels'])
+        model_mask = int(prediction['valid_mask'])
+        values = list(model_values)
+        mask = model_mask
+        native_channels = []
+        if config['mouth_mode'] == 'hybrid':
+            hc = config['hybrid_channels']
+            allowed = set(STOCK_CHANNELS) if hc is None else set(hc)
+            record, received_ns = self.latest_stock if self.latest_stock else (None, None)
+            if allowed and self._stock_is_fresh(record, received_ns, header.session_id, config, now_pc_ns):
+                for i, name in enumerate(STOCK_CHANNELS):
+                    if name in allowed and i < len(record.final33):
+                        value = float(record.final33[i])
+                        if math.isfinite(value):
+                            values[i] = min(1., max(0., value))
+                            mask |= 1 << i
+                            native_channels.append(name)
+        return dict(prediction,
+                    model_values=model_values, model_channels=model_channels, model_valid_mask=model_mask,
+                    native_channels=native_channels,
+                    values=values, valid_mask=mask,
+                    channels={name: values[i] for i, name in enumerate(CHANNELS) if mask & (1 << i)},
+                    fresh=bool(mask), override=bool(mask),
+                    state='valid' if mask else prediction['state'])
 
     def configure(self, changes):
         unknown = set(changes)-set(DEFAULT_CONFIG)
@@ -158,6 +213,15 @@ class Runtime:
         updated = dict(self.config, **changes)
         if updated['model_kind'] not in ('face50', 'segmentation', 'mouthlink'):
             raise ValueError('Unknown model kind')
+        if updated['mouth_mode'] not in ('hybrid', 'model_only'):
+            raise ValueError("mouth_mode must be 'hybrid' or 'model_only'")
+        hc = updated['hybrid_channels']
+        if hc is not None:
+            if (not isinstance(hc, (list, tuple)) or any(not isinstance(name, str) for name in hc)
+                    or len(hc) != len(set(hc)) or set(hc) - set(STOCK_CHANNELS)):
+                raise ValueError('hybrid_channels must be null or a unique list of native STOCK_CHANNELS')
+            allowed = set(hc)
+            updated['hybrid_channels'] = [name for name in STOCK_CHANNELS if name in allowed]
         for key in ('smoothing_ms', 'uncertain_hold_ms', 'stale_ms'):
             if not math.isfinite(float(updated[key])) or float(updated[key]) < 0:
                 raise ValueError(key+' must be a finite nonnegative number')
@@ -178,6 +242,8 @@ class Runtime:
             if self.legacy_configuration:
                 saved['legacy_configuration'] = self.legacy_configuration
             self.config_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding='utf-8')
+        if updated['enabled'] and self.running:
+            self._sync_psl_worker()
         return dict(self.config)
 
     def prepare(self):
@@ -308,6 +374,10 @@ class Runtime:
             self.received_times.clear()
             self.inferred_times.clear()
             self.last_header = None
+            self.latest_stock = None
+            self.record_wants_stock = False
+            self.source_closed = False
+            self.stock_status = dict(active=False, records=0, associated=0, unassociated=0, error=None)
             self.transport_bindings = {}
             self.capture_context = None
             self.output_session_id = time.time_ns()
@@ -332,6 +402,7 @@ class Runtime:
             self.threads.append(threading.Thread(target=self._clock_refresh, name='tongue-clock', daemon=True))
         for thread in self.threads:
             thread.start()
+        self._sync_psl_worker()
         return self.status()
 
     def _publish(self, header, payload, received_ns):
@@ -400,32 +471,97 @@ class Runtime:
         finally:
             (self.recorder.cancel if self.record_cancelled else self.recorder.stop)()
             self.record_status = dict(self.recorder.status(), error=self.record_status.get('error'))
-            self.stock_stop.set()
-            sock = self.stock_socket
-            if sock:
+            self.record_wants_stock = False
+            self.stock_thread = None
+            self._sync_psl_worker()
+
+    def _wants_psl(self):
+        with self.lock:
+            if (not self.running or self.stop_event.is_set() or self.source_closed
+                    or self.mode != 'live' or self.config['model_kind'] != 'face50'):
+                return False
+            if self.record_wants_stock:
+                return True
+            if self.capture_only or self.config['mouth_mode'] != 'hybrid':
+                return False
+            hc = self.config['hybrid_channels']
+            return hc is None or len(hc) > 0
+
+    def _psl_worker(self):
+        while not self.stock_stop.is_set() and self._wants_psl():
+            if not self.connected:
+                self.stock_stop.wait(.02)
+                continue
+            self._stock_receive()
+            if not self.stock_stop.is_set() and self._wants_psl():
+                self.stock_stop.wait(.5)
+
+    def _sync_psl_worker(self):
+        with self.psl_lock:
+            if self.psl_thread is not None and not self.psl_thread.is_alive():
+                self.psl_thread = None
+            if self._wants_psl():
+                if self.psl_thread is None:
+                    self.stock_stop.clear()
+                    self.psl_thread = threading.Thread(target=self._psl_worker, name='mouth-stock', daemon=True)
+                    self.psl_thread.start()
+            else:
+                self._stop_psl_worker_locked()
+
+    def _stop_psl_worker_locked(self):
+        self.stock_stop.set()
+        sock = self.stock_socket
+        if sock:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            if hasattr(sock, 'close'):
                 try:
-                    sock.shutdown(socket.SHUT_RDWR)
+                    sock.close()
                 except OSError:
                     pass
+        thread = self.psl_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=5)
+            if thread.is_alive():
+                raise RuntimeError('Owned stock worker did not stop')
+        self.psl_thread = None
+        with self.lock:
+            self.latest_stock = None
+            self.stock_status['active'] = False
 
     def _stock_receive(self):
         from stock import read_stock
         try:
             sock = socket.create_connection((self.config['headset_host'], int(self.config['headset_port'])), timeout=3)
+            if self.stock_stop.is_set():
+                if hasattr(sock, 'close'):
+                    sock.close()
+                return
             self.stock_socket = sock
-            self.stock_status['active'] = True
+            with self.lock:
+                self.stock_status['active'] = True
+                self.stock_status['error'] = None
             with sock:
                 sock.sendall(b'LABELS\n')
                 while not self.stock_stop.is_set():
                     record = read_stock(sock)
-                    self._record_enqueue('stock', record)
-                    self.stock_status['records'] += 1
-                    self.stock_status['associated' if record.association_valid else 'unassociated'] += 1
+                    received_ns = time.perf_counter_ns()
+                    with self.lock:
+                        self.latest_stock = (record, received_ns)
+                        self.stock_status['records'] += 1
+                        self.stock_status['associated' if record.association_valid else 'unassociated'] += 1
+                    if self.record_wants_stock:
+                        self._record_enqueue('stock', record)
         except (OSError, EOFError, ValueError) as error:
             if not self.stock_stop.is_set():
-                self.stock_status['error'] = str(error)
+                with self.lock:
+                    self.stock_status['error'] = str(error)
         finally:
-            self.stock_status['active'] = False
+            with self.lock:
+                self.stock_status['active'] = False
+                self.latest_stock = None
             self.stock_socket = None
 
     def recording(self, action, *, person_id='', confirmed=False, guide=True, stage='raw_only',
@@ -457,13 +593,15 @@ class Runtime:
             self.record_stopping = False
             self.record_cancelled = False
             self.record_queue.clear()
-            self.stock_stop.clear()
-            self.stock_status = dict(active=False, records=0, associated=0, unassociated=0, error=None)
+            self.record_wants_stock = receive_results
+            with self.lock:
+                self.stock_status = dict(
+                    active=bool(self.psl_thread and self.psl_thread.is_alive() and self.stock_status.get('active')),
+                    records=0, associated=0, unassociated=0, error=None)
             self.record_thread = threading.Thread(target=self._record_worker, name='mouth-recording', daemon=True)
-            self.stock_thread = threading.Thread(target=self._stock_receive, name='mouth-stock', daemon=True) if receive_results else None
             self.record_thread.start()
-            if self.stock_thread is not None:
-                self.stock_thread.start()
+            self._sync_psl_worker()
+            self.stock_thread = self.psl_thread if receive_results else None
         elif action in ('ready', 'finish', 'confirm', 'skip', 'pause', 'resume', 'select_step'):
             if self.recorder is None:
                 raise ValueError('Begin a recording first')
@@ -534,18 +672,9 @@ class Runtime:
 
     def _finish_recording(self, cancel=False):
         self.record_cancelled = cancel
-        self.stock_stop.set()
-        sock = self.stock_socket
-        if sock:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-        for thread in (self.stock_thread,):
-            if thread is not None:
-                thread.join(timeout=5)
-                if thread.is_alive():
-                    raise RuntimeError('Owned stock worker did not stop')
+        self.record_wants_stock = False
+        self._sync_psl_worker()
+        self.stock_thread = None
         with self.record_condition:
             self.record_stopping = True
             self.record_condition.notify_all()
@@ -554,7 +683,7 @@ class Runtime:
             # Keep ownership until the writer has actually finished.
             self.record_thread.join()
             self.record_status = dict(self.recorder.status(), error=self.record_status.get('error'))
-        self.record_thread = self.stock_thread = None
+        self.record_thread = None
 
     @staticmethod
     def training_operations():
@@ -689,6 +818,7 @@ class Runtime:
         finally:
             with self.condition:
                 self.connected = False
+                self.source_closed = True
                 self.socket = None
                 self.model_version += 1
                 self.pending = None
@@ -874,6 +1004,8 @@ class Runtime:
                     if config['model_kind'] == 'face50':
                         prediction = self._face_prediction(raw) if upper <= config['stale_ms'] else self._invalid('stale')
                         prediction = self.face_filter.apply(prediction, header, config)
+                        if not self.capture_only and upper <= config['stale_ms']:
+                            prediction = self._merge_mouth(prediction, header, config, time.perf_counter_ns())
                     else:
                         raw = apply_calibration(raw, self.personal.profile['calibration'],
                                                 active=self.tongue.visual is not None,
@@ -1001,6 +1133,13 @@ class Runtime:
                         for key, value in asdict(header).items()}
             now = time.perf_counter_ns()
             age, upper = self._age(self.last_header, now) if self.last_header else (None, None)
+            stock_fresh = False
+            stock_age_ms = None
+            if self.latest_stock is not None:
+                record, received_ns = self.latest_stock
+                stock_age_ms = round(max(0., (now - received_ns) / 1e6), 2)
+                session_id = self.source.session_id if self.source is not None else 0
+                stock_fresh = self._stock_is_fresh(record, received_ns, session_id, self.config, now)
             return {'server_pid': os.getpid(), 'running': self.running, 'source_mode': self.mode, 'connected': self.connected,
                     'engine': self.description.get('engine'), 'device': self.description.get('device'),
                     'model': self.description, 'source': identity(self.source),
@@ -1016,7 +1155,10 @@ class Runtime:
                                     pc_total_ms=self.latencies[-1]['pc_total_ms'] if self.latencies else None,
                                     latency_ms=latency, clock_uncertainty_ms=self.clock['uncertainty_ms'] if self.clock else None),
                     'prediction': json_value(self.prediction), 'config': dict(self.config),
-                      'contract': dict(schema=SCHEMA, channels=list(CHANNELS)),
+                      'contract': dict(schema=SCHEMA, channels=list(CHANNELS), stock_channels=list(STOCK_CHANNELS)),
+                       'live_stock': dict(wanted=self._wants_psl(), active=bool(self.stock_status['active']),
+                                          fresh=bool(stock_fresh), age_ms=stock_age_ms,
+                                          error=self.stock_status.get('error')),
                        'recording': dict(self.record_status), 'stock': dict(self.stock_status),
                        'capture_context': self.capture_context,
                       'training': dict(self.training, operations=self.training_operations()),

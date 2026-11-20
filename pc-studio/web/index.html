@@ -173,7 +173,21 @@
     </section>
 
     <section id="page-preferences" class="task-page" aria-labelledby="title" hidden>
-      <div class="preferences-main panel"><label class="check"><input id="output_enabled" form="settings" type="checkbox"><span id="udp-label">Send expressions to VRCFaceTracking</span></label><p id="settings-help" class="hint"></p></div>
+      <div class="preferences-main panel">
+        <label class="check"><input id="output_enabled" form="settings" type="checkbox"><span id="udp-label">Send expressions to VRCFaceTracking</span></label>
+        <p id="settings-help" class="hint"></p>
+        <div id="mouth-routing" class="mouth-routing">
+          <label><span id="mouth-mode-label">Channel routing mode</span><select id="mouth_mode" form="settings"><option id="mouth-mode-hybrid" value="hybrid">Hybrid · prefer native 0-32, model fills gaps and 33-49</option><option id="mouth-mode-model" value="model_only">Model only · all 50 channels from model</option></select></label>
+          <p id="mouth-mode-help" class="hint"></p>
+          <p id="hybrid-live-hint" class="hint" hidden></p>
+          <details id="hybrid-channels-panel" class="disclosure-panel">
+            <summary id="hybrid-channels-title">Native-preferred channels (Hybrid)</summary>
+            <p id="hybrid-channels-help" class="hint"></p>
+            <div class="actions hybrid-actions"><button id="hybrid-select-all" type="button">Select all 33</button><button id="hybrid-clear-all" type="button">Use model for all</button><span id="hybrid-channels-summary" class="hint"></span></div>
+            <div id="hybrid-channels-list" class="hybrid-channel-grid"></div>
+          </details>
+        </div>
+      </div>
       <details id="advanced" class="panel disclosure-panel"><summary id="advanced-title">Connection and performance</summary>
         <label><span id="host-label">Manual headset address</span><input id="headset_host" form="settings" autocomplete="off" spellcheck="false"></label>
         <label><span id="model-path-label">Model path</span><input id="model_path" form="settings" autocomplete="off" spellcheck="false"></label>

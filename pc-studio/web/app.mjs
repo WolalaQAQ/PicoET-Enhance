@@ -4,6 +4,7 @@ const TEXT_FIELDS = ["headset_host", "model_path", "device", "replay_path"];
 const NUMBER_FIELDS = ["headset_port", "stale_ms", "preview_fps", "output_port", "smoothing_ms"];
 const RELAY_OPTION_IDS = ["cymple-host", "cymple-port", "cymple-left-port", "cymple-right-port", "cymple-left-rotate", "cymple-left-hflip", "cymple-left-vflip", "cymple-right-rotate", "cymple-right-hflip", "cymple-right-vflip"];
 export const PRIMARY_CHANNELS = ["JawOpen", "MouthPucker", "MouthSmileL", "MouthSmileR", "TongueOut", "TongueLeft", "TongueRight", "TongueUp", "TongueDown", "TongueRoll"];
+export const STOCK_CHANNELS = ["CheekPuff", "CheekSquintL", "CheekSquintR", "JawForward", "JawLeft", "JawOpen", "JawRight", "MouthClose", "MouthDimpleL", "MouthDimpleR", "MouthFrownL", "MouthFrownR", "MouthFunnel", "MouthLeft", "MouthLowerDownL", "MouthLowerDownR", "MouthPressL", "MouthPressR", "MouthPucker", "MouthRight", "MouthRollLower", "MouthRollUpper", "MouthShrugLower", "MouthShrugUpper", "MouthSmileL", "MouthSmileR", "MouthStretchL", "MouthStretchR", "MouthUpperUpL", "MouthUpperUpR", "NoseSneerL", "NoseSneerR", "TongueOut"];
 export const PAGES = ["tracking", "recording", "training", "preferences"];
 const PAGE_NAV = {tracking: "workspace", recording: "recording", training: "training", preferences: "advanced"};
 export function routePage(hash = "") { const page = hash.replace(/^#\/?/, ""); return PAGES.includes(page) ? page : "tracking"; }
@@ -44,7 +45,10 @@ const LABELS = {title: "title", "host-label": "host", "model-label": "model", "m
   "cymple-left-orient-title": "cympleLeftEye", "cymple-right-orient-title": "cympleRightEye",
   "cymple-left-rotate-label": "cympleRotate", "cymple-right-rotate-label": "cympleRotate",
   "cymple-left-hflip-label": "cympleHflip", "cymple-right-hflip-label": "cympleHflip",
-  "cymple-left-vflip-label": "cympleVflip", "cymple-right-vflip-label": "cympleVflip"};
+  "cymple-left-vflip-label": "cympleVflip", "cymple-right-vflip-label": "cympleVflip",
+  "mouth-mode-label": "mouthMode", "mouth-mode-hybrid": "mouthModeHybrid", "mouth-mode-model": "mouthModeModel",
+  "mouth-mode-help": "mouthModeHelp", "hybrid-channels-title": "hybridChannelsTitle",
+  "hybrid-channels-help": "hybridChannelsHelp", "hybrid-select-all": "hybridSelectAll", "hybrid-clear-all": "hybridClearAll"};
 const MOVING_STEPS = new Set(["tongue_sweep", "negative_pucker_release", "negative_speech"]);
 const display = x => x == null || x === "" ? "—" : String(x);
 const fixed = (x, n = 1) => x != null && Number.isFinite(Number(x)) ? Number(x).toFixed(n) : "—";
@@ -71,7 +75,7 @@ export function deriveView(status, online, ageMs = 0) {
     status?.capture_only ? "recordingOnly" : valid ? "running" : "stale"};
 }
 export function channelValue(status, name, valid) {
-  if (!valid || !status?.model?.trained_channels?.includes(name)) return null;
+  if (!valid || (!status?.model?.trained_channels?.includes(name) && !status?.prediction?.native_channels?.includes(name))) return null;
   const i = status.contract?.channels?.indexOf(name) ?? -1;
   if (i < 0 || !(BigInt(status.prediction.valid_mask ?? 0) & (1n << BigInt(i)))) return null;
   const value = status.prediction.channels?.[name];
@@ -108,7 +112,19 @@ export function createApp(doc, options = {}) {
   const t = key => messages[state.language][key] ?? key, view = () => deriveView(state.status, state.online, now()-state.at);
   const choiceLabel = value => messages[state.language][`choice-${value}`] ?? value;
   const fieldLabel = name => t(name === "device" ? "trainDevice" : name === "split" ? "splitPath" : name);
-  const rows = new Map(), trainInputs = new Map(); let rowKey = "", specKey = "";
+  const rows = new Map(), trainInputs = new Map(), hybridInputs = new Map(); let rowKey = "", specKey = "";
+  function makeHybridInputs() {
+    if (hybridInputs.size) return;
+    const list = get("hybrid-channels-list");
+    for (const name of STOCK_CHANNELS) {
+      const label = doc.createElement("label"), checkbox = doc.createElement("input"), span = doc.createElement("span");
+      label.setAttribute("class", "check");
+      checkbox.type = "checkbox"; checkbox.checked = true; checkbox.setAttribute("data-channel", name);
+      span.textContent = name;
+      checkbox.addEventListener("change", () => { state.dirty = true; state.errorKey = ""; render(); });
+      label.append(checkbox, span); list.append(label); hybridInputs.set(name, checkbox);
+    }
+  }
   function clearPreview() {
     state.previewGeneration++; state.previewAbort?.abort(); get("preview").hidden = true; get("preview").removeAttribute("src");
     if (state.previewUrl) urls.revokeObjectURL(state.previewUrl); state.previewUrl = null; get("placeholder").hidden = false; get("empty-camera").hidden = false;
@@ -480,8 +496,9 @@ export function createApp(doc, options = {}) {
     get("stop").disabled = Boolean(state.busy) || !current.running; get("replay").disabled = get("start").disabled;
     get("start").hidden = current.running; get("stop").hidden = !current.running;
     get("capture").hidden = current.running; get("capture-stop").hidden = !current.running;
+    makeHybridInputs();
     get("save").disabled = !state.config || Boolean(state.busy) || !state.dirty;
-    for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled"]) get(id).disabled = Boolean(state.busy) || !state.config;
+    for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled", "mouth_mode"]) get(id).disabled = Boolean(state.busy) || !state.config;
     get("config-state").textContent = state.config ? t(state.dirty ? "unsaved" : "saved") : "";
     renderConnection(current); renderPages();
     const error = state.error || state.pollError || state.status?.last_error;
@@ -529,22 +546,41 @@ export function createApp(doc, options = {}) {
       for (const id of ["start", "replay", "train-start", "train-cancel", "model-browse"]) get(id).disabled = true;
       if (state.status.capture_control.state!=="idle") for (const id of ["capture", "save", "discover", "headset-select"]) get(id).disabled = true;
     }
-    if (["starting","recording","stopping"].includes(state.status?.capture_control?.state)) {
-      for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled", "start", "capture", "replay", "save", "discover", "headset-select", "model-browse"])
+    const capturePending = ["starting", "recording", "stopping"].includes(state.status?.capture_control?.state);
+    if (capturePending) {
+      for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled", "mouth_mode", "start", "capture", "replay", "save", "discover", "headset-select", "model-browse"])
         get(id).disabled = true;
     }
     if (state.status?.read_only) {
       get("status").textContent = t("visualReadonly");
       get("page-intro").textContent = t("visualReadonly");
       get("record-next").textContent = t("visualReadonly");
-      for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled", "start", "stop", "save",
+      for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled", "mouth_mode", "start", "stop", "save",
         "capture", "capture-stop", "replay", "discover", "model-browse", "headset-select",
         "record-start", "record-stop", "record-cancel", "train-start", "train-cancel", "voice-enabled"]) get(id).disabled = true;
     }
+    const routingDisabled = Boolean(state.busy) || !state.config || Boolean(state.status?.read_only) || capturePending;
+    const isHybrid = get("mouth_mode").value !== "model_only";
+    get("hybrid-channels-panel").hidden = !isHybrid;
+    get("hybrid-select-all").disabled = routingDisabled;
+    get("hybrid-clear-all").disabled = routingDisabled;
+    for (const box of hybridInputs.values()) box.disabled = routingDisabled;
+    const pickedCount = STOCK_CHANNELS.filter(name => hybridInputs.get(name)?.checked).length;
+    get("hybrid-channels-summary").textContent = `${t("hybridSummary")}: ${pickedCount} / ${STOCK_CHANNELS.length}`;
+    const showLiveHint = isHybrid && pickedCount > 0 && current.running && !state.status?.capture_only && state.status?.source_mode === "live";
+    get("hybrid-live-hint").hidden = !showLiveHint;
+    if (showLiveHint) get("hybrid-live-hint").textContent = t(state.status?.live_stock?.fresh ? "hybridStockFresh" : "hybridStockWaiting");
   }
   function applyConfig(config) {
     state.config = config;
-    if (!state.dirty) { for (const key of [...TEXT_FIELDS, ...NUMBER_FIELDS]) get(key).value = config[key] == null ? "" : String(config[key]); get("output_enabled").checked = config.output_enabled === true; }
+    if (!state.dirty) {
+      makeHybridInputs();
+      for (const key of [...TEXT_FIELDS, ...NUMBER_FIELDS]) get(key).value = config[key] == null ? "" : String(config[key]);
+      get("output_enabled").checked = config.output_enabled === true;
+      get("mouth_mode").value = config.mouth_mode === "model_only" ? "model_only" : "hybrid";
+      const allowed = config.hybrid_channels == null ? null : new Set(config.hybrid_channels);
+      for (const [name, box] of hybridInputs) box.checked = allowed === null ? true : allowed.has(name);
+    }
   }
   function applyCympleRelay(relay) {
     if (!relay?.config || state.relayDirty) return;
@@ -713,9 +749,13 @@ export function createApp(doc, options = {}) {
     finally { state.polling = false; if (!state.destroyed) render(); }
   }
   function readForm() {
+    makeHybridInputs();
     const config = Object.fromEntries(TEXT_FIELDS.map(key => [key, get(key).value.trim()]));
     for (const key of NUMBER_FIELDS) config[key] = Number(get(key).value);
-    return {...config, output_enabled: get("output_enabled").checked, output_host: "127.0.0.1", model_kind: "face50"};
+    const mouth_mode = get("mouth_mode").value === "model_only" ? "model_only" : "hybrid";
+    const picked = STOCK_CHANNELS.filter(name => hybridInputs.get(name)?.checked);
+    const hybrid_channels = picked.length === STOCK_CHANNELS.length ? null : picked;
+    return {...config, mouth_mode, hybrid_channels, output_enabled: get("output_enabled").checked, output_host: "127.0.0.1", model_kind: "face50"};
   }
   async function control(key, action) {
     if (state.busy || state.destroyed || state.status?.read_only) return; state.busy = key; state.generation++; state.error = ""; state.errorKey = ""; render();
@@ -797,9 +837,12 @@ export function createApp(doc, options = {}) {
   get("settings").addEventListener("submit", event => { event.preventDefault(); return start(); });
   for (const event of ["input", "change"]) {
     const changed = () => { state.dirty = true; state.errorKey = ""; render(); };
-    get("settings").addEventListener(event, e => { if (!e.target || [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled"].includes(e.target.id)) changed(); });
-    get("page-preferences").addEventListener(event, e => { if (!e.target || [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled"].includes(e.target.id)) changed(); });
+    get("settings").addEventListener(event, e => { if (!e.target || [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled", "mouth_mode"].includes(e.target.id)) changed(); });
+    get("page-preferences").addEventListener(event, e => { if (!e.target || [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled", "mouth_mode"].includes(e.target.id)) changed(); });
   }
+  get("mouth_mode").addEventListener("change", () => { state.dirty = true; state.errorKey = ""; render(); });
+  get("hybrid-select-all").addEventListener("click", () => { makeHybridInputs(); for (const box of hybridInputs.values()) box.checked = true; state.dirty = true; state.errorKey = ""; render(); });
+  get("hybrid-clear-all").addEventListener("click", () => { makeHybridInputs(); for (const box of hybridInputs.values()) box.checked = false; state.dirty = true; state.errorKey = ""; render(); });
   get("discover").addEventListener("click", discover);
   get("model-browse").addEventListener("click", chooseModel);
   get("headset-select").addEventListener("change", () => {
@@ -849,7 +892,7 @@ export function createApp(doc, options = {}) {
   for (const id of ["reference-image", "reference-neutral-image", "reference-profile-image"]) get(id).addEventListener("error", () => { state.referenceImageError = true; render(); });
   async function init() { render(); await Promise.all([pollStatus(), loadReference(), loadPresets()]); if (!state.destroyed) { state.interval = timers.setInterval(() => { render(); void pollStatus(); }, 500); state.visualTimer=timers.setInterval(() => {void reportVisual().catch(error => {state.error=error.message;});},200); previewLoop(); await discover(); } }
   function destroy() { state.destroyed = true; state.generation++; navigation?.removeEventListener("hashchange", hashChanged); speech?.cancel(); timers.clearInterval(state.interval); timers.clearInterval(state.visualTimer); timers.clearTimeout(state.previewTimer); clearPreview(); }
-  return {init, destroy, start, stop, save, record, train, cympleRelay, loadReviews, applyReview, readForm, pollStatus, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs};
+  return {init, destroy, start, stop, save, record, train, cympleRelay, loadReviews, applyReview, readForm, pollStatus, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs, hybridInputs};
 }
 if (typeof document !== "undefined") {
   let storage; try { storage = window.localStorage; } catch {}
