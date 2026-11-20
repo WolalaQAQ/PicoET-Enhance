@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 import {createApp, captureProgress, deriveView, channelValue, requestJson, PRIMARY_CHANNELS, ROUTABLE_CHANNELS, MOUTH_PRESETS, PAGES, routePage} from "../app.mjs";
-import {messages, preferredLanguage, initialLanguage, errorMessage, LANGUAGE_KEY} from "../i18n.mjs";
+import {DIAGNOSTIC_GROUPS, messages, preferredLanguage, initialLanguage, errorMessage, LANGUAGE_KEY} from "../i18n.mjs";
 
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const channels = [...new Set([...PRIMARY_CHANNELS, ...Array.from({length: 40}, (_, i) => `fixture${i}`)])];
@@ -853,7 +853,7 @@ test("file dialog cannot open twice and late completion cannot update a destroye
 });
 test("navigation displays exactly one task page and never starts or saves anything", async t => {
   const {app, el, server} = setup(t); await app.init(); const count = server.calls.length;
-  for (const [page, nav] of [["recording", "recording"], ["training", "training"], ["preferences", "advanced"], ["tracking", "workspace"]]) {
+  for (const [page, nav] of [["recording", "recording"], ["training", "training"], ["diagnostics", "diagnostics"], ["preferences", "advanced"], ["tracking", "workspace"]]) {
     el(`nav-${nav}`).emit("click");
     assert.deepEqual(PAGES.filter(id => !el(`page-${id}`).hidden), [page]);
     assert.equal(el("connection-setup").hidden, !["tracking", "recording"].includes(page));
@@ -881,7 +881,7 @@ test("direct links and browser history switch pages without recreating the app",
   assert.ok(server.calls.every(call => call.method === "GET"));
   app.destroy(); assert.equal(events.size, 0);
 });
-test("invalid and empty routes use tracking, while all four task routes are supported", () => {
+test("invalid and empty routes use tracking, while all five task routes are supported", () => {
   for (const page of PAGES) assert.equal(routePage(`#/${page}`), page);
   assert.equal(routePage("#unexpected"), "tracking"); assert.equal(routePage(), "tracking");
 });
@@ -1125,4 +1125,191 @@ test("legacy hybrid_channels array migrates cleanly into per-morph-target routin
   assert.equal(app.morphControls.get("LipFunnelLower").stockBtn.attributes["aria-pressed"], "true");
   assert.equal(app.morphControls.get("MouthSmileL").modelBtn.attributes["aria-pressed"], "true");
   assert.match(el("hybrid-channels-summary").textContent, /Native 3 · Model 43/);
+});
+
+test("diagnostics page strictly separates expression monitor and connection diagnostics with quick links and alert badge", async t => {
+  const {app, server, el} = setup(t);
+  await app.init();
+  const initialCalls = server.calls.length;
+
+  // Quick-jump from Tracking opens Diagnostics on Expression monitor tab.
+  el("diag-tab-connection").emit("click");
+  assert.equal(app.state.diagView, "connection");
+  el("go-diagnostics").emit("click");
+  assert.equal(app.state.page, "diagnostics");
+  assert.equal(el("page-diagnostics").hidden, false);
+  assert.equal(app.state.diagView, "expressions");
+  assert.equal(el("expression-diagnostics").hidden, false);
+  assert.equal(el("diagnostics").hidden, true);
+  assert.equal(el("diag-tab-expressions").attributes["aria-selected"], "true");
+  assert.equal(el("diag-tab-connection").attributes["aria-selected"], "false");
+  assert.equal(app.state.dirty, false);
+
+  // Switch to Connection diagnostics tab and back; Settings quick-link opens Diagnostics cleanly.
+  el("diag-tab-connection").emit("click");
+  assert.equal(el("expression-diagnostics").hidden, true);
+  assert.equal(el("diagnostics").hidden, false);
+  assert.equal(el("diag-tab-connection").attributes["aria-selected"], "true");
+  assert.equal(el("diag-conn-badge").attributes["data-alert"], "false");
+  el("nav-advanced").emit("click");
+  assert.equal(app.state.page, "preferences");
+  el("settings-go-diagnostics").emit("click");
+  assert.equal(app.state.page, "diagnostics");
+  assert.equal(server.calls.length, initialCalls);
+
+  // Error surface sets Connection diagnostics badge alert without marking settings dirty.
+  server.failStart = true;
+  await app.start();
+  assert.equal(el("diag-conn-badge").attributes["data-alert"], "true");
+  assert.match(el("diag-conn-badge").textContent, /^Issue \(1\)/);
+  assert.equal(el("conn-error-card").attributes["data-has-error"], "true");
+  assert.equal(app.state.dirty, false);
+});
+
+test("expression monitor renders 50 anatomical channels with live origin tags, region tabs, active/source filters and search", async t => {
+  const FULL_50_CHANNELS = DIAGNOSTIC_GROUPS.flatMap(g => g.items.map(i => i.name));
+  assert.equal(FULL_50_CHANNELS.length, 50);
+  const {app, server, el, row} = setup(t);
+  server.status.contract.channels = FULL_50_CHANNELS;
+  server.status.model.trained_channels = FULL_50_CHANNELS.filter(n => n !== "TongueRoll");
+  await app.init();
+
+  // Save custom routing: curated defaults with TongueUp=off and JawOpen/MouthPucker on stock.
+  app.morphControls.get("TongueUp").offBtn.emit("click");
+  await app.save();
+  await app.start();
+
+  const tongueUpIndex = FULL_50_CHANNELS.indexOf("TongueUp");
+  const allExceptTongueUp = ((1n << 50n) - 1n) & ~(1n << BigInt(tongueUpIndex));
+  Object.assign(server.status.prediction, {
+    valid_mask: allExceptTongueUp.toString(),
+    native_channels: ["JawOpen"],
+    channels: {JawOpen: 0.62, MouthPucker: 0.35, MouthSmileL: 0.015, TongueLeft: 0.48, TongueUp: 0.7, TongueRoll: 0.8},
+  });
+  server.status.live_stock = {wanted: true, active: true, fresh: true, age_ms: 4.2};
+  await app.pollStatus();
+
+  assert.equal(app.exprGroups.length, 7);
+  assert.equal(row("JawOpen").output.textContent, "0.620");
+  assert.equal(row("JawOpen").originEl.textContent, messages.en.originNativeLive);
+  assert.equal(row("JawOpen").cardEl.attributes["data-active"], "true");
+  assert.equal(row("JawOpen").cardEl.attributes["data-origin"], "native");
+
+  assert.equal(row("MouthPucker").originEl.textContent, messages.en.originModelFallback);
+  assert.equal(row("MouthPucker").cardEl.attributes["data-active"], "true");
+
+  assert.equal(row("TongueLeft").output.textContent, "0.480");
+  assert.equal(row("TongueLeft").originEl.textContent, messages.en.originModel);
+  assert.equal(app.rows.get("channel-table/MouthSmileL").cellEl.attributes["data-active"], "false");
+  assert.equal(row("TongueUp").output.textContent, "—");
+  assert.equal(row("TongueUp").originEl.textContent, messages.en.originOff);
+  assert.equal(row("TongueRoll").output.textContent, "—");
+  assert.equal(row("TongueRoll").originEl.textContent, messages.en.originUntrained);
+  assert.match(el("live-stock-info").textContent, /Connected · fresh \(4\.2 ms\)/);
+
+  // Active filter (> 0.02): MouthSmileL (0.015) hidden, JawOpen/TongueLeft visible.
+  el("expr-active-only").emit("click");
+  assert.equal(app.rows.get("channel-table/JawOpen").cellEl.hidden, false);
+  assert.equal(app.rows.get("channel-table/TongueLeft").cellEl.hidden, false);
+  assert.equal(app.rows.get("channel-table/MouthSmileL").cellEl.hidden, true);
+  el("expr-active-only").emit("click");
+
+  // Source filter: Native vs New model.
+  el("expr-src-native").emit("click");
+  assert.equal(app.rows.get("channel-table/JawOpen").cellEl.hidden, false);
+  assert.equal(app.rows.get("channel-table/MouthPucker").cellEl.hidden, false);
+  assert.equal(app.rows.get("channel-table/LipFunnelUpper").cellEl.hidden, false);
+  assert.equal(app.rows.get("channel-table/TongueLeft").cellEl.hidden, true);
+  el("expr-src-model").emit("click");
+  assert.equal(app.rows.get("channel-table/TongueLeft").cellEl.hidden, false);
+  assert.equal(app.rows.get("channel-table/JawOpen").cellEl.hidden, true);
+  assert.equal(app.rows.get("channel-table/TongueRoll").cellEl.hidden, true);
+  el("expr-src-all").emit("click");
+
+  // Region tab filtering: clicking tongue shows only tongue group.
+  const tongueRegionBtn = el("expr-regions").children.find(b => b.attributes["data-region"] === "tongue");
+  const allRegionBtn = el("expr-regions").children.find(b => b.attributes["data-region"] === "all");
+  tongueRegionBtn.emit("click");
+  assert.equal(app.exprGroups.find(g => g.group.id === "tongue").groupEl.hidden, false);
+  assert.equal(app.exprGroups.find(g => g.group.id === "jaw").groupEl.hidden, true);
+  allRegionBtn.emit("click");
+
+  // Search filtering & empty state.
+  el("expr-search").value = "smile";
+  el("expr-search").emit("input");
+  assert.equal(app.rows.get("channel-table/MouthSmileL").cellEl.hidden, false);
+  assert.equal(app.rows.get("channel-table/JawOpen").cellEl.hidden, true);
+  assert.equal(el("expr-empty").hidden, true);
+
+  el("expr-search").value = "nonexistent-xyz";
+  el("expr-search").emit("input");
+  assert.equal(el("expr-empty").hidden, false);
+  assert.equal(app.state.dirty, false);
+});
+
+test("expression freeze pauses readout updates and auto-clears on stop or offline", async t => {
+  const {app, server, el, row} = setup(t);
+  await app.init();
+  assert.equal(el("expr-freeze").disabled, true);
+
+  await app.start();
+  server.status.prediction.channels.JawOpen = 0.30;
+  await app.pollStatus();
+  assert.equal(el("expr-freeze").disabled, false);
+  assert.equal(row("JawOpen").output.textContent, "0.300");
+
+  // Freeze captures current readouts in UI while ignoring live status drift.
+  el("expr-freeze").emit("click");
+  assert.equal(app.state.exprFrozen, true);
+  assert.equal(el("expr-freeze").textContent, messages.en.exprResume);
+  assert.equal(el("expr-live-pill").textContent, messages.en.exprFrozen);
+
+  server.status.prediction.channels.JawOpen = 0.88;
+  await app.pollStatus();
+  assert.equal(row("JawOpen").output.textContent, "0.300");
+  assert.equal(app.rows.get("channel-table/JawOpen").output.textContent, "0.300");
+
+  // Resume immediately reveals live 0.880 value.
+  el("expr-freeze").emit("click");
+  assert.equal(app.state.exprFrozen, false);
+  assert.equal(row("JawOpen").output.textContent, "0.880");
+
+  // Freeze again, then Stop: outputs must clear to "—" and unfreeze automatically.
+  el("expr-freeze").emit("click");
+  assert.equal(app.state.exprFrozen, true);
+  await app.stop();
+  assert.equal(app.state.exprFrozen, false);
+  assert.equal(row("JawOpen").output.textContent, "—");
+  assert.equal(app.rows.get("channel-table/JawOpen").output.textContent, "—");
+  assert.equal(el("expr-freeze").disabled, true);
+});
+
+test("language switch translates diagnostics tabs, regions, origin badges and connection cards while keeping UI filters", async t => {
+  const {app, server, el, row} = setup(t);
+  await app.init();
+  await app.start();
+  el("diag-tab-connection").emit("click");
+  el("expr-active-only").emit("click");
+  el("expr-search").value = "jaw";
+  el("expr-search").emit("input");
+  const tongueRegionBtn = el("expr-regions").children.find(b => b.attributes["data-region"] === "tongue");
+  tongueRegionBtn.emit("click");
+  el("expr-freeze").emit("click");
+
+  const callsBefore = server.calls.length;
+  app.setLanguage("zh-CN");
+  assert.equal(server.calls.length, callsBefore);
+  assert.equal(app.state.diagView, "connection");
+  assert.equal(app.state.exprActiveOnly, true);
+  assert.equal(app.state.exprQuery, "jaw");
+  assert.equal(app.state.exprRegion, "tongue");
+  assert.equal(app.state.exprFrozen, true);
+
+  assert.equal(el("nav-diagnostics-label").textContent, messages["zh-CN"].navDiagnostics);
+  assert.equal(el("diag-tab-expressions-label").textContent, messages["zh-CN"].diagTabExpressions);
+  assert.equal(el("diag-tab-connection-label").textContent, messages["zh-CN"].diagTabConnection);
+  assert.equal(el("conn-card-rates-title").textContent, messages["zh-CN"].connCardRates);
+  assert.equal(el("expr-freeze").textContent, messages["zh-CN"].exprResume);
+  assert.equal(tongueRegionBtn.textContent, messages["zh-CN"].regionTongue);
+  assert.equal(row("TongueLeft").originEl.textContent, messages["zh-CN"].originModel);
 });

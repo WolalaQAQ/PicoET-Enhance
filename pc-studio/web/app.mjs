@@ -1,4 +1,4 @@
-import {errorMessage, initialLanguage, LANGUAGE_KEY, messages, MORPH_GROUPS} from "./i18n.mjs";
+import {DIAGNOSTIC_GROUPS, errorMessage, initialLanguage, LANGUAGE_KEY, messages, MORPH_GROUPS} from "./i18n.mjs";
 
 const TEXT_FIELDS = ["headset_host", "model_path", "device", "replay_path"];
 const NUMBER_FIELDS = ["headset_port", "stale_ms", "preview_fps", "output_port", "smoothing_ms"];
@@ -7,6 +7,9 @@ export const PRIMARY_CHANNELS = ["JawOpen", "MouthPucker", "MouthSmileL", "Mouth
 export const STOCK_CHANNELS = ["CheekPuff", "CheekSquintL", "CheekSquintR", "JawForward", "JawLeft", "JawOpen", "JawRight", "MouthClose", "MouthDimpleL", "MouthDimpleR", "MouthFrownL", "MouthFrownR", "MouthFunnel", "MouthLeft", "MouthLowerDownL", "MouthLowerDownR", "MouthPressL", "MouthPressR", "MouthPucker", "MouthRight", "MouthRollLower", "MouthRollUpper", "MouthShrugLower", "MouthShrugUpper", "MouthSmileL", "MouthSmileR", "MouthStretchL", "MouthStretchR", "MouthUpperUpL", "MouthUpperUpR", "NoseSneerL", "NoseSneerR", "TongueOut"];
 export const CURATED_STOCK_TARGETS = ["JawOpen", "MouthPucker", "LipFunnelUpper", "LipFunnelLower", "MouthRollLower", "MouthShrugUpper"];
 const STOCK_AGGREGATE_PARENTS = {CheekPuffLeft: "CheekPuff", CheekPuffRight: "CheekPuff", LipFunnelUpper: "MouthFunnel", LipFunnelLower: "MouthFunnel", MouthUpperLeft: "MouthLeft", MouthLowerLeft: "MouthLeft", MouthUpperRight: "MouthRight", MouthLowerRight: "MouthRight"};
+const AGGREGATE_CHILDREN_MAP = {CheekPuff: ["CheekPuffLeft", "CheekPuffRight"], MouthFunnel: ["LipFunnelUpper", "LipFunnelLower"], MouthLeft: ["MouthUpperLeft", "MouthLowerLeft"], MouthRight: ["MouthUpperRight", "MouthLowerRight"]};
+const DEFAULT_DIAG_CHANNELS = DIAGNOSTIC_GROUPS.flatMap(group => group.items.map(item => item.name));
+const MORPH_META = new Map(DIAGNOSTIC_GROUPS.flatMap(group => group.items.map(item => [item.name, item])));
 export const ROUTABLE_CHANNELS = MORPH_GROUPS.flatMap(group => group.items.map(item => item.name));
 const PURE_EXTENDED_SET = new Set(MORPH_GROUPS.flatMap(group => group.items.filter(item => item.tag === "missing").map(item => item.name)));
 const PRESET_MODES = ["curated", "hybrid", "model_only"];
@@ -42,8 +45,8 @@ export function resolveChannelSources(mouthMode = "curated", hybridChannels = nu
   }
   return resolved;
 }
-export const PAGES = ["tracking", "recording", "training", "preferences"];
-const PAGE_NAV = {tracking: "workspace", recording: "recording", training: "training", preferences: "advanced"};
+export const PAGES = ["tracking", "recording", "training", "diagnostics", "preferences"];
+const PAGE_NAV = {tracking: "workspace", recording: "recording", training: "training", diagnostics: "diagnostics", preferences: "advanced"};
 export function routePage(hash = "") { const page = hash.replace(/^#\/?/, ""); return PAGES.includes(page) ? page : "tracking"; }
 const LABELS = {title: "title", "host-label": "host", "model-label": "model", "model-help": "modelHelp", start: "start", capture: "capture", stop: "stop",
   "advanced-title": "advanced", "diagnostics-title": "diagnostics", "port-label": "port", "device-label": "device", "expiry-label": "expiry", "fps-label": "fps", "smoothing-label": "smoothing",
@@ -65,9 +68,13 @@ const LABELS = {title: "title", "host-label": "host", "model-label": "model", "m
   "reference-title": "referenceTitle", "reference-select-label": "referenceSelect", "reference-prev": "previousPose", "reference-next": "nextPose",
   "reference-neutral-caption": "referenceNeutral", "reference-target-caption": "referenceTarget", "reference-profile-caption": "referenceProfile",
   "reference-directions": "referenceDirections", "reference-details-title": "referenceDetails", "reference-license": "referenceLicense",
-  "nav-caption": "navCaption", "nav-live-label": "navLive", "nav-record-label": "navRecord", "nav-train-label": "navTrain", "nav-settings-label": "navSettings",
+  "nav-caption": "navCaption", "nav-live-label": "navLive", "nav-record-label": "navRecord", "nav-train-label": "navTrain", "nav-diagnostics-label": "navDiagnostics", "nav-settings-label": "navSettings",
   "local-label": "localLabel", "privacy-note": "privacyNote", "workspace-caption": "workspaceCaption", "page-eyebrow": "pageEyebrow", "page-intro": "pageIntro",
-  "headset-title": "headsetTitle", "headset-select-label": "headsetSelect", "model-path-label": "modelPath", "run-help": "runHelp",
+  "headset-title": "headsetTitle", "headset-select-label": "headsetSelect", "model-path-label": "modelPath", "run-help": "runHelp", "go-diagnostics": "goDiagnostics",
+  "settings-diag-text": "settingsDiagText", "settings-go-diagnostics": "settingsGoDiagnostics",
+  "diag-tab-expressions-label": "diagTabExpressions", "diag-tab-connection-label": "diagTabConnection",
+  "expr-active-only": "exprActiveOnly", "expr-src-all": "exprSrcAll", "expr-src-native": "exprSrcNative", "expr-src-model": "exprSrcModel", "expr-empty": "exprEmptyFilter",
+  "conn-card-rates-title": "connCardRates", "conn-card-engine-title": "connCardEngine", "conn-card-stream-title": "connCardStream", "conn-card-session-title": "connCardSession", "live-stock-label": "liveStock",
   "camera-eyebrow": "cameraEyebrow", "camera-title": "cameraTitle", "camera-empty-help": "cameraEmptyHelp", "camera-privacy": "cameraPrivacy",
   "output-eyebrow": "outputEyebrow", "output-title": "outputTitle", "output-note": "outputNote", "footer-note": "footerNote",
   "capture-stop": "closeCamera", "first-model-text": "firstModelText", "go-capture": "goCapture",
@@ -149,11 +156,12 @@ export function createApp(doc, options = {}) {
     page: routePage(navigation?.location.hash), cameraPage: "", referencePaintedKey: "", visualReporting: false,
     presets: [], selectedPreset: null, presetPreview: false, presetOptionsKey: "", presetListKey: "", externalCase: null,
     startStep: 0, archiveKey: "", relayDirty: false, relayPortsManual: false, relayPortsAuto: false, relayError: "", relayErrorKey: "",
-    channelSources: {...MOUTH_PRESETS.curated}, channelFilter: "all", channelQuery: ""};
+    channelSources: {...MOUTH_PRESETS.curated}, channelFilter: "all", channelQuery: "",
+    diagView: "expressions", exprRegion: "all", exprActiveOnly: false, exprSourceFilter: "all", exprQuery: "", exprFrozen: false, frozenSnapshot: null};
   const t = key => messages[state.language][key] ?? key, view = () => deriveView(state.status, state.online, now()-state.at);
   const choiceLabel = value => messages[state.language][`choice-${value}`] ?? value;
   const fieldLabel = name => t(name === "device" ? "trainDevice" : name === "split" ? "splitPath" : name);
-  const rows = new Map(), trainInputs = new Map(), morphControls = new Map(), morphGroups = []; let rowKey = "", specKey = "";
+  const rows = new Map(), trainInputs = new Map(), morphControls = new Map(), morphGroups = [], exprGroups = [], exprRegionBtns = new Map(); let rowKey = "", specKey = "";
   function makeMorphControls() {
     if (morphControls.size) return;
     const list = get("hybrid-channels-list");
@@ -241,14 +249,66 @@ export function createApp(doc, options = {}) {
     if (state.previewUrl) urls.revokeObjectURL(state.previewUrl); state.previewUrl = null; get("placeholder").hidden = false; get("empty-camera").hidden = false;
   }
   function makeRows() {
-    const channels = state.status?.contract?.channels ?? PRIMARY_CHANNELS, key = channels.join("/");
-    if (rowKey === key) return; rowKey = key; rows.clear(); get("outputs").replaceChildren(); get("channel-table").replaceChildren();
-    for (const [container, names] of [["outputs", PRIMARY_CHANNELS], ["channel-table", channels]]) {
-      for (const name of names) {
-        const label = doc.createElement("label"), title = doc.createElement("span"), output = doc.createElement("output"), bar = doc.createElement("progress");
-        title.textContent = name; bar.max = 1; bar.value = 0; bar.setAttribute("aria-label", name);
-        label.append(title, output, bar); get(container).append(label); rows.set(`${container}/${name}`, {output, bar, name});
+    const channels = state.status?.contract?.channels ?? DEFAULT_DIAG_CHANNELS, key = channels.join("/");
+    if (rowKey === key) return; rowKey = key; rows.clear(); exprGroups.length = 0; exprRegionBtns.clear();
+    get("outputs").replaceChildren(); get("channel-table").replaceChildren(); get("expr-regions").replaceChildren();
+    for (const name of PRIMARY_CHANNELS) {
+      const meta = MORPH_META.get(name);
+      const card = doc.createElement("label"), head = doc.createElement("div"), titleEl = doc.createElement("span"), originEl = doc.createElement("span");
+      const reading = doc.createElement("div"), codeEl = doc.createElement("span"), output = doc.createElement("output");
+      const meter = doc.createElement("div"), bar = doc.createElement("progress");
+      card.setAttribute("class", "expr-spot-card"); card.setAttribute("data-channel", name);
+      head.setAttribute("class", "expr-spot-head"); titleEl.setAttribute("class", "expr-spot-name"); originEl.setAttribute("class", "expr-origin-pill");
+      head.append(titleEl, originEl);
+      reading.setAttribute("class", "expr-spot-reading"); codeEl.setAttribute("class", "expr-spot-code"); codeEl.textContent = name;
+      output.setAttribute("class", "expr-spot-val"); reading.append(codeEl, output);
+      meter.setAttribute("class", "expr-meter-slot"); bar.max = 1; bar.value = 0; bar.setAttribute("aria-label", name);
+      meter.append(bar); card.append(head, reading, meter); get("outputs").append(card);
+      rows.set(`outputs/${name}`, {output, bar, name, cardEl: card, titleEl, originEl, meta, kind: "spot"});
+    }
+    const channelSet = new Set(channels), covered = new Set(), partitions = [];
+    for (const group of DIAGNOSTIC_GROUPS) {
+      const items = group.items.filter(item => channelSet.has(item.name));
+      if (items.length) {
+        for (const item of items) covered.add(item.name);
+        partitions.push({id: group.id, shortKey: group.shortKey, title: group.title, items});
       }
+    }
+    const extra = channels.filter(name => !covered.has(name));
+    if (extra.length) partitions.push({id: "other", shortKey: "regionOther", title: null, items: extra.map(name => ({name, label: null}))});
+    if (state.exprRegion !== "all" && !partitions.some(g => g.id === state.exprRegion)) state.exprRegion = "all";
+    const addRegionBtn = (id, labelKey) => {
+      const btn = doc.createElement("button"); btn.type = "button";
+      btn.setAttribute("class", "expr-region-btn"); btn.setAttribute("data-region", id);
+      btn.addEventListener("click", () => { state.exprRegion = id; render(); });
+      get("expr-regions").append(btn); exprRegionBtns.set(id, {btn, labelKey});
+    };
+    addRegionBtn("all", "regionAll");
+    for (const g of partitions) addRegionBtn(g.id, g.shortKey);
+    for (const g of partitions) {
+      const groupEl = doc.createElement("section"), head = doc.createElement("div"), titleEl = doc.createElement("strong"), badgeEl = doc.createElement("span"), grid = doc.createElement("div");
+      groupEl.setAttribute("class", "expr-group-card"); groupEl.setAttribute("data-group", g.id);
+      head.setAttribute("class", "expr-group-head"); badgeEl.setAttribute("class", "expr-group-badge");
+      head.append(titleEl, badgeEl); grid.setAttribute("class", "expr-pair-grid");
+      const cells = [];
+      for (const item of g.items) {
+        const cell = doc.createElement("label"), top = doc.createElement("div"), metaWrap = doc.createElement("div");
+        const itemTitle = doc.createElement("span"), codeEl = doc.createElement("span"), right = doc.createElement("div");
+        const originEl = doc.createElement("span"), output = doc.createElement("output"), meter = doc.createElement("div"), bar = doc.createElement("progress");
+        cell.setAttribute("class", "expr-cell"); cell.setAttribute("data-channel", item.name);
+        top.setAttribute("class", "expr-cell-top"); metaWrap.setAttribute("class", "expr-cell-meta");
+        itemTitle.setAttribute("class", "expr-cell-title"); codeEl.setAttribute("class", "expr-cell-code"); codeEl.textContent = item.name;
+        metaWrap.append(itemTitle, codeEl);
+        right.setAttribute("class", "expr-cell-right"); originEl.setAttribute("class", "expr-origin-pill"); output.setAttribute("class", "expr-cell-val");
+        right.append(originEl, output); top.append(metaWrap, right);
+        meter.setAttribute("class", "expr-meter-slot"); bar.max = 1; bar.value = 0; bar.setAttribute("aria-label", item.name);
+        meter.append(bar); cell.append(top, meter); grid.append(cell);
+        const entry = {output, bar, name: item.name, cellEl: cell, titleEl: itemTitle, originEl, meta: item, groupId: g.id, kind: "cell"};
+        rows.set(`channel-table/${item.name}`, entry);
+        cells.push(entry);
+      }
+      groupEl.append(head, grid); get("channel-table").append(groupEl);
+      exprGroups.push({group: g, groupEl, titleEl, badgeEl, cells});
     }
   }
   function renderTraining(current) {
@@ -618,31 +678,10 @@ export function createApp(doc, options = {}) {
     get("technical-error").textContent = technicalParts.join("\n\n") || "—";
     get("migration").hidden = !state.status?.legacy_configuration_available;
     get("placeholder").textContent = t(!get("preview-enabled").checked ? "previewOff" : state.previewError ? "previewError" : "noVideo");
-    makeRows();
-    for (const {output, bar, name} of rows.values()) {
-      const value = channelValue(state.status, name, current.valid && !state.busy); output.textContent = value == null ? "—" : value.toFixed(3); bar.value = value ?? 0;
-      bar.hidden = value == null; output.setAttribute("aria-label", `${name}: ${value == null ? "—" : value.toFixed(3)}`);
-    }
-    get("support-info").textContent = `${t("supported")}: ${state.status?.model?.trained_channels?.length ?? 0} / 50`;
     const owner = `${state.status?.source?.session_id}/${state.status?.output_session_id}`;
     if (owner !== state.previewOwner) { clearPreview(); state.previewOwner = owner; }
     if (!current.video || state.busy || !get("preview-enabled").checked) clearPreview();
-    const identity = value => typeof value === "number" && !Number.isSafeInteger(value) ? t("unsafeInteger") : display(value);
-    const source = state.status?.source ?? {}, result = state.status?.prediction_source ?? {}, m = current.current ? state.status?.metrics ?? {} : {};
-    get("source-info").textContent = `${identity(source.session_id)} / ${identity(source.source_seq)}`;
-    get("result-info").textContent = `${identity(result.session_id)} / ${identity(result.source_seq)}`;
-    get("raw-identity").textContent = identity(source.raw_identity); get("time-mouth").textContent = identity(source.mouth_sensor_ns);
-    get("engine-info").textContent = `${display(state.status?.engine)} / ${display(state.status?.device)}`;
-    get("provider-info").textContent = state.status?.model?.providers?.join(" → ") || "—";
-    get("fallback-info").textContent = state.status?.model?.fallbacks?.map(x => `${x.engine}/${x.device}: ${x.error}`).join("\n") || t("noFallback");
-    get("source-age").textContent = `${fixed(m.source_age_ms)} ms`; get("receive-age").textContent = `${fixed(m.receive_age_ms)} ms`;
-    get("rates").textContent = `${fixed(m.received_hz)} / ${fixed(m.inference_hz)} Hz`; get("drops").textContent = `${display(m.source_gaps)} / ${display(m.pending_dropped)}`;
-    get("queue").textContent = `${display(m.queue_depth)} / ${fixed(m.queue_ms)} ms`; get("inference-time").textContent = percentile(m.latency_ms?.predict_ms);
-    get("latency").textContent = percentile(m.latency_ms?.source_copy_to_result_ms);
-    const stock = state.status?.stock;
-    const association = stock?.associated > 0 ? "associationExact" : stock?.records > 0 ? "associationUnverified" : "associationWaiting";
-    get("stock-info").textContent = `${t(association)} · ${JSON.stringify(stock ?? null)}`;
-    get("snapshot-state").textContent = t(current.current ? "snapshot" : "expiredSnapshot");
+    renderDiagnostics(current, technicalParts);
     const replay = state.status?.replay; get("replay-info").textContent = replay?.path ? `${replay.path} · ${display(replay.position)} / ${display(replay.total)} ${t("frames")}${replay.finished ? ` · ${t("replayDone")}` : ""}` : t("replayReady");
     const focused=state.page==="recording" && state.status?.recording?.state==="recording" && state.status?.recording?.guide?.step;
     doc.documentElement.setAttribute?.("data-guiding",String(Boolean(focused)));
@@ -670,6 +709,166 @@ export function createApp(doc, options = {}) {
         "record-start", "record-stop", "record-cancel", "train-start", "train-cancel", "voice-enabled"]) get(id).disabled = true;
     }
     renderRouting(current);
+  }
+  function channelOrigin(snap, snapValid, name, activeSources) {
+    let route = "model";
+    if (Object.hasOwn(AGGREGATE_CHILDREN_MAP, name)) {
+      const kids = AGGREGATE_CHILDREN_MAP[name];
+      route = kids.some(k => activeSources[k] === "off") ? "off" :
+        kids.every(k => activeSources[k] === "stock") ? "stock" : "model";
+    } else if (Object.hasOwn(activeSources, name)) {
+      route = activeSources[name];
+    }
+    if (route === "off") return {origin: "off", key: "originOff"};
+    if (snapValid && snap?.prediction?.native_channels?.includes(name)) return {origin: "native", key: "originNativeLive"};
+    if (route === "stock") {
+      if (snapValid && channelValue(snap, name, true) != null) return {origin: "fallback", key: "originModelFallback"};
+      return {origin: "stock-idle", key: "originStockIdle"};
+    }
+    if (snap?.model?.trained_channels && !snap.model.capture_only && !snap.model.trained_channels.includes(name)) {
+      return {origin: "untrained", key: "originUntrained"};
+    }
+    return {origin: "model", key: "originModel"};
+  }
+  function renderDiagnostics(current, technicalParts) {
+    makeRows();
+    if (!current.current || !current.running) {
+      state.exprFrozen = false;
+      state.frozenSnapshot = null;
+    }
+    const showExpr = state.diagView !== "connection";
+    get("expression-diagnostics").hidden = !showExpr;
+    get("diagnostics").hidden = showExpr;
+    get("diag-tab-expressions").setAttribute("aria-selected", String(showExpr));
+    get("diag-tab-expressions").setAttribute("class", `diag-tab${showExpr ? " active" : ""}`);
+    get("diag-tab-connection").setAttribute("aria-selected", String(!showExpr));
+    get("diag-tab-connection").setAttribute("class", `diag-tab${!showExpr ? " active" : ""}`);
+
+    const snap = state.exprFrozen && state.frozenSnapshot ? state.frozenSnapshot.status : state.status;
+    const snapValid = state.exprFrozen && state.frozenSnapshot ? state.frozenSnapshot.valid : (current.valid && !state.busy);
+    const activeSources = snap?.config ?
+      resolveChannelSources(snap.config.mouth_mode, snap.config.hybrid_channels, snap.config.channel_sources) :
+      (state.channelSources ?? MOUTH_PRESETS.curated);
+    const channels = state.status?.contract?.channels ?? DEFAULT_DIAG_CHANNELS;
+    const uniqueChannels = [...new Set(channels)];
+
+    for (const entry of rows.values()) {
+      const value = channelValue(snap, entry.name, snapValid);
+      const info = channelOrigin(snap, snapValid, entry.name, activeSources);
+      const active = value != null && value >= 0.02;
+      entry.output.textContent = value == null ? "—" : value.toFixed(3);
+      entry.bar.value = value ?? 0;
+      entry.bar.hidden = value == null;
+      entry.output.setAttribute("aria-label", `${entry.name}: ${value == null ? "—" : value.toFixed(3)}`);
+      entry.titleEl.textContent = entry.meta?.label?.[state.language] ?? entry.meta?.label?.en ?? entry.name;
+      entry.originEl.textContent = t(info.key);
+      entry.originEl.setAttribute("data-origin", info.origin);
+      const host = entry.kind === "spot" ? entry.cardEl : entry.cellEl;
+      host.setAttribute("data-active", String(active));
+      host.setAttribute("data-origin", info.origin);
+    }
+
+    let validCount = 0, activeCount = 0, nativeLiveCount = 0, modelActiveCount = 0;
+    for (const name of uniqueChannels) {
+      const value = channelValue(snap, name, snapValid);
+      const info = channelOrigin(snap, snapValid, name, activeSources);
+      if (value != null) {
+        validCount++;
+        if (value >= 0.02) activeCount++;
+        if (info.origin === "native") nativeLiveCount++;
+        else if (info.origin === "model" || info.origin === "fallback") modelActiveCount++;
+      }
+    }
+
+    const freezeBtn = get("expr-freeze");
+    freezeBtn.disabled = !current.valid && !state.exprFrozen;
+    freezeBtn.textContent = t(state.exprFrozen ? "exprResume" : "exprFreeze");
+    freezeBtn.setAttribute("aria-pressed", String(state.exprFrozen));
+    get("expr-live-pill").textContent = t(state.exprFrozen ? "exprFrozen" : current.valid ? "exprLive" : current.running ? "exprWaiting" : "exprIdle");
+    get("expr-live-pill").setAttribute("data-state", state.exprFrozen ? "frozen" : current.valid ? "running" : current.running ? "connecting" : "stopped");
+    get("expr-active-summary").textContent = `${t("exprStatActive")} ${activeCount} · ${t("exprStatValid")} ${validCount}/${uniqueChannels.length}`;
+    get("expr-source-summary").textContent = `${t("exprStatNative")} ${nativeLiveCount} · ${t("exprStatModel")} ${modelActiveCount}`;
+    get("support-info").textContent = `${t("supported")}: ${(snap ?? state.status)?.model?.trained_channels?.length ?? 0} / 50`;
+
+    get("diag-expr-badge").textContent = state.exprFrozen ? t("exprFrozen") : current.valid ? `${activeCount} / ${validCount}` : t("connStatusIdle");
+    get("diag-expr-badge").setAttribute("data-live", String(current.valid && !state.exprFrozen));
+
+    get("expr-active-only").setAttribute("aria-pressed", String(state.exprActiveOnly));
+    get("expr-active-only").setAttribute("class", `filter-chip${state.exprActiveOnly ? " active" : ""}`);
+    for (const [id, srcKey] of [["expr-src-all", "all"], ["expr-src-native", "native"], ["expr-src-model", "model"]]) {
+      const selected = state.exprSourceFilter === srcKey;
+      get(id).setAttribute("aria-pressed", String(selected));
+      get(id).setAttribute("class", `filter-chip${selected ? " active" : ""}`);
+    }
+    get("expr-search").setAttribute("placeholder", t("exprSearchPlaceholder"));
+    get("expr-search").value = state.exprQuery;
+    for (const [regionId, {btn, labelKey}] of exprRegionBtns) {
+      const selected = state.exprRegion === regionId;
+      btn.textContent = t(labelKey);
+      btn.setAttribute("aria-pressed", String(selected));
+      btn.setAttribute("class", `expr-region-btn${selected ? " active" : ""}`);
+    }
+
+    const query = state.exprQuery.trim().toLowerCase();
+    let visibleGroups = 0;
+    for (const g of exprGroups) {
+      g.titleEl.textContent = g.group.title?.[state.language] ?? g.group.title?.en ?? t(g.group.shortKey);
+      const regionMatch = state.exprRegion === "all" || state.exprRegion === g.group.id;
+      let groupActive = 0, visibleInGroup = 0;
+      for (const cell of g.cells) {
+        const value = channelValue(snap, cell.name, snapValid);
+        const info = channelOrigin(snap, snapValid, cell.name, activeSources);
+        const isActive = value != null && value >= 0.02;
+        if (isActive) groupActive++;
+        const matchesActive = !state.exprActiveOnly || isActive;
+        const matchesSource = state.exprSourceFilter === "all" ||
+          (state.exprSourceFilter === "native" && (info.origin === "native" || info.origin === "stock-idle" || info.origin === "fallback")) ||
+          (state.exprSourceFilter === "model" && info.origin === "model");
+        const meta = cell.meta;
+        const matchesQuery = !query || cell.name.toLowerCase().includes(query) ||
+          (meta?.parent && meta.parent.toLowerCase().includes(query)) ||
+          (meta?.label?.en && meta.label.en.toLowerCase().includes(query)) ||
+          (meta?.label?.["zh-CN"] && meta.label["zh-CN"].toLowerCase().includes(query));
+        const showCell = regionMatch && matchesActive && matchesSource && matchesQuery;
+        cell.cellEl.hidden = !showCell;
+        if (showCell) visibleInGroup++;
+      }
+      g.badgeEl.textContent = `${t("exprStatActive")} ${groupActive} / ${g.cells.length}`;
+      g.groupEl.hidden = visibleInGroup === 0;
+      if (visibleInGroup > 0) visibleGroups++;
+    }
+    get("expr-empty").hidden = visibleGroups > 0;
+
+    const identity = value => typeof value === "number" && !Number.isSafeInteger(value) ? t("unsafeInteger") : display(value);
+    const source = state.status?.source ?? {}, result = state.status?.prediction_source ?? {}, m = current.current ? state.status?.metrics ?? {} : {};
+    get("source-info").textContent = `${identity(source.session_id)} / ${identity(source.source_seq)}`;
+    get("result-info").textContent = `${identity(result.session_id)} / ${identity(result.source_seq)}`;
+    get("raw-identity").textContent = identity(source.raw_identity);
+    get("time-mouth").textContent = identity(source.mouth_sensor_ns);
+    get("engine-info").textContent = `${display(state.status?.engine)} / ${display(state.status?.device)}`;
+    get("provider-info").textContent = state.status?.model?.providers?.join(" → ") || "—";
+    get("fallback-info").textContent = state.status?.model?.fallbacks?.map(x => `${x.engine}/${x.device}: ${x.error}`).join("\n") || t("noFallback");
+    get("source-age").textContent = `${fixed(m.source_age_ms)} ms`;
+    get("receive-age").textContent = `${fixed(m.receive_age_ms)} ms`;
+    get("rates").textContent = `${fixed(m.received_hz)} / ${fixed(m.inference_hz)} Hz`;
+    get("drops").textContent = `${display(m.source_gaps)} / ${display(m.pending_dropped)}`;
+    get("queue").textContent = `${display(m.queue_depth)} / ${fixed(m.queue_ms)} ms`;
+    get("inference-time").textContent = percentile(m.latency_ms?.predict_ms);
+    get("latency").textContent = percentile(m.latency_ms?.source_copy_to_result_ms);
+    const liveStock = state.status?.live_stock;
+    get("live-stock-info").textContent = !liveStock?.wanted ? t("liveStockOff") :
+      liveStock.fresh ? `${t("liveStockFresh")} (${fixed(liveStock.age_ms)} ms)` :
+      liveStock.error ? `${t("liveStockWaiting")} · ${liveStock.error}` : t("liveStockWaiting");
+    const stock = state.status?.stock;
+    const association = stock?.associated > 0 ? "associationExact" : stock?.records > 0 ? "associationUnverified" : "associationWaiting";
+    get("stock-info").textContent = `${t(association)} · ${JSON.stringify(stock ?? null)}`;
+    get("snapshot-state").textContent = t(current.current ? "snapshot" : "expiredSnapshot");
+    get("conn-error-card").setAttribute("data-has-error", String(technicalParts.length > 0));
+    get("diag-conn-badge").setAttribute("data-alert", String(technicalParts.length > 0));
+    get("diag-conn-badge").setAttribute("data-live", String(technicalParts.length === 0 && current.current && current.running && current.video));
+    get("diag-conn-badge").textContent = technicalParts.length > 0 ? `${t("connStatusAlert")} (${technicalParts.length})` :
+      current.current && current.running && current.video ? `${fixed(m.inference_hz)} Hz` :
+      t(current.current ? "connStatusIdle" : "offline");
   }
   function renderRouting(current) {
     makeMorphControls();
@@ -1029,6 +1228,26 @@ export function createApp(doc, options = {}) {
     else if (!get("headset-select").value) { get("headset_host").value = ""; state.dirty = true; render(); }
   });
   for (const page of PAGES) get(`nav-${PAGE_NAV[page]}`).addEventListener("click", event => { event.preventDefault(); navigate(page); });
+  get("go-diagnostics").addEventListener("click", event => { event.preventDefault(); state.diagView = "expressions"; navigate("diagnostics"); });
+  get("settings-go-diagnostics").addEventListener("click", event => { event.preventDefault(); navigate("diagnostics"); });
+  get("diag-tab-expressions").addEventListener("click", () => { state.diagView = "expressions"; render(); });
+  get("diag-tab-connection").addEventListener("click", () => { state.diagView = "connection"; render(); });
+  get("expr-freeze").addEventListener("click", () => {
+    if (get("expr-freeze").disabled) return;
+    if (state.exprFrozen) {
+      state.exprFrozen = false;
+      state.frozenSnapshot = null;
+    } else {
+      state.exprFrozen = true;
+      state.frozenSnapshot = {status: structuredClone(state.status), valid: view().valid && !state.busy};
+    }
+    render();
+  });
+  get("expr-active-only").addEventListener("click", () => { state.exprActiveOnly = !state.exprActiveOnly; render(); });
+  for (const [id, srcKey] of [["expr-src-all", "all"], ["expr-src-native", "native"], ["expr-src-model", "model"]]) {
+    get(id).addEventListener("click", () => { state.exprSourceFilter = srcKey; render(); });
+  }
+  get("expr-search").addEventListener("input", () => { state.exprQuery = get("expr-search").value; render(); });
   for (const id of ["go-capture", "train-go-record", "train-go-review"]) get(id).addEventListener("click", event => {
     event.preventDefault(); navigate("recording"); if (id === "train-go-review") get("review").open = true;
   });
@@ -1070,7 +1289,7 @@ export function createApp(doc, options = {}) {
   for (const id of ["reference-image", "reference-neutral-image", "reference-profile-image"]) get(id).addEventListener("error", () => { state.referenceImageError = true; render(); });
   async function init() { render(); await Promise.all([pollStatus(), loadReference(), loadPresets()]); if (!state.destroyed) { state.interval = timers.setInterval(() => { render(); void pollStatus(); }, 500); state.visualTimer=timers.setInterval(() => {void reportVisual().catch(error => {state.error=error.message;});},200); previewLoop(); await discover(); } }
   function destroy() { state.destroyed = true; state.generation++; navigation?.removeEventListener("hashchange", hashChanged); speech?.cancel(); timers.clearInterval(state.interval); timers.clearInterval(state.visualTimer); timers.clearTimeout(state.previewTimer); clearPreview(); }
-  return {init, destroy, start, stop, save, record, train, cympleRelay, loadReviews, applyReview, readForm, pollStatus, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs, morphControls, morphGroups};
+  return {init, destroy, start, stop, save, record, train, cympleRelay, loadReviews, applyReview, readForm, pollStatus, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs, morphControls, morphGroups, exprGroups};
 }
 if (typeof document !== "undefined") {
   let storage; try { storage = window.localStorage; } catch {}

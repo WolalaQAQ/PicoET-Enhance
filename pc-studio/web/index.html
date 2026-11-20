@@ -13,6 +13,7 @@
       <a id="nav-workspace" class="nav-link active" href="#/tracking" aria-current="page"><span aria-hidden="true">◫</span><span id="nav-live-label">Tracking</span></a>
       <a id="nav-recording" class="nav-link" href="#/recording"><span aria-hidden="true">◎</span><span id="nav-record-label">Capture</span></a>
       <a id="nav-training" class="nav-link" href="#/training"><span aria-hidden="true">⏣</span><span id="nav-train-label">Train</span></a>
+      <a id="nav-diagnostics" class="nav-link" href="#/diagnostics"><span aria-hidden="true">◈</span><span id="nav-diagnostics-label">Diagnostics</span></a>
       <a id="nav-advanced" class="nav-link" href="#/preferences"><span aria-hidden="true">≡</span><span id="nav-settings-label">Settings</span></a>
     </nav>
     <div class="sidebar-note"><span class="local-dot"></span><span id="local-label">Runs on your PC</span><p id="privacy-note">Images stay on this PC.</p></div>
@@ -35,7 +36,7 @@
     </form>
 
     <section id="page-tracking" class="task-page" aria-labelledby="title">
-      <div class="run-toolbar"><div class="actions"><button id="start" form="settings" type="submit" disabled>Start tracking</button><button id="stop" type="button" disabled>Stop tracking</button></div><span id="run-help" class="hint"></span></div>
+      <div class="run-toolbar"><div class="actions"><button id="start" form="settings" type="submit" disabled>Start tracking</button><button id="stop" type="button" disabled>Stop tracking</button></div><div class="run-toolbar-meta"><span id="run-help" class="hint"></span><a id="go-diagnostics" class="subtle-link" href="#/diagnostics">Expression diagnostics →</a></div></div>
       <div id="camera-slot-tracking" class="camera-slot">
         <section id="camera-panel" class="camera-panel panel"><div class="panel-heading"><div><h2 id="camera-title">Camera preview</h2><span class="eyebrow" id="camera-eyebrow" hidden>LIVE INPUT</span></div><label class="check preview-switch"><input id="preview-enabled" type="checkbox" checked><span id="preview-label">Show preview</span></label></div>
           <div class="preview"><img id="preview" width="400" height="400" alt="Mouth camera image" hidden><div id="empty-camera"><svg class="camera-glyph" width="90" height="72" viewBox="0 0 90 72" fill="none" aria-hidden="true"><path d="M22 14H12v12m56-12h10v12M12 46v12h10m56-12v12H68" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M27 36c7-10 29-10 36 0-7 12-29 12-36 0Z" stroke="currentColor" stroke-width="2"/><path d="M29 36h32" stroke="currentColor" stroke-width="1.5"/></svg><strong id="placeholder">Waiting for camera images</strong><span id="camera-empty-help"></span></div></div>
@@ -172,6 +173,99 @@
       </section>
     </section>
 
+    <section id="page-diagnostics" class="task-page" aria-labelledby="title" hidden>
+      <div id="diag-tabs" class="diag-tabs" role="tablist">
+        <button id="diag-tab-expressions" class="diag-tab active" type="button" role="tab" aria-selected="true" aria-controls="expression-diagnostics"><span id="diag-tab-expressions-label">Expression monitor</span><span id="diag-expr-badge" class="diag-tab-badge"></span></button>
+        <button id="diag-tab-connection" class="diag-tab" type="button" role="tab" aria-selected="false" aria-controls="diagnostics"><span id="diag-tab-connection-label">Connection diagnostics</span><span id="diag-conn-badge" class="diag-tab-badge"></span></button>
+      </div>
+
+      <section id="expression-diagnostics" class="expr-diag">
+        <div class="panel expr-hero-panel">
+          <div class="expr-status-strip">
+            <div class="expr-status-pills">
+              <span id="expr-live-pill" class="status-pill" role="status"></span>
+              <span id="expr-active-summary" class="expr-stat-chip"></span>
+              <span id="expr-source-summary" class="expr-stat-chip"></span>
+              <span id="support-info" class="expr-stat-chip"></span>
+            </div>
+            <button id="expr-freeze" class="expr-freeze-btn" type="button" disabled>Freeze</button>
+          </div>
+          <div class="expr-section-head">
+            <div><span id="output-eyebrow" class="eyebrow">KEY MORPH TARGETS</span><h2 id="output-title">Core expressions</h2></div>
+            <p id="output-note" class="hint"></p>
+          </div>
+          <div id="outputs" class="outputs expr-spotlight-grid"></div>
+        </div>
+
+        <div class="panel expr-full-panel">
+          <div class="expr-browser-head">
+            <div><h2 id="all-channels-title">All expression channels</h2><p id="unknown-help" class="hint"></p></div>
+            <div class="expr-filter-bar">
+              <div class="actions expr-source-filters">
+                <button id="expr-active-only" class="filter-chip" type="button">Active (&gt;0.02)</button>
+                <button id="expr-src-all" class="filter-chip active" type="button">All sources</button>
+                <button id="expr-src-native" class="filter-chip" type="button">Native</button>
+                <button id="expr-src-model" class="filter-chip" type="button">New model</button>
+              </div>
+              <input id="expr-search" class="routing-search expr-search" type="search" autocomplete="off" spellcheck="false" placeholder="Search morph target…">
+            </div>
+          </div>
+          <div id="expr-regions" class="expr-regions" role="group"></div>
+          <div id="channel-table" class="channel-table expr-groups"></div>
+          <p id="expr-empty" class="expr-empty hint" hidden></p>
+        </div>
+      </section>
+
+      <section id="diagnostics" class="conn-diag" hidden>
+        <div class="conn-diag-head">
+          <h2 id="diagnostics-title">Connection &amp; pipeline diagnostics</h2>
+          <span id="snapshot-state" class="status-pill"></span>
+        </div>
+        <div class="conn-cards-grid">
+          <section class="panel conn-card">
+            <h3 id="conn-card-rates-title" class="conn-card-title">Throughput &amp; latency</h3>
+            <dl class="conn-dl">
+              <dt id="rate-label"></dt><dd id="rates">—</dd>
+              <dt id="inference-label"></dt><dd id="inference-time">—</dd>
+              <dt id="latency-label"></dt><dd id="latency">—</dd>
+              <dt id="source-age-label"></dt><dd id="source-age">—</dd>
+              <dt id="receive-age-label"></dt><dd id="receive-age">—</dd>
+            </dl>
+          </section>
+          <section class="panel conn-card">
+            <h3 id="conn-card-engine-title" class="conn-card-title">Inference engine &amp; hardware</h3>
+            <dl class="conn-dl">
+              <dt id="engine-label"></dt><dd id="engine-info">—</dd>
+              <dt id="providers-label"></dt><dd id="provider-info">—</dd>
+              <dt id="fallback-label"></dt><dd id="fallback-info">—</dd>
+            </dl>
+          </section>
+          <section class="panel conn-card">
+            <h3 id="conn-card-stream-title" class="conn-card-title">Queue, drops &amp; native stream</h3>
+            <dl class="conn-dl">
+              <dt id="drop-label"></dt><dd id="drops">—</dd>
+              <dt id="queue-label"></dt><dd id="queue">—</dd>
+              <dt id="live-stock-label"></dt><dd id="live-stock-info">—</dd>
+              <dt id="stock-label"></dt><dd id="stock-info">—</dd>
+            </dl>
+          </section>
+          <section class="panel conn-card">
+            <h3 id="conn-card-session-title" class="conn-card-title">Session &amp; sensor clocks</h3>
+            <dl class="conn-dl">
+              <dt id="source-label"></dt><dd id="source-info">—</dd>
+              <dt id="result-label"></dt><dd id="result-info">—</dd>
+              <dt>raw_identity</dt><dd id="raw-identity">—</dd>
+              <dt>mouth_sensor_ns</dt><dd id="time-mouth">—</dd>
+            </dl>
+          </section>
+        </div>
+        <div id="conn-error-card" class="panel conn-error-card">
+          <h2 id="technical-error-title">Troubleshooting details</h2>
+          <pre id="technical-error" class="technical-error">—</pre>
+        </div>
+      </section>
+    </section>
+
     <section id="page-preferences" class="task-page" aria-labelledby="title" hidden>
       <div class="preferences-main panel">
         <label class="check"><input id="output_enabled" form="settings" type="checkbox"><span id="udp-label">Send expressions to VRCFaceTracking</span></label>
@@ -218,16 +312,7 @@
       </details>
       <div class="actions settings-save"><button id="save" type="button" disabled>Save settings</button><span id="config-state"></span></div>
       <details id="replay-tools" class="panel disclosure-panel"><summary id="replay-tools-title">Replay a saved recording</summary><label><span id="replay-path-label">Replay dataset (.npz)</span><input id="replay_path" form="settings" autocomplete="off" spellcheck="false"></label><button id="replay" type="button" disabled>Replay data</button><p id="replay-info" class="hint"></p></details>
-      <details id="diagnostics" class="panel disclosure-panel"><summary id="diagnostics-title">Diagnostics</summary>
-        <h2 id="technical-error-title">Troubleshooting details</h2><pre id="technical-error" class="technical-error"></pre>
-        <section class="output-panel"><div class="panel-heading"><div><span id="output-eyebrow" class="eyebrow">MODEL OUTPUT</span><h2 id="output-title">Expression signals</h2></div></div><p id="support-info" class="hint"></p><div id="outputs" class="outputs"></div><p id="output-note" class="hint"></p></section>
-        <details id="all-channels" class="disclosure-panel"><summary id="all-channels-title">All model channels</summary><p id="unknown-help" class="hint"></p><div id="channel-table" class="channel-table"></div></details>
-        <dl><dt id="engine-label"></dt><dd id="engine-info">—</dd><dt id="providers-label"></dt><dd id="provider-info">—</dd>
-          <dt id="fallback-label"></dt><dd id="fallback-info">—</dd><dt id="source-label"></dt><dd id="source-info">—</dd><dt id="result-label"></dt><dd id="result-info">—</dd><dt>raw_identity</dt><dd id="raw-identity">—</dd>
-          <dt>mouth_sensor_ns</dt><dd id="time-mouth">—</dd><dt id="source-age-label"></dt><dd id="source-age">—</dd><dt id="receive-age-label"></dt><dd id="receive-age">—</dd><dt id="rate-label"></dt><dd id="rates">—</dd>
-          <dt id="drop-label"></dt><dd id="drops">—</dd><dt id="queue-label"></dt><dd id="queue">—</dd><dt id="inference-label"></dt><dd id="inference-time">—</dd><dt id="latency-label"></dt><dd id="latency">—</dd><dt id="stock-label"></dt><dd id="stock-info">—</dd>
-        </dl><p id="snapshot-state" class="hint"></p>
-      </details>
+      <p class="task-tip settings-diag-tip"><span id="settings-diag-text">Looking for live expression meters or connection stats?</span> <a id="settings-go-diagnostics" href="#/diagnostics">Open Diagnostics →</a></p>
     </section>
     <footer class="page-footer"><span>PICO MOUTH STUDIO</span><span id="footer-note">Your expressions, on your PC.</span></footer>
   </div>
