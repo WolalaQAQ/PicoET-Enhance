@@ -33,6 +33,7 @@ abstract class ProcessingActivity extends Activity {
     private TextView chip, footerHint, notice;
     private Button saveButton, applyButton, reloadButton;
     private String page = "start", profile = "defaults", pending = "", pendingAction = "";
+    private long pendingSubmitted;
     private ProcessingSettings recoveredDraft;
     private boolean rendering, pro, resumed;
 
@@ -116,6 +117,11 @@ abstract class ProcessingActivity extends Activity {
         } catch (IllegalArgumentException error) { Toast.makeText(this, s("draft_invalid"), Toast.LENGTH_LONG).show(); }
         channel = new PanelChannel(new File(createDeviceProtectedStorageContext().getFilesDir(), "control"));
         pending = preferences.getString("pending", ""); pendingAction = preferences.getString("pending_action", "");
+        if (pendingAction.equals("read")) {
+            pending = ""; pendingAction = "";
+            preferences.edit().remove("pending").remove("pending_action").apply();
+        }
+        pendingSubmitted = SystemClock.elapsedRealtime();
     }
 
     final void changeLanguage() {
@@ -534,7 +540,9 @@ abstract class ProcessingActivity extends Activity {
         if (!pending.isEmpty()) return;
         try {
             pending = channel.submit(action, state.draft.format()); pendingAction = action;
-            preferences.edit().putString("pending", pending).putString("pending_action", action).apply();
+            pendingSubmitted = SystemClock.elapsedRealtime();
+            if (!action.equals("read"))
+                preferences.edit().putString("pending", pending).putString("pending_action", action).apply();
             message("", false); refreshControls();
         } catch (Exception error) { message(s("failed") + " " + error.getMessage(), true); }
     }
@@ -590,6 +598,12 @@ abstract class ProcessingActivity extends Activity {
                             else { state.preset(response[1]); profile = action; }
                             persist(); renderPage(true);
                         }
+                    } else if (SystemClock.elapsedRealtime() - pendingSubmitted > 15000 &&
+                               (pendingAction.equals("read") || !channel.requestQueued())) {
+                        pending = ""; pendingAction = "";
+                        preferences.edit().remove("pending").remove("pending_action").apply();
+                        refreshControls();
+                        message(s("failed") + " worker_unavailable", true);
                     }
                 }
             } catch (Exception error) { refreshControls(); message(s("failed") + " " + error.getMessage(), true); }

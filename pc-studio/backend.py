@@ -248,6 +248,7 @@ def make_server(
 
 
 def main(argv=None):
+    headless = sys.stdout is None or sys.stderr is None
     if sys.stdout is None:
         sys.stdout = io.StringIO()
     if sys.stderr is None:
@@ -270,7 +271,21 @@ def main(argv=None):
             open_ui(url, browser_tab=args.browser_tab)
         return 0
     runtime = Runtime(args.config, run_root=args.runs, record_input=args.record_input)
-    server = make_server(runtime, host=args.host, port=args.port)
+    try:
+        server = make_server(runtime, host=args.host, port=args.port)
+    except OSError as error:
+        message = (
+            f'PicoET-Enhance PC Studio could not start on http://{args.host}:{args.port} '
+            f'({error}). Another program may be using that port.'
+        )
+        print(message, file=sys.stderr, flush=True)
+        if headless and os.name == 'nt':
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(0, message, 'PicoET-Enhance PC Studio', 0x10)
+            except Exception:
+                pass
+        return 1
     url = f'http://{args.host}:{server.server_port}'
     print(f'PicoET-Enhance PC Studio: {url}', flush=True)
     if not args.no_browser:

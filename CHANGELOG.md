@@ -2,6 +2,23 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
+## [2.6.1] - 2026-11-21
+
+### Fixed
+- **Headset LAN camera suspend/wake stability**: keep LAN camera broadcast usable across headset sleep and wake cycles without manual toggling. A brief heartbeat lag during suspend or resume pauses frame submission without permanently latching the channel into `peer_failed`, `picoet-camera reconcile` waits briefly for a live daemon to resume beating instead of writing a persistent `stop_pending` failure, and `ptj_ipc_daemon` checks the tracking service by PID and start time instead of exiting on long idle gaps.
+- **Headset idle CPU & flash writes**: reduce idle CPU usage when LAN camera broadcast is enabled with no clients connected. Measured on PICO 4 Pro / PICO OS 5.13.7 while asleep, combined idle usage drops from about 15.8% to about 0.3% (`ptj_ipc_daemon` from about 13.4% to 0.15%, `camera-jpeg-ctl` from about 2.4% to 0.15%), and `ipc-shim-status.json` is now written only on state changes instead of on every stats poll. Active streaming keeps its 90 Hz cadence and wakes immediately on incoming connections or control commands.
+- **Headset network, tracking lease & cleanup reliability**: make multicast group membership best-effort so local routers/hotspots without a default gateway no longer block camera startup; allow non-`wlan0` IPv4 interfaces and `adb forward` without requiring `wlan0`; enable TCP keepalive on headset stream sockets so abrupt PC disconnects do not leave stale single-slot result subscriptions; retry failed tracking-lease starts every 2 s while a client stays connected; and clean up retired `/data/local/tmp/picoet-camera/<boot>-*` directories on restart and module uninstall.
+- **Companion app & worker recovery**: stop persisting read-only poll requests (`camera-status` / `read`) and auto-clear orphaned pending requests after 15 s when `request.txt` is gone, preventing the app UI from getting permanently locked after a reboot or worker exit. Keep `picoet-panel` supervised inside `service.sh` so late boot or an unexpected exit restarts it automatically.
+- **PC Studio Windows discovery, cancellation & resilience**: isolate per-interface `OSError` and Windows UDP ICMP `WinError 10054` during LAN discovery so virtual/VPN adapters (WSL2, Hyper-V, Clash, WireGuard, Tailscale) no longer break headset discovery; make TCP connect and clock-sync stages immediately cancellable so clicking Stop, switching cameras, or quitting the service works promptly even against an offline IP; write config files atomically with fallback to defaults if corrupted; and show an error dialog in the headless Windows build if the listen port is already occupied.
+
+### Design Rationale
+- Idle backoff stays strictly on zero-subscriber paths: `ptj_ipc_daemon` uses a 100 ms loop with a 1 s heartbeat window and 5 s status writes, `core.cpp` uses a 200 ms `poll` timeout (waking immediately on new sockets), and `camera-jpeg-ctl` blocks on `inotify` for `camera-control.txt`.
+- Non-critical diagnostic file writes (`ipc-daemon-status.json`) and optional multicast joins no longer terminate a healthy video daemon, while strict ownership, nonce, and unacknowledged-stop memory-safety guards remain unchanged.
+
+### Notes & Caveats
+- `versionCode` is 29. Eye/mouth tracking, post-processing settings, presets, and the LAN camera protocol are unchanged; upgrading preserves existing module and companion-app preferences.
+- Both the headset Magisk module and PC Studio are updated in `v2.6.1`; updating both is recommended to pick up the Windows discovery and stop/shutdown fixes alongside the headset fixes.
+
 ## [2.6.0] - 2026-11-20
 
 ### Features

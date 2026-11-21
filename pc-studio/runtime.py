@@ -15,7 +15,17 @@ from PIL import Image, ImageDraw
 
 from stock import CaptureContextUnavailable, read_capture_context
 from updater import APP_VERSION
-from wire import END, JPEG, RAW, IdleStreamTimeout, SourceOrder, enable_keepalive, read_frame, sync_clock
+from wire import (
+    END, JPEG, RAW, IdleStreamTimeout, SourceOrder,
+    connect_cancellable, enable_keepalive, read_frame, sync_clock,
+)
+
+
+def _write_json_atomic(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(tmp, path)
 
 
 def _resolve_paths():
@@ -63,7 +73,10 @@ class Runtime:
         self.config = dict(DEFAULT_CONFIG)
         self._preserved_extra = {}
         if self.config_path.exists():
-            saved = json.loads(self.config_path.read_text(encoding='utf-8'))
+            try:
+                saved = json.loads(self.config_path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                saved = None
             if isinstance(saved, dict):
                 for key, value in saved.items():
                     if key in DEFAULT_CONFIG:
@@ -87,6 +100,7 @@ class Runtime:
         self.preview = None
         self.clock = None
         self.socket = None
+        self._pending_sockets = set()
         self.threads = []
         self.log = None
         self.run_dir = None
@@ -151,9 +165,8 @@ class Runtime:
         with self.lock:
             self.config = updated
             self.last_error = None
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
             saved = dict(self._preserved_extra, **updated)
-            self.config_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding='utf-8')
+            _write_json_atomic(self.config_path, saved)
         return dict(self.config)
 
     def start(
@@ -259,6 +272,34 @@ class Runtime:
             self.condition.notify()
         return True
 
+    def _track_pending_socket(self, sock):
+        with self.lock:
+            if sock is None:
+                return
+            self._pending_sockets.add(sock)
+            if self.stop_event.is_set():
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
+    def _untrack_pending_socket(self, sock):
+        if sock is None:
+            return
+        with self.lock:
+            self._pending_sockets.discard(sock)
+
+    def _connect(self, host, port, timeout=3):
+        holder = [None]
+        def on_socket(sock):
+            if sock is not None:
+                holder[0] = sock
+                self._track_pending_socket(sock)
+            elif holder[0] is not None:
+                self._untrack_pending_socket(holder[0])
+                holder[0] = None
+        return connect_cancellable(host, port, timeout=timeout, stop_event=self.stop_event, on_socket=on_socket)
+
     def _receive(self):
         with self.lock:
             config = dict(self._session_target or self.config)
@@ -269,24 +310,39 @@ class Runtime:
             if self.stop_event.is_set():
                 return
             try:
-                calibrated = sync_clock(host, port)
+                holder = [None]
+                def on_sock(sock):
+                    if sock is not None:
+                        holder[0] = sock
+                        self._track_pending_socket(sock)
+                    elif holder[0] is not None:
+                        self._untrack_pending_socket(holder[0])
+                        holder[0] = None
+                calibrated = sync_clock(host, port, stop_event=self.stop_event, on_socket=on_sock)
                 self._set_clock(calibrated)
             except (OSError, EOFError, ValueError):
                 pass
+            if self.stop_event.is_set():
+                return
             context = None
             try:
-                with socket.create_connection((host, port), timeout=3) as control:
+                with self._connect(host, port, timeout=3) as control:
                     context = read_capture_context(control)
                 with self.lock:
                     self.capture_context = context.evidence
             except (CaptureContextUnavailable, OSError, EOFError, ValueError):
                 context = None
-            sock = socket.create_connection((host, port), timeout=3)
+            if self.stop_event.is_set():
+                return
+            sock = self._connect(host, port, timeout=3)
             enable_keepalive(sock)
             sock.settimeout(10)  # The first subscription may cold-start the native camera.
             with self.lock:
                 self.socket = sock
                 self.connected = True
+            if self.stop_event.is_set():
+                sock.close()
+                return
             sock.sendall(b'JPEG\n')
             with sock:
                 first_frame = True
@@ -337,7 +393,15 @@ class Runtime:
                 host = target['headset_host'].strip()
                 if not host:
                     continue
-                calibrated = sync_clock(host, self._active_port(target), 3)
+                holder = [None]
+                def on_sock(sock):
+                    if sock is not None:
+                        holder[0] = sock
+                        self._track_pending_socket(sock)
+                    elif holder[0] is not None:
+                        self._untrack_pending_socket(holder[0])
+                        holder[0] = None
+                calibrated = sync_clock(host, self._active_port(target), 3, stop_event=self.stop_event, on_socket=on_sock)
                 self._set_clock(calibrated)
             except (OSError, EOFError, ValueError):
                 pass
@@ -454,42 +518,62 @@ class Runtime:
             self.lifecycle += 1
             self.condition.notify_all()
             sock = self.socket
+            pending_socks = list(self._pending_sockets)
+            self._pending_sockets.clear()
+        for pending in pending_socks:
+            try:
+                pending.close()
+            except OSError:
+                pass
         if sock:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-        for thread in self.threads:
-            if thread is not threading.current_thread():
-                thread.join(timeout=5)
-                if thread.is_alive():
-                    raise RuntimeError('Owned runtime worker did not stop: ' + thread.name)
-        with self.lock:
-            if self.log:
-                self.log.flush()
-                self.log.close()
-                self.log = None
-            if self.input_stream:
-                self.input_stream.close()
-                self.input_stream = None
-            if self.clock_log:
-                self.clock_log.close()
-                self.clock_log = None
-            self.threads = []
-            self.running = self.connected = False
-            self.mode = 'idle'
-            self.last_error = None
-            self.config['enabled'] = False
-            self._session_target = None
-            self.pending = None
-            self.preview = None
-            if self.run_dir is not None:
-                (self.run_dir / 'summary.json').write_text(
-                    json.dumps(self.status(), ensure_ascii=False, indent=2), encoding='utf-8'
-                )
+            try:
+                sock.close()
+            except OSError:
+                pass
+        join_error = None
+        try:
+            for thread in self.threads:
+                if thread is not threading.current_thread():
+                    thread.join(timeout=5)
+                    if thread.is_alive() and join_error is None:
+                        join_error = RuntimeError('Owned runtime worker did not stop: ' + thread.name)
+        finally:
+            with self.lock:
+                if self.log:
+                    self.log.flush()
+                    self.log.close()
+                    self.log = None
+                if self.input_stream:
+                    self.input_stream.close()
+                    self.input_stream = None
+                if self.clock_log:
+                    self.clock_log.close()
+                    self.clock_log = None
+                self.threads = []
+                self.socket = None
+                self.running = self.connected = False
+                self.mode = 'idle'
+                self.last_error = None
+                self.config['enabled'] = False
+                self._session_target = None
+                self.pending = None
+                self.preview = None
+                if self.run_dir is not None:
+                    (self.run_dir / 'summary.json').write_text(
+                        json.dumps(self.status(), ensure_ascii=False, indent=2), encoding='utf-8'
+                    )
+        if join_error is not None:
+            raise join_error
 
     def close(self):
-        self.stop()
+        try:
+            self.stop()
+        except RuntimeError:
+            pass
 
     def status(self):
         with self.lock:

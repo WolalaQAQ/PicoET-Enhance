@@ -6,7 +6,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-APP_VERSION = '2.6.0'
+APP_VERSION = '2.6.1'
 GITHUB_REPO = 'WolalaQAQ/PicoET-Enhance'
 RELEASES_LATEST_API = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
 RELEASES_PAGE_URL = f'https://github.com/{GITHUB_REPO}/releases'

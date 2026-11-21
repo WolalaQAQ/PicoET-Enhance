@@ -17,8 +17,12 @@ MULTICAST = '239.255.255.250'
 
 
 def _interfaces():
-    return sorted({row[4][0] for row in socket.getaddrinfo(socket.gethostname(), None,
-                   socket.AF_INET, socket.SOCK_DGRAM) if not row[4][0].startswith('127.')})
+    try:
+        found = sorted({row[4][0] for row in socket.getaddrinfo(socket.gethostname(), None,
+                        socket.AF_INET, socket.SOCK_DGRAM) if not row[4][0].startswith('127.')})
+    except OSError:
+        found = []
+    return found or ['']
 
 
 def _catalog(data):
@@ -41,22 +45,50 @@ def discover_sources(timeout=1.2, targets=None):
     catalogs = {}
     with ExitStack() as stack:
         sockets = []
+        sio_connreset = getattr(socket, 'SIO_UDP_CONNRESET', 0x9800000C)
         for interface in interfaces:
-            sock = stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
-            sock.bind((interface, 0))
-            if interface:
-                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(interface))
-            sockets.append(sock)
-            for target in targets:
-                sock.sendto(DISCOVER, target)
-                sock.sendto(CAMERA_DISCOVER, target)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+                if hasattr(sock, 'ioctl'):
+                    try:
+                        sock.ioctl(sio_connreset, False)
+                    except (OSError, AttributeError, ValueError):
+                        pass
+                sock.bind((interface, 0))
+                if interface:
+                    try:
+                        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(interface))
+                    except OSError:
+                        pass
+                sent = 0
+                for target in targets:
+                    try:
+                        sock.sendto(DISCOVER, target)
+                        sock.sendto(CAMERA_DISCOVER, target)
+                        sent += 1
+                    except OSError:
+                        continue
+                if sent:
+                    stack.enter_context(sock)
+                    sockets.append(sock)
+                else:
+                    sock.close()
+            except OSError:
+                sock.close()
+                continue
         deadline = time.monotonic() + timeout
         while sockets and time.monotonic() < deadline:
-            readable, _, _ = select.select(sockets, [], [], max(.001, deadline-time.monotonic()))
+            try:
+                readable, _, _ = select.select(sockets, [], [], max(.001, deadline-time.monotonic()))
+            except OSError:
+                break
             for sock in readable:
-                data, endpoint = sock.recvfrom(8192)
+                try:
+                    data, endpoint = sock.recvfrom(8192)
+                except OSError:
+                    continue
                 try:
                     if data.startswith(b'{'):
                         catalogs[endpoint] = _catalog(data)

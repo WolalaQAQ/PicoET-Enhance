@@ -463,6 +463,43 @@ class RuntimeAndHttpTests(unittest.TestCase):
                 rt.close()
                 server.server_close()
 
+    def test_corrupt_config_falls_back_to_defaults_and_stop_cancels_hanging_connect(self):
+        import unittest.mock as mock
+        import discovery as disc
+        from cymple_relay import CympleEyeRelay
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / 'config.json'
+            cfg.write_text('{truncated', encoding='utf-8')
+            rt = Runtime(cfg)
+            self.assertEqual(rt.config['headset_port'], 45681)
+
+            rcfg = Path(tmp) / 'cymple_relay.json'
+            rcfg.write_text('{truncated', encoding='utf-8')
+            relay = CympleEyeRelay(rcfg)
+            self.assertEqual(relay.config['left_port'], 45682)
+
+            # Discovery ignores failing virtual interfaces instead of crashing.
+            with mock.patch.object(disc, '_interfaces', return_value=['203.0.113.1', '127.0.0.1']):
+                res = disc.discover_sources(timeout=0.05)
+                self.assertIn('devices', res)
+
+            # Stop cancels an in-flight connecting socket promptly without hitting the 5s join error.
+            entered = threading.Event()
+            def slow_connect(host, port, timeout=3, *, stop_event=None, on_socket=None):
+                entered.set()
+                if stop_event is not None:
+                    stop_event.wait(5)
+                raise OSError('Connection cancelled')
+
+            with mock.patch('runtime.sync_clock', side_effect=slow_connect):
+                rt.start('capture', headset_host='198.51.100.1')
+                self.assertTrue(entered.wait(2))
+                t0 = time.monotonic()
+                rt.stop()
+                self.assertLess(time.monotonic() - t0, 2.0)
+                self.assertFalse(rt.running)
+
 
 if __name__ == '__main__':
     unittest.main()

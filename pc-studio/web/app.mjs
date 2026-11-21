@@ -416,7 +416,7 @@ export function createApp(doc, options = {}) {
     get("status").textContent = state.stoppedByUser ? t("serviceStopped") :
       t(state.busy || (!state.config && !state.pollError ? "loading" : current.key));
     get("status").setAttribute("data-state", state.stoppedByUser ? "offline" : current.key);
-    get("version-badge").textContent = `v${state.status?.version || "2.6.0"}`;
+    get("version-badge").textContent = `v${state.status?.version || "2.6.1"}`;
     get("camera-panel").setAttribute("data-live", String(current.video));
     get("service-state").textContent = t(current.current && !state.stoppedByUser ? "serviceOnline" : "serviceOffline");
     get("service-state").setAttribute("data-online", String(current.current && !state.stoppedByUser));

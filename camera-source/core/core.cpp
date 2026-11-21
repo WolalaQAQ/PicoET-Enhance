@@ -595,6 +595,13 @@ static void server_loop(PTJSource& s) {
         nonblocking(fd);
         int one = 1, buffer = 32768;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&one), sizeof(one));
+        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char*>(&one), sizeof(one));
+#if defined(__linux__)
+        int idle = 10, interval = 3, count = 3;
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
+#endif
         setsockopt(fd, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buffer), sizeof(buffer));
         char command[256]{}; uint64_t received = 0;
         if (!read_command(s, fd, command, received)) { close_socket(fd); continue; }

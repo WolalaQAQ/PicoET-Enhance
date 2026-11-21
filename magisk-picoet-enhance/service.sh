@@ -22,10 +22,19 @@ done
 
 # The sandboxed companion submits fixed requests; only this module-owned worker
 # invokes the configuration helper or the existing reload transaction.
-panel_uid=$(/system/bin/cmd package list packages -U dev.pico.etenhance | sed -n 's/^package:dev[.]pico[.]etenhance uid:\([0-9][0-9]*\)$/\1/p')
-if [ -n "$panel_uid" ]; then
-    "$MODDIR/bin/picoet-panel" "$MODDIR" "$panel_uid" >> "$STATE_DIR/panel.log" 2>&1 &
-fi
+panel_pid=
+ensure_panel() {
+    if [ -n "$panel_pid" ] && kill -0 "$panel_pid" 2>/dev/null; then
+        return 0
+    fi
+    panel_pid=
+    panel_uid=$(/system/bin/cmd package list packages -U dev.pico.etenhance 2>/dev/null | sed -n 's/^package:dev[.]pico[.]etenhance uid:\([0-9][0-9]*\)$/\1/p')
+    if [ -n "$panel_uid" ]; then
+        "$MODDIR/bin/picoet-panel" "$MODDIR" "$panel_uid" >> "$STATE_DIR/panel.log" 2>&1 &
+        panel_pid=$!
+    fi
+}
+ensure_panel
 
 # A saved opt-in is reconciled independently of expression tuning. No flag means off.
 trap '"$MODDIR/bin/picoet-camera" halt >/dev/null 2>&1' 0
@@ -35,6 +44,7 @@ trap '"$MODDIR/bin/picoet-camera" halt >/dev/null 2>&1' 0
 # allows read-only fragments to reach the injector's bounded recovery path.
 # picoet-inject's command lock serializes this with user mode/gate switches.
 while [ -d "$MODDIR" ] && [ ! -f "$MODDIR/disable" ] && [ ! -f "$MODDIR/remove" ]; do
+    ensure_panel
     /system/bin/sh "$MODDIR/picoet.sh" ensure >> "$STATE_DIR/service.log" 2>&1
     rc=$?
     "$MODDIR/bin/picoet-camera" reconcile >/dev/null 2>&1

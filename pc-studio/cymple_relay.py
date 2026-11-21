@@ -3,6 +3,7 @@ import argparse
 from collections import deque
 import io
 import json
+import os
 from pathlib import Path
 import socket
 import struct
@@ -139,11 +140,15 @@ class CympleEyeRelay:
         self.discover = discover
         self.config = dict(DEFAULT_RELAY_CONFIG)
         if self.config_path is not None and self.config_path.exists():
-            saved = json.loads(self.config_path.read_text(encoding='utf-8'))
-            self.config = validate_relay_config(
-                DEFAULT_RELAY_CONFIG,
-                {k: saved[k] for k in DEFAULT_RELAY_CONFIG if k in saved},
-            )
+            try:
+                saved = json.loads(self.config_path.read_text(encoding='utf-8'))
+                if isinstance(saved, dict):
+                    self.config = validate_relay_config(
+                        DEFAULT_RELAY_CONFIG,
+                        {k: saved[k] for k in DEFAULT_RELAY_CONFIG if k in saved},
+                    )
+            except (OSError, ValueError):
+                pass
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.running = False
@@ -176,7 +181,9 @@ class CympleEyeRelay:
         if self.config_path is None:
             return
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        self.config_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
+        tmp = self.config_path.with_suffix(self.config_path.suffix + '.tmp')
+        tmp.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
+        os.replace(tmp, self.config_path)
 
     def configure(self, changes: dict) -> dict:
         """Persist validated relay settings while stopped."""
