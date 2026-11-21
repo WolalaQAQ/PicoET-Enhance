@@ -427,6 +427,28 @@ output.expr-spot-val { font-family:Consolas, monospace; font-size:19px; font-wei
 [data-active="true"][data-origin="fallback"] .expr-meter-slot progress::-webkit-progress-value { background:#b97c24; }
 [data-active="true"][data-origin="fallback"] .expr-meter-slot progress::-moz-progress-bar { background:#b97c24; }
 
+.expr-compare { display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-top:2px; padding-top:7px; border-top:1px dashed #e6eeea; }
+.expr-compare[hidden] { display:none; }
+.expr-cmp-item { display:flex; flex-direction:column; gap:3px; min-width:0; opacity:.78; }
+.expr-cmp-item[data-selected="true"] { opacity:1; }
+.expr-cmp-item[data-available="false"] { opacity:.42; }
+.expr-cmp-head { display:flex; align-items:center; justify-content:space-between; gap:4px; font-size:10px; line-height:1.2; }
+.expr-cmp-label { font-weight:600; color:#6b7e77; white-space:nowrap; }
+.expr-cmp-item[data-selected="true"][data-kind="native"] .expr-cmp-label { color:#14644b; }
+.expr-cmp-item[data-selected="true"][data-kind="model"] .expr-cmp-label { color:#265c78; }
+.expr-cmp-val { font-family:Consolas, monospace; font-size:11px; font-weight:650; color:#6f817a; font-variant-numeric:tabular-nums; }
+.expr-cmp-item[data-active="true"][data-kind="native"] .expr-cmp-val { color:#14644b; }
+.expr-cmp-item[data-active="true"][data-kind="model"] .expr-cmp-val { color:#265c78; }
+.expr-cmp-bar { height:4px; border-radius:999px; background:#edf2ef; overflow:hidden; width:100%; }
+.expr-cmp-bar progress { display:block; width:100%; height:100%; border:0; border-radius:999px; background:transparent; }
+.expr-cmp-bar progress::-webkit-progress-bar { background:transparent; border-radius:999px; }
+.expr-cmp-bar progress::-webkit-progress-value { background:#9eb6ad; border-radius:999px; }
+.expr-cmp-bar progress::-moz-progress-bar { background:#9eb6ad; border-radius:999px; }
+.expr-cmp-item[data-kind="native"][data-active="true"] .expr-cmp-bar progress::-webkit-progress-value { background:#188977; }
+.expr-cmp-item[data-kind="native"][data-active="true"] .expr-cmp-bar progress::-moz-progress-bar { background:#188977; }
+.expr-cmp-item[data-kind="model"][data-active="true"] .expr-cmp-bar progress::-webkit-progress-value { background:#2b6d8c; }
+.expr-cmp-item[data-kind="model"][data-active="true"] .expr-cmp-bar progress::-moz-progress-bar { background:#2b6d8c; }
+
 .expr-browser-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px 20px; flex-wrap:wrap; }
 .expr-browser-head h2 { font-size:16px; color:#1c3532; margin-bottom:4px; }
 .expr-browser-head #unknown-help { margin:0; max-width:520px; }

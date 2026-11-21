@@ -81,7 +81,7 @@ const LABELS = {title: "title", "host-label": "host", "model-label": "model", "m
   "headset-title": "headsetTitle", "headset-select-label": "headsetSelect", "model-path-label": "modelPath", "run-help": "runHelp", "go-diagnostics": "goDiagnostics",
   "settings-diag-text": "settingsDiagText", "settings-go-diagnostics": "settingsGoDiagnostics",
   "diag-tab-expressions-label": "diagTabExpressions", "diag-tab-connection-label": "diagTabConnection",
-  "expr-active-only": "exprActiveOnly", "expr-src-all": "exprSrcAll", "expr-src-native": "exprSrcNative", "expr-src-model": "exprSrcModel", "expr-empty": "exprEmptyFilter",
+  "expr-active-only": "exprActiveOnly", "expr-compare-toggle": "exprCompareToggle", "expr-src-all": "exprSrcAll", "expr-src-native": "exprSrcNative", "expr-src-model": "exprSrcModel", "expr-empty": "exprEmptyFilter",
   "expr-pins-clear": "exprPinsClear", "expr-pins-reset": "exprPinsReset", "expr-pins-empty": "exprPinsEmpty",
   "conn-card-rates-title": "connCardRates", "conn-card-engine-title": "connCardEngine", "conn-card-stream-title": "connCardStream", "conn-card-session-title": "connCardSession", "live-stock-label": "liveStock",
   "camera-eyebrow": "cameraEyebrow", "camera-title": "cameraTitle", "camera-empty-help": "cameraEmptyHelp", "camera-privacy": "cameraPrivacy",
@@ -137,6 +137,29 @@ export function channelValue(status, name, valid) {
   const value = status.prediction.channels?.[name];
   return Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
 }
+export function stockChannelValue(status, name, valid) {
+  if (!valid) return null;
+  const stockMap = status?.prediction?.stock_channels;
+  if (stockMap && Object.hasOwn(stockMap, name)) {
+    const value = stockMap[name];
+    return Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
+  }
+  if (status?.prediction?.native_channels?.includes(name)) return channelValue(status, name, valid);
+  return null;
+}
+export function modelChannelValue(status, name, valid) {
+  if (!valid || !status?.model?.trained_channels?.includes(name)) return null;
+  const modelMap = status?.prediction?.model_channels;
+  if (modelMap) {
+    const i = status.contract?.channels?.indexOf(name) ?? -1;
+    if (i >= 0 && status.prediction.model_valid_mask != null &&
+        !(BigInt(status.prediction.model_valid_mask) & (1n << BigInt(i)))) return null;
+    const value = modelMap[name];
+    return Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
+  }
+  if (!status?.prediction?.native_channels?.includes(name)) return channelValue(status, name, valid);
+  return null;
+}
 export function captureProgress(status, preset, preview = false) {
   const external = status?.external_guide, recording = status?.recording;
   const active = external?.running === true || ["recording","collecting"].includes(recording?.state);
@@ -176,7 +199,7 @@ export function createApp(doc, options = {}) {
     presets: [], selectedPreset: null, presetPreview: false, presetOptionsKey: "", presetListKey: "", externalCase: null,
     startStep: 0, archiveKey: "", relayDirty: false, relayPortsManual: false, relayPortsAuto: false, relayError: "", relayErrorKey: "",
     channelSources: {...MOUTH_PRESETS.curated}, channelFilter: "all", channelQuery: "",
-    diagView: "expressions", exprRegion: "all", exprActiveOnly: false, exprSourceFilter: "all", exprQuery: "", exprFrozen: false, frozenSnapshot: null,
+    diagView: "expressions", exprRegion: "all", exprActiveOnly: false, exprCompare: true, exprSourceFilter: "all", exprQuery: "", exprFrozen: false, frozenSnapshot: null,
     pinnedChannels: initialPinnedChannels(storage), exprPolling: false, exprEndpointMissing: false};
   const t = key => messages[state.language][key] ?? key, view = () => deriveView(state.status, state.online, now()-state.at);
   const choiceLabel = value => messages[state.language][`choice-${value}`] ?? value;
@@ -289,6 +312,23 @@ export function createApp(doc, options = {}) {
     persistPins();
     render();
   }
+  function makeCompareRow(name) {
+    const wrap = doc.createElement("div");
+    wrap.setAttribute("class", "expr-compare");
+    const makeItem = kind => {
+      const item = doc.createElement("div"), head = doc.createElement("div"), labelEl = doc.createElement("span"), valEl = doc.createElement("span");
+      const barWrap = doc.createElement("div"), bar = doc.createElement("progress");
+      item.setAttribute("class", "expr-cmp-item"); item.setAttribute("data-kind", kind);
+      head.setAttribute("class", "expr-cmp-head"); labelEl.setAttribute("class", "expr-cmp-label"); valEl.setAttribute("class", "expr-cmp-val");
+      head.append(labelEl, valEl);
+      barWrap.setAttribute("class", "expr-cmp-bar"); bar.max = 1; bar.value = 0; bar.setAttribute("aria-label", `${name} ${kind}`);
+      barWrap.append(bar); item.append(head, barWrap);
+      return {item, labelEl, valEl, bar};
+    };
+    const native = makeItem("native"), model = makeItem("model");
+    wrap.append(native.item, model.item);
+    return {wrap, native, model};
+  }
   function makePinnedRows() {
     const key = state.pinnedChannels.join("/");
     if (pinnedKey === key) return;
@@ -300,7 +340,7 @@ export function createApp(doc, options = {}) {
       const card = doc.createElement("label"), head = doc.createElement("div"), titleEl = doc.createElement("span");
       const headRight = doc.createElement("div"), originEl = doc.createElement("span"), pinBtn = doc.createElement("button");
       const reading = doc.createElement("div"), codeEl = doc.createElement("span"), output = doc.createElement("output");
-      const meter = doc.createElement("div"), bar = doc.createElement("progress");
+      const meter = doc.createElement("div"), bar = doc.createElement("progress"), compare = makeCompareRow(name);
       card.setAttribute("class", "expr-spot-card"); card.setAttribute("data-channel", name);
       head.setAttribute("class", "expr-spot-head"); titleEl.setAttribute("class", "expr-spot-name");
       headRight.setAttribute("class", "expr-spot-head-right"); originEl.setAttribute("class", "expr-origin-pill");
@@ -312,8 +352,8 @@ export function createApp(doc, options = {}) {
       reading.setAttribute("class", "expr-spot-reading"); codeEl.setAttribute("class", "expr-spot-code"); codeEl.textContent = name;
       output.setAttribute("class", "expr-spot-val"); reading.append(codeEl, output);
       meter.setAttribute("class", "expr-meter-slot"); bar.max = 1; bar.value = 0; bar.setAttribute("aria-label", name);
-      meter.append(bar); card.append(head, reading, meter); get("outputs").append(card);
-      rows.set(`outputs/${name}`, {output, bar, name, cardEl: card, titleEl, originEl, pinBtn, meta, kind: "spot"});
+      meter.append(bar); card.append(head, reading, meter, compare.wrap); get("outputs").append(card);
+      rows.set(`outputs/${name}`, {output, bar, compare, name, cardEl: card, titleEl, originEl, pinBtn, meta, kind: "spot"});
     }
   }
   function makeRows() {
@@ -352,7 +392,7 @@ export function createApp(doc, options = {}) {
         const cell = doc.createElement("label"), top = doc.createElement("div"), metaWrap = doc.createElement("div");
         const itemTitle = doc.createElement("span"), codeEl = doc.createElement("span"), right = doc.createElement("div");
         const originEl = doc.createElement("span"), output = doc.createElement("output"), pinBtn = doc.createElement("button");
-        const meter = doc.createElement("div"), bar = doc.createElement("progress");
+        const meter = doc.createElement("div"), bar = doc.createElement("progress"), compare = makeCompareRow(item.name);
         cell.setAttribute("class", "expr-cell"); cell.setAttribute("data-channel", item.name);
         top.setAttribute("class", "expr-cell-top"); metaWrap.setAttribute("class", "expr-cell-meta");
         itemTitle.setAttribute("class", "expr-cell-title"); codeEl.setAttribute("class", "expr-cell-code"); codeEl.textContent = item.name;
@@ -363,8 +403,8 @@ export function createApp(doc, options = {}) {
         pinBtn.addEventListener("click", event => { event?.preventDefault?.(); event?.stopPropagation?.(); togglePin(item.name); });
         right.append(originEl, output, pinBtn); top.append(metaWrap, right);
         meter.setAttribute("class", "expr-meter-slot"); bar.max = 1; bar.value = 0; bar.setAttribute("aria-label", item.name);
-        meter.append(bar); cell.append(top, meter); grid.append(cell);
-        const entry = {output, bar, name: item.name, cellEl: cell, titleEl: itemTitle, originEl, pinBtn, meta: item, groupId: g.id, kind: "cell"};
+        meter.append(bar); cell.append(top, meter, compare.wrap); grid.append(cell);
+        const entry = {output, bar, compare, name: item.name, cellEl: cell, titleEl: itemTitle, originEl, pinBtn, meta: item, groupId: g.id, kind: "cell"};
         rows.set(`channel-table/${item.name}`, entry);
         cells.push(entry);
       }
@@ -834,6 +874,28 @@ export function createApp(doc, options = {}) {
       host.setAttribute("data-active", String(active));
       host.setAttribute("data-origin", info.origin);
       host.setAttribute("data-pinned", String(isPinned));
+      if (entry.compare) {
+        entry.compare.wrap.hidden = !state.exprCompare;
+        if (state.exprCompare) {
+          const nativeVal = stockChannelValue(snap, entry.name, snapValid);
+          const modelVal = modelChannelValue(snap, entry.name, snapValid);
+          const nativeSelected = info.origin === "native";
+          const modelSelected = info.origin === "model" || info.origin === "fallback";
+          const updateCmp = (slot, labelKey, val, selected) => {
+            const lbl = t(labelKey);
+            if (slot.labelEl.textContent !== lbl) slot.labelEl.textContent = lbl;
+            const valText = val == null ? "—" : val.toFixed(3);
+            if (slot.valEl.textContent !== valText) slot.valEl.textContent = valText;
+            slot.bar.value = val ?? 0;
+            slot.bar.hidden = val == null;
+            slot.item.setAttribute("data-selected", String(selected));
+            slot.item.setAttribute("data-available", String(val != null));
+            slot.item.setAttribute("data-active", String(val != null && val >= 0.02));
+          };
+          updateCmp(entry.compare.native, "exprCompareNative", nativeVal, nativeSelected);
+          updateCmp(entry.compare.model, "exprCompareModel", modelVal, modelSelected);
+        }
+      }
     }
 
     const isDefaultPins = state.pinnedChannels.length === PRIMARY_CHANNELS.length &&
@@ -868,6 +930,8 @@ export function createApp(doc, options = {}) {
     get("diag-expr-badge").textContent = state.exprFrozen ? t("exprFrozen") : current.valid ? `${activeCount} / ${validCount}` : t("connStatusIdle");
     get("diag-expr-badge").setAttribute("data-live", String(current.valid && !state.exprFrozen));
 
+    get("expr-compare-toggle").setAttribute("aria-pressed", String(state.exprCompare));
+    get("expr-compare-toggle").setAttribute("class", `filter-chip${state.exprCompare ? " active" : ""}`);
     get("expr-active-only").setAttribute("aria-pressed", String(state.exprActiveOnly));
     get("expr-active-only").setAttribute("class", `filter-chip${state.exprActiveOnly ? " active" : ""}`);
     for (const [id, srcKey] of [["expr-src-all", "all"], ["expr-src-native", "native"], ["expr-src-model", "model"]]) {
@@ -1392,6 +1456,7 @@ export function createApp(doc, options = {}) {
     render();
     if (!state.exprFrozen) void pollExpressions();
   });
+  get("expr-compare-toggle").addEventListener("click", () => { state.exprCompare = !state.exprCompare; render(); });
   get("expr-active-only").addEventListener("click", () => { state.exprActiveOnly = !state.exprActiveOnly; render(); });
   for (const [id, srcKey] of [["expr-src-all", "all"], ["expr-src-native", "native"], ["expr-src-model", "model"]]) {
     get(id).addEventListener("click", () => { state.exprSourceFilter = srcKey; render(); });

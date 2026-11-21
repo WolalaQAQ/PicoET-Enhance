@@ -193,7 +193,8 @@ class Runtime:
             return TongueState.invalid(reason)
         self.face_filter.clear()
         return dict(schema=SCHEMA, values=[0.]*50, channels={}, valid_mask=0,
-                    native_channels=[], state=reason, fresh=False, override=False)
+                    native_channels=[], stock_channels={}, model_channels={}, model_valid_mask=0,
+                    state=reason, fresh=False, override=False)
 
     def _face_prediction(self, raw):
         values = raw['values']
@@ -208,7 +209,9 @@ class Runtime:
             raise ValueError('Whole-mouth supported controls must be finite and in [0,1]')
         return dict(schema=SCHEMA, values=controls,
                     channels={name: controls[i] for i, name in enumerate(CHANNELS) if mask & (1 << i)},
-                    valid_mask=mask, native_channels=[], fresh=bool(mask), override=bool(mask),
+                    valid_mask=mask, native_channels=[], stock_channels={},
+                    model_channels={name: controls[i] for i, name in enumerate(CHANNELS) if mask & (1 << i)},
+                    model_valid_mask=mask, fresh=bool(mask), override=bool(mask),
                     state='valid' if mask else 'untrained')
 
     def _stock_is_fresh(self, record, received_ns, session_id, config, now_pc_ns):
@@ -237,8 +240,18 @@ class Runtime:
         native_channels = []
         sources = self._resolved_sources(config)
         record, received_ns = self.latest_stock if self.latest_stock else (None, None)
-        stock_ok = any(src == 'stock' for src in sources.values()) and self._stock_is_fresh(
-            record, received_ns, header.session_id, config, now_pc_ns)
+        stock_fresh = self._stock_is_fresh(record, received_ns, header.session_id, config, now_pc_ns)
+        stock_ok = any(src == 'stock' for src in sources.values()) and stock_fresh
+        stock_channels = {}
+        if stock_fresh:
+            for i, name in enumerate(STOCK_CHANNELS):
+                if i < len(record.final33):
+                    value = float(record.final33[i])
+                    if math.isfinite(value):
+                        stock_channels[name] = min(1., max(0., value))
+            for name, parent in STOCK_AGGREGATE_PARENTS.items():
+                if parent in stock_channels:
+                    stock_channels[name] = stock_channels[parent]
         for i, name in enumerate(STOCK_CHANNELS):
             if name in AGGREGATE_STOCK_CHANNELS:
                 continue
@@ -287,6 +300,7 @@ class Runtime:
         ordered_native = [name for name in CHANNELS if name in native_set]
         return dict(prediction,
                     model_values=model_values, model_channels=model_channels, model_valid_mask=model_mask,
+                    stock_channels=stock_channels,
                     native_channels=ordered_native,
                     values=values, valid_mask=mask,
                     channels={name: values[i] for i, name in enumerate(CHANNELS) if mask & (1 << i)},

@@ -1422,3 +1422,57 @@ test("expression monitor polls /api/expressions at 30 Hz only when live and visi
   await app.pollExpressions();
   assert.equal(server.calls.filter(c => c.path === "/api/expressions").length, hiddenCalls);
 });
+
+test("expression diagnostics shows unselected native and model readouts side-by-side and toggles cleanly", async t => {
+  const FULL_50_CHANNELS = DIAGNOSTIC_GROUPS.flatMap(g => g.items.map(i => i.name));
+  const {app, server, el, row} = setup(t);
+  server.status.contract.channels = FULL_50_CHANNELS;
+  server.status.model.trained_channels = FULL_50_CHANNELS;
+  await app.init();
+  app.morphControls.get("MouthSmileL").modelBtn.emit("click");
+  app.morphControls.get("TongueUp").offBtn.emit("click");
+  await app.save();
+  await app.start();
+
+  const allBits = (1n << 50n) - 1n;
+  const tongueUpIdx = FULL_50_CHANNELS.indexOf("TongueUp");
+  Object.assign(server.status.prediction, {
+    valid_mask: (allBits & ~(1n << BigInt(tongueUpIdx))).toString(),
+    model_valid_mask: allBits.toString(),
+    native_channels: ["JawOpen"],
+    channels: {JawOpen: 0.72, MouthSmileL: 0.44},
+    stock_channels: {JawOpen: 0.72, MouthSmileL: 0.19},
+    model_channels: {JawOpen: 0.58, MouthSmileL: 0.44, TongueUp: 0.63},
+  });
+  await app.pollStatus();
+
+  // JawOpen routed to native: shows native=0.720 (selected) AND unselected model=0.580
+  const jawCard = row("JawOpen");
+  assert.equal(jawCard.compare.wrap.hidden, false);
+  assert.equal(jawCard.compare.native.valEl.textContent, "0.720");
+  assert.equal(jawCard.compare.native.item.attributes["data-selected"], "true");
+  assert.equal(jawCard.compare.model.valEl.textContent, "0.580");
+  assert.equal(jawCard.compare.model.item.attributes["data-selected"], "false");
+
+  // MouthSmileL routed to model: shows unselected native=0.190 AND model=0.440 (selected)
+  const smileCell = app.rows.get("channel-table/MouthSmileL");
+  assert.equal(smileCell.compare.native.valEl.textContent, "0.190");
+  assert.equal(smileCell.compare.native.item.attributes["data-selected"], "false");
+  assert.equal(smileCell.compare.model.valEl.textContent, "0.440");
+  assert.equal(smileCell.compare.model.item.attributes["data-selected"], "true");
+
+  // TongueUp routed off: main output stays "—", but model comparison readout still shows 0.630
+  const upCell = app.rows.get("channel-table/TongueUp");
+  assert.equal(upCell.output.textContent, "—");
+  assert.equal(upCell.compare.native.valEl.textContent, "—");
+  assert.equal(upCell.compare.model.valEl.textContent, "0.630");
+
+  // Toggle dual-source comparison off/on
+  el("expr-compare-toggle").emit("click");
+  assert.equal(app.state.exprCompare, false);
+  assert.equal(jawCard.compare.wrap.hidden, true);
+  assert.equal(smileCell.compare.wrap.hidden, true);
+  el("expr-compare-toggle").emit("click");
+  assert.equal(app.state.exprCompare, true);
+  assert.equal(jawCard.compare.wrap.hidden, false);
+});

@@ -467,6 +467,8 @@ class FaceRuntimeTests(unittest.TestCase):
             self.assertAlmostEqual(fields[10 + INDEX['TongueLeft']], 0.2)
             self.assertEqual(self.runtime.prediction['native_channels'], ['CheekSquintL', 'JawOpen'])
             self.assertAlmostEqual(self.runtime.prediction['model_channels']['JawOpen'], 0.3)
+            self.assertAlmostEqual(self.runtime.prediction['stock_channels']['MouthSmileL'], 0.92)
+            self.assertAlmostEqual(self.runtime.prediction['stock_channels']['LipFunnelUpper'], 0.5)
             self.runtime.configure(dict(mouth_mode='model_only'))
             self.submit(11, 1)
             fields = FACE_RESULT.unpack(sink.recv(1024))
