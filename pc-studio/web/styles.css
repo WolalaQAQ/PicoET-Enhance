@@ -199,9 +199,15 @@ dt { color: var(--muted); }dd { margin: 0; overflow-wrap: anywhere; font-family:
 #record-state { color: #839789; font-size: 11px; }
 #record-options { margin: 10px 0; }
 #review { margin-top: 15px; border: 1px solid var(--line); }
-.preferences-main { padding: 22px; margin-bottom: 20px; }
+.preferences-main { padding: 22px; margin-bottom: 16px; }
 .preferences-main .check { font-size: 14px; color: #335447; margin-top: 0; }
 .preferences-main p { margin: 10px 0 0; max-width: 620px; }
+.settings-card { padding: 20px 22px; margin-bottom: 15px; }
+.settings-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.settings-card-head h2 { font-size: 15px; color: #1c3532; margin: 0; }
+.settings-card-head .hint { margin: 0; font-size: 12px; }
+.settings-card .fields label { margin-top: 0; }
+.settings-group-help { margin: 0 0 12px; font-size: 12px; }
 #page-preferences > details { margin-top: 15px; }
 .settings-save { margin: 20px 0 28px; font-size: 12px; color: #819188; }
 .settings-save button { background: var(--accent); color: white; border-color: var(--accent); }

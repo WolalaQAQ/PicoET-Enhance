@@ -304,17 +304,31 @@
           </details>
         </div>
       </div>
-      <details id="advanced" class="panel disclosure-panel"><summary id="advanced-title">Connection and performance</summary>
-        <label><span id="host-label">Manual headset address</span><input id="headset_host" form="settings" autocomplete="off" spellcheck="false"></label>
+      <section id="settings-filtering" class="panel settings-card">
+        <div class="settings-card-head">
+          <h2 id="filtering-title">Filtering &amp; smoothing</h2>
+          <p id="filtering-help" class="hint">Applies live on save without stopping tracking.</p>
+        </div>
+        <div class="fields">
+          <label><span id="smoothing-label">One-Euro resting smoothing (ms; 0 = off)</span><input id="smoothing_ms" form="settings" type="number" min="0" step="1" required></label>
+          <label><span id="expiry-label">Result expiry (ms)</span><input id="stale_ms" form="settings" type="number" min="1" required></label>
+        </div>
+      </section>
+      <details id="settings-inference" class="panel disclosure-panel"><summary id="inference-settings-title">Model &amp; inference</summary>
+        <p id="inference-settings-help" class="hint settings-group-help">Changing the model path or inference device stops the current run when saved.</p>
         <label><span id="model-path-label">Model path</span><input id="model_path" form="settings" autocomplete="off" spellcheck="false"></label>
         <div class="fields">
-          <label><span id="port-label">Video port</span><input id="headset_port" form="settings" type="number" min="1" max="65535" required></label>
           <label><span id="device-label">Inference device</span><select id="device" form="settings"><option value="auto">Auto</option><option value="cuda">CUDA</option><option value="dml">DirectML</option><option value="openvino">OpenVINO GPU</option><option value="cpu">CPU</option></select></label>
-          <label><span id="expiry-label">Result expiry (ms)</span><input id="stale_ms" form="settings" type="number" min="1" required></label>
           <label><span id="fps-label">Preview rate (fps)</span><input id="preview_fps" form="settings" type="number" min="1" max="30" required></label>
-          <label><span id="smoothing-label">One-Euro resting smoothing (ms; 0 = off)</span><input id="smoothing_ms" form="settings" type="number" min="0" step="1" required></label>
         </div>
-        <label><span id="output-port-label">UDP port on this PC</span><input id="output_port" form="settings" type="number" min="1" max="65535" required></label>
+      </details>
+      <details id="advanced" class="panel disclosure-panel"><summary id="advanced-title">Headset &amp; ports</summary>
+        <p id="connection-settings-help" class="hint settings-group-help">Changing headset address or port settings stops the current run when saved.</p>
+        <label><span id="host-label">Manual headset address</span><input id="headset_host" form="settings" autocomplete="off" spellcheck="false"></label>
+        <div class="fields">
+          <label><span id="port-label">Video port</span><input id="headset_port" form="settings" type="number" min="1" max="65535" required></label>
+          <label><span id="output-port-label">UDP port on this PC</span><input id="output_port" form="settings" type="number" min="1" max="65535" required></label>
+        </div>
         <p id="migration" class="hint" hidden></p>
       </details>
       <div class="actions settings-save"><button id="save" type="button" disabled>Save settings</button><span id="config-state"></span></div>
