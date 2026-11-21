@@ -1,9 +1,10 @@
-import {DIAGNOSTIC_GROUPS, errorMessage, initialLanguage, LANGUAGE_KEY, messages, MORPH_GROUPS} from "./i18n.mjs";
+import {DIAGNOSTIC_GROUPS, errorMessage, initialLanguage, LANGUAGE_KEY, messages, MORPH_GROUPS, PINNED_CHANNELS_KEY} from "./i18n.mjs";
 
 const TEXT_FIELDS = ["headset_host", "model_path", "device", "replay_path"];
 const NUMBER_FIELDS = ["headset_port", "stale_ms", "preview_fps", "output_port", "smoothing_ms"];
 const RELAY_OPTION_IDS = ["cymple-host", "cymple-port", "cymple-left-port", "cymple-right-port", "cymple-left-rotate", "cymple-left-hflip", "cymple-left-vflip", "cymple-right-rotate", "cymple-right-hflip", "cymple-right-vflip"];
-export const PRIMARY_CHANNELS = ["JawOpen", "MouthPucker", "MouthSmileL", "MouthSmileR", "TongueOut", "TongueLeft", "TongueRight", "TongueUp", "TongueDown", "TongueRoll"];
+export const PRIMARY_CHANNELS = ["JawOpen", "MouthClose", "MouthPucker", "LipFunnelLower", "MouthSmileL", "MouthSmileR", "MouthRollLower", "TongueOut"];
+export const EXPRESSION_POLL_MS = 33;
 export const STOCK_CHANNELS = ["CheekPuff", "CheekSquintL", "CheekSquintR", "JawForward", "JawLeft", "JawOpen", "JawRight", "MouthClose", "MouthDimpleL", "MouthDimpleR", "MouthFrownL", "MouthFrownR", "MouthFunnel", "MouthLeft", "MouthLowerDownL", "MouthLowerDownR", "MouthPressL", "MouthPressR", "MouthPucker", "MouthRight", "MouthRollLower", "MouthRollUpper", "MouthShrugLower", "MouthShrugUpper", "MouthSmileL", "MouthSmileR", "MouthStretchL", "MouthStretchR", "MouthUpperUpL", "MouthUpperUpR", "NoseSneerL", "NoseSneerR", "TongueOut"];
 export const CURATED_STOCK_TARGETS = ["JawOpen", "MouthPucker", "LipFunnelUpper", "LipFunnelLower"];
 const STOCK_AGGREGATE_PARENTS = {CheekPuffLeft: "CheekPuff", CheekPuffRight: "CheekPuff", LipFunnelUpper: "MouthFunnel", LipFunnelLower: "MouthFunnel", MouthUpperLeft: "MouthLeft", MouthLowerLeft: "MouthLeft", MouthUpperRight: "MouthRight", MouthLowerRight: "MouthRight"};
@@ -74,6 +75,7 @@ const LABELS = {title: "title", "host-label": "host", "model-label": "model", "m
   "settings-diag-text": "settingsDiagText", "settings-go-diagnostics": "settingsGoDiagnostics",
   "diag-tab-expressions-label": "diagTabExpressions", "diag-tab-connection-label": "diagTabConnection",
   "expr-active-only": "exprActiveOnly", "expr-src-all": "exprSrcAll", "expr-src-native": "exprSrcNative", "expr-src-model": "exprSrcModel", "expr-empty": "exprEmptyFilter",
+  "expr-pins-clear": "exprPinsClear", "expr-pins-reset": "exprPinsReset", "expr-pins-empty": "exprPinsEmpty",
   "conn-card-rates-title": "connCardRates", "conn-card-engine-title": "connCardEngine", "conn-card-stream-title": "connCardStream", "conn-card-session-title": "connCardSession", "live-stock-label": "liveStock",
   "camera-eyebrow": "cameraEyebrow", "camera-title": "cameraTitle", "camera-empty-help": "cameraEmptyHelp", "camera-privacy": "cameraPrivacy",
   "output-eyebrow": "outputEyebrow", "output-title": "outputTitle", "output-note": "outputNote", "footer-note": "footerNote",
@@ -142,6 +144,16 @@ export function captureProgress(status, preset, preview = false) {
     ({prepare:"capturePrepare",hold:"captureHold",review:"captureReview",finished:"visualdone"})[phase] ?? "visual"+phase;
   return {total,current,active,phaseKey};
 }
+export function initialPinnedChannels(storage) {
+  let raw = null;
+  try { raw = storage?.getItem(PINNED_CHANNELS_KEY); } catch {}
+  if (raw == null) return [...PRIMARY_CHANNELS];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return [...new Set(parsed.filter(name => typeof name === "string" && name.trim()))];
+  } catch {}
+  return [...PRIMARY_CHANNELS];
+}
 export function createApp(doc, options = {}) {
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis), timers = options.timers ?? globalThis;
   const now = options.now ?? Date.now, urls = options.urlApi ?? globalThis.URL, storage = options.storage;
@@ -157,11 +169,12 @@ export function createApp(doc, options = {}) {
     presets: [], selectedPreset: null, presetPreview: false, presetOptionsKey: "", presetListKey: "", externalCase: null,
     startStep: 0, archiveKey: "", relayDirty: false, relayPortsManual: false, relayPortsAuto: false, relayError: "", relayErrorKey: "",
     channelSources: {...MOUTH_PRESETS.curated}, channelFilter: "all", channelQuery: "",
-    diagView: "expressions", exprRegion: "all", exprActiveOnly: false, exprSourceFilter: "all", exprQuery: "", exprFrozen: false, frozenSnapshot: null};
+    diagView: "expressions", exprRegion: "all", exprActiveOnly: false, exprSourceFilter: "all", exprQuery: "", exprFrozen: false, frozenSnapshot: null,
+    pinnedChannels: initialPinnedChannels(storage), exprPolling: false, exprEndpointMissing: false};
   const t = key => messages[state.language][key] ?? key, view = () => deriveView(state.status, state.online, now()-state.at);
   const choiceLabel = value => messages[state.language][`choice-${value}`] ?? value;
   const fieldLabel = name => t(name === "device" ? "trainDevice" : name === "split" ? "splitPath" : name);
-  const rows = new Map(), trainInputs = new Map(), morphControls = new Map(), morphGroups = [], exprGroups = [], exprRegionBtns = new Map(); let rowKey = "", specKey = "";
+  const rows = new Map(), trainInputs = new Map(), morphControls = new Map(), morphGroups = [], exprGroups = [], exprRegionBtns = new Map(); let rowKey = "", pinnedKey = "", specKey = "";
   function makeMorphControls() {
     if (morphControls.size) return;
     const list = get("hybrid-channels-list");
@@ -248,24 +261,61 @@ export function createApp(doc, options = {}) {
     state.previewGeneration++; state.previewAbort?.abort(); get("preview").hidden = true; get("preview").removeAttribute("src");
     if (state.previewUrl) urls.revokeObjectURL(state.previewUrl); state.previewUrl = null; get("placeholder").hidden = false; get("empty-camera").hidden = false;
   }
-  function makeRows() {
-    const channels = state.status?.contract?.channels ?? DEFAULT_DIAG_CHANNELS, key = channels.join("/");
-    if (rowKey === key) return; rowKey = key; rows.clear(); exprGroups.length = 0; exprRegionBtns.clear();
-    get("outputs").replaceChildren(); get("channel-table").replaceChildren(); get("expr-regions").replaceChildren();
-    for (const name of PRIMARY_CHANNELS) {
+  function persistPins() {
+    try { storage?.setItem(PINNED_CHANNELS_KEY, JSON.stringify(state.pinnedChannels)); } catch {}
+  }
+  function togglePin(name) {
+    if (typeof name !== "string" || !name) return;
+    if (state.pinnedChannels.includes(name)) state.pinnedChannels = state.pinnedChannels.filter(item => item !== name);
+    else state.pinnedChannels = [...state.pinnedChannels, name];
+    persistPins();
+    render();
+  }
+  function clearPins() {
+    state.pinnedChannels = [];
+    persistPins();
+    render();
+  }
+  function resetPins() {
+    state.pinnedChannels = [...PRIMARY_CHANNELS];
+    try { storage?.removeItem?.(PINNED_CHANNELS_KEY); } catch {}
+    persistPins();
+    render();
+  }
+  function makePinnedRows() {
+    const key = state.pinnedChannels.join("/");
+    if (pinnedKey === key) return;
+    pinnedKey = key;
+    for (const rowId of [...rows.keys()]) if (rowId.startsWith("outputs/")) rows.delete(rowId);
+    get("outputs").replaceChildren();
+    for (const name of state.pinnedChannels) {
       const meta = MORPH_META.get(name);
-      const card = doc.createElement("label"), head = doc.createElement("div"), titleEl = doc.createElement("span"), originEl = doc.createElement("span");
+      const card = doc.createElement("label"), head = doc.createElement("div"), titleEl = doc.createElement("span");
+      const headRight = doc.createElement("div"), originEl = doc.createElement("span"), pinBtn = doc.createElement("button");
       const reading = doc.createElement("div"), codeEl = doc.createElement("span"), output = doc.createElement("output");
       const meter = doc.createElement("div"), bar = doc.createElement("progress");
       card.setAttribute("class", "expr-spot-card"); card.setAttribute("data-channel", name);
-      head.setAttribute("class", "expr-spot-head"); titleEl.setAttribute("class", "expr-spot-name"); originEl.setAttribute("class", "expr-origin-pill");
-      head.append(titleEl, originEl);
+      head.setAttribute("class", "expr-spot-head"); titleEl.setAttribute("class", "expr-spot-name");
+      headRight.setAttribute("class", "expr-spot-head-right"); originEl.setAttribute("class", "expr-origin-pill");
+      pinBtn.type = "button"; pinBtn.setAttribute("class", "expr-pin-btn"); pinBtn.setAttribute("data-channel", name);
+      pinBtn.setAttribute("aria-pressed", "true"); pinBtn.textContent = "📌";
+      pinBtn.addEventListener("click", event => { event?.preventDefault?.(); event?.stopPropagation?.(); togglePin(name); });
+      headRight.append(originEl, pinBtn);
+      head.append(titleEl, headRight);
       reading.setAttribute("class", "expr-spot-reading"); codeEl.setAttribute("class", "expr-spot-code"); codeEl.textContent = name;
       output.setAttribute("class", "expr-spot-val"); reading.append(codeEl, output);
       meter.setAttribute("class", "expr-meter-slot"); bar.max = 1; bar.value = 0; bar.setAttribute("aria-label", name);
       meter.append(bar); card.append(head, reading, meter); get("outputs").append(card);
-      rows.set(`outputs/${name}`, {output, bar, name, cardEl: card, titleEl, originEl, meta, kind: "spot"});
+      rows.set(`outputs/${name}`, {output, bar, name, cardEl: card, titleEl, originEl, pinBtn, meta, kind: "spot"});
     }
+  }
+  function makeRows() {
+    makePinnedRows();
+    const channels = state.status?.contract?.channels ?? DEFAULT_DIAG_CHANNELS, key = channels.join("/");
+    if (rowKey === key) return; rowKey = key;
+    for (const rowId of [...rows.keys()]) if (rowId.startsWith("channel-table/")) rows.delete(rowId);
+    exprGroups.length = 0; exprRegionBtns.clear();
+    get("channel-table").replaceChildren(); get("expr-regions").replaceChildren();
     const channelSet = new Set(channels), covered = new Set(), partitions = [];
     for (const group of DIAGNOSTIC_GROUPS) {
       const items = group.items.filter(item => channelSet.has(item.name));
@@ -294,16 +344,20 @@ export function createApp(doc, options = {}) {
       for (const item of g.items) {
         const cell = doc.createElement("label"), top = doc.createElement("div"), metaWrap = doc.createElement("div");
         const itemTitle = doc.createElement("span"), codeEl = doc.createElement("span"), right = doc.createElement("div");
-        const originEl = doc.createElement("span"), output = doc.createElement("output"), meter = doc.createElement("div"), bar = doc.createElement("progress");
+        const originEl = doc.createElement("span"), output = doc.createElement("output"), pinBtn = doc.createElement("button");
+        const meter = doc.createElement("div"), bar = doc.createElement("progress");
         cell.setAttribute("class", "expr-cell"); cell.setAttribute("data-channel", item.name);
         top.setAttribute("class", "expr-cell-top"); metaWrap.setAttribute("class", "expr-cell-meta");
         itemTitle.setAttribute("class", "expr-cell-title"); codeEl.setAttribute("class", "expr-cell-code"); codeEl.textContent = item.name;
         metaWrap.append(itemTitle, codeEl);
         right.setAttribute("class", "expr-cell-right"); originEl.setAttribute("class", "expr-origin-pill"); output.setAttribute("class", "expr-cell-val");
-        right.append(originEl, output); top.append(metaWrap, right);
+        pinBtn.type = "button"; pinBtn.setAttribute("class", "expr-pin-btn"); pinBtn.setAttribute("data-channel", item.name);
+        pinBtn.textContent = "📌";
+        pinBtn.addEventListener("click", event => { event?.preventDefault?.(); event?.stopPropagation?.(); togglePin(item.name); });
+        right.append(originEl, output, pinBtn); top.append(metaWrap, right);
         meter.setAttribute("class", "expr-meter-slot"); bar.max = 1; bar.value = 0; bar.setAttribute("aria-label", item.name);
         meter.append(bar); cell.append(top, meter); grid.append(cell);
-        const entry = {output, bar, name: item.name, cellEl: cell, titleEl: itemTitle, originEl, meta: item, groupId: g.id, kind: "cell"};
+        const entry = {output, bar, name: item.name, cellEl: cell, titleEl: itemTitle, originEl, pinBtn, meta: item, groupId: g.id, kind: "cell"};
         rows.set(`channel-table/${item.name}`, entry);
         cells.push(entry);
       }
@@ -730,20 +784,12 @@ export function createApp(doc, options = {}) {
     }
     return {origin: "model", key: "originModel"};
   }
-  function renderDiagnostics(current, technicalParts) {
+  function renderExpressionPanel(current) {
     makeRows();
     if (!current.current || !current.running) {
       state.exprFrozen = false;
       state.frozenSnapshot = null;
     }
-    const showExpr = state.diagView !== "connection";
-    get("expression-diagnostics").hidden = !showExpr;
-    get("diagnostics").hidden = showExpr;
-    get("diag-tab-expressions").setAttribute("aria-selected", String(showExpr));
-    get("diag-tab-expressions").setAttribute("class", `diag-tab${showExpr ? " active" : ""}`);
-    get("diag-tab-connection").setAttribute("aria-selected", String(!showExpr));
-    get("diag-tab-connection").setAttribute("class", `diag-tab${!showExpr ? " active" : ""}`);
-
     const snap = state.exprFrozen && state.frozenSnapshot ? state.frozenSnapshot.status : state.status;
     const snapValid = state.exprFrozen && state.frozenSnapshot ? state.frozenSnapshot.valid : (current.valid && !state.busy);
     const activeSources = snap?.config ?
@@ -751,22 +797,43 @@ export function createApp(doc, options = {}) {
       (state.channelSources ?? MOUTH_PRESETS.curated);
     const channels = state.status?.contract?.channels ?? DEFAULT_DIAG_CHANNELS;
     const uniqueChannels = [...new Set(channels)];
+    const pinnedSet = new Set(state.pinnedChannels);
 
     for (const entry of rows.values()) {
       const value = channelValue(snap, entry.name, snapValid);
       const info = channelOrigin(snap, snapValid, entry.name, activeSources);
       const active = value != null && value >= 0.02;
-      entry.output.textContent = value == null ? "—" : value.toFixed(3);
+      const text = value == null ? "—" : value.toFixed(3);
+      if (entry.output.textContent !== text) {
+        entry.output.textContent = text;
+        entry.output.setAttribute("aria-label", `${entry.name}: ${text}`);
+      }
       entry.bar.value = value ?? 0;
       entry.bar.hidden = value == null;
-      entry.output.setAttribute("aria-label", `${entry.name}: ${value == null ? "—" : value.toFixed(3)}`);
-      entry.titleEl.textContent = entry.meta?.label?.[state.language] ?? entry.meta?.label?.en ?? entry.name;
-      entry.originEl.textContent = t(info.key);
+      const titleText = entry.meta?.label?.[state.language] ?? entry.meta?.label?.en ?? entry.name;
+      if (entry.titleEl.textContent !== titleText) entry.titleEl.textContent = titleText;
+      const originText = t(info.key);
+      if (entry.originEl.textContent !== originText) entry.originEl.textContent = originText;
       entry.originEl.setAttribute("data-origin", info.origin);
+      const isPinned = pinnedSet.has(entry.name);
+      if (entry.pinBtn) {
+        entry.pinBtn.setAttribute("aria-pressed", String(isPinned));
+        const pinLabel = t(isPinned ? "exprPinRemove" : "exprPinAdd");
+        entry.pinBtn.setAttribute("title", pinLabel);
+        entry.pinBtn.setAttribute("aria-label", `${pinLabel}: ${entry.name}`);
+      }
       const host = entry.kind === "spot" ? entry.cardEl : entry.cellEl;
       host.setAttribute("data-active", String(active));
       host.setAttribute("data-origin", info.origin);
+      host.setAttribute("data-pinned", String(isPinned));
     }
+
+    const isDefaultPins = state.pinnedChannels.length === PRIMARY_CHANNELS.length &&
+      state.pinnedChannels.every((name, idx) => name === PRIMARY_CHANNELS[idx]);
+    get("outputs").hidden = state.pinnedChannels.length === 0;
+    get("expr-pins-empty").hidden = state.pinnedChannels.length > 0;
+    get("expr-pins-clear").hidden = state.pinnedChannels.length === 0;
+    get("expr-pins-reset").hidden = isDefaultPins;
 
     let validCount = 0, activeCount = 0, nativeLiveCount = 0, modelActiveCount = 0;
     for (const name of uniqueChannels) {
@@ -838,6 +905,16 @@ export function createApp(doc, options = {}) {
       if (visibleInGroup > 0) visibleGroups++;
     }
     get("expr-empty").hidden = visibleGroups > 0;
+  }
+  function renderDiagnostics(current, technicalParts) {
+    const showExpr = state.diagView !== "connection";
+    get("expression-diagnostics").hidden = !showExpr;
+    get("diagnostics").hidden = showExpr;
+    get("diag-tab-expressions").setAttribute("aria-selected", String(showExpr));
+    get("diag-tab-expressions").setAttribute("class", `diag-tab${showExpr ? " active" : ""}`);
+    get("diag-tab-connection").setAttribute("aria-selected", String(!showExpr));
+    get("diag-tab-connection").setAttribute("class", `diag-tab${!showExpr ? " active" : ""}`);
+    renderExpressionPanel(current);
 
     const identity = value => typeof value === "number" && !Number.isSafeInteger(value) ? t("unsafeInteger") : display(value);
     const source = state.status?.source ?? {}, result = state.status?.prediction_source ?? {}, m = current.current ? state.status?.metrics ?? {} : {};
@@ -1202,6 +1279,58 @@ export function createApp(doc, options = {}) {
     } catch { if (generation === state.previewGeneration && !state.destroyed) { state.previewError = true; clearPreview(); render(); } }
     finally { timers.clearTimeout(timeout); state.previewBusy = false; state.previewAbort = null; }
   }
+  function isExpressionMonitorLive() {
+    return !state.destroyed && !state.busy && !doc.hidden &&
+      state.page === "diagnostics" && state.diagView !== "connection" &&
+      !state.exprFrozen && state.status?.running === true && !state.exprEndpointMissing;
+  }
+  async function pollExpressions() {
+    if (state.exprPromise) return state.exprPromise;
+    if (!isExpressionMonitorLive()) return;
+    const generation = state.generation;
+    state.exprPromise = (async () => {
+      try {
+        const response = await fetcher("/api/expressions", {method: "GET", cache: "no-store"});
+        if (generation !== state.generation || state.destroyed) return;
+        if (response.status === 404) { state.exprEndpointMissing = true; return; }
+        if (!response.ok) return;
+        const snap = await response.json();
+        if (generation !== state.generation || state.destroyed || !state.status) return;
+        const prevRunning = state.status.running;
+        state.status = {
+          ...state.status,
+          running: snap.running,
+          connected: snap.connected,
+          source_mode: snap.source_mode,
+          capture_only: snap.capture_only,
+          prediction: snap.prediction,
+          live_stock: snap.live_stock ?? state.status.live_stock,
+          metrics: {...(state.status.metrics ?? {}), ...(snap.metrics ?? {})},
+        };
+        state.online = true;
+        state.at = now();
+        state.pollError = "";
+        if (prevRunning !== snap.running) render();
+        else renderExpressionPanel(view());
+      } catch {}
+      finally { state.exprPromise = null; }
+    })();
+    return state.exprPromise;
+  }
+  function scheduleExpressions(delayMs) {
+    if (state.destroyed) return;
+    timers.clearTimeout(state.exprTimer);
+    state.exprTimer = timers.setTimeout(expressionLoop, delayMs);
+  }
+  async function expressionLoop() {
+    if (state.destroyed) return;
+    if (isExpressionMonitorLive()) {
+      await pollExpressions();
+      scheduleExpressions(EXPRESSION_POLL_MS);
+    } else {
+      scheduleExpressions(250);
+    }
+  }
   function previewLoop() { void refreshPreview(); if (!state.destroyed) state.previewTimer = timers.setTimeout(previewLoop, 1000/Math.min(10, Math.max(1, state.config?.preview_fps ?? 10))); }
   function setLanguage(language) { if (!Object.hasOwn(messages, language)) return; state.language = language; try { storage?.setItem(LANGUAGE_KEY, language); } catch {} render(); }
   get("settings").addEventListener("submit", event => { event.preventDefault(); return start(); });
@@ -1228,10 +1357,12 @@ export function createApp(doc, options = {}) {
     else if (!get("headset-select").value) { get("headset_host").value = ""; state.dirty = true; render(); }
   });
   for (const page of PAGES) get(`nav-${PAGE_NAV[page]}`).addEventListener("click", event => { event.preventDefault(); navigate(page); });
-  get("go-diagnostics").addEventListener("click", event => { event.preventDefault(); state.diagView = "expressions"; navigate("diagnostics"); });
-  get("settings-go-diagnostics").addEventListener("click", event => { event.preventDefault(); navigate("diagnostics"); });
-  get("diag-tab-expressions").addEventListener("click", () => { state.diagView = "expressions"; render(); });
+  get("go-diagnostics").addEventListener("click", event => { event.preventDefault(); state.diagView = "expressions"; navigate("diagnostics"); void pollExpressions(); });
+  get("settings-go-diagnostics").addEventListener("click", event => { event.preventDefault(); navigate("diagnostics"); void pollExpressions(); });
+  get("diag-tab-expressions").addEventListener("click", () => { state.diagView = "expressions"; render(); void pollExpressions(); });
   get("diag-tab-connection").addEventListener("click", () => { state.diagView = "connection"; render(); });
+  get("expr-pins-clear").addEventListener("click", clearPins);
+  get("expr-pins-reset").addEventListener("click", resetPins);
   get("expr-freeze").addEventListener("click", () => {
     if (get("expr-freeze").disabled) return;
     if (state.exprFrozen) {
@@ -1242,6 +1373,7 @@ export function createApp(doc, options = {}) {
       state.frozenSnapshot = {status: structuredClone(state.status), valid: view().valid && !state.busy};
     }
     render();
+    if (!state.exprFrozen) void pollExpressions();
   });
   get("expr-active-only").addEventListener("click", () => { state.exprActiveOnly = !state.exprActiveOnly; render(); });
   for (const [id, srcKey] of [["expr-src-all", "all"], ["expr-src-native", "native"], ["expr-src-model", "model"]]) {
@@ -1287,9 +1419,9 @@ export function createApp(doc, options = {}) {
   });
   get("reference-play").addEventListener("click", () => { if (!get("reference-play").disabled && !get("reference-play").hidden) { state.referenceAnimated = !state.referenceAnimated; render(); } });
   for (const id of ["reference-image", "reference-neutral-image", "reference-profile-image"]) get(id).addEventListener("error", () => { state.referenceImageError = true; render(); });
-  async function init() { render(); await Promise.all([pollStatus(), loadReference(), loadPresets()]); if (!state.destroyed) { state.interval = timers.setInterval(() => { render(); void pollStatus(); }, 500); state.visualTimer=timers.setInterval(() => {void reportVisual().catch(error => {state.error=error.message;});},200); previewLoop(); await discover(); } }
-  function destroy() { state.destroyed = true; state.generation++; navigation?.removeEventListener("hashchange", hashChanged); speech?.cancel(); timers.clearInterval(state.interval); timers.clearInterval(state.visualTimer); timers.clearTimeout(state.previewTimer); clearPreview(); }
-  return {init, destroy, start, stop, save, record, train, cympleRelay, loadReviews, applyReview, readForm, pollStatus, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs, morphControls, morphGroups, exprGroups};
+  async function init() { render(); await Promise.all([pollStatus(), loadReference(), loadPresets()]); if (!state.destroyed) { state.interval = timers.setInterval(() => { render(); void pollStatus(); }, 500); state.visualTimer=timers.setInterval(() => {void reportVisual().catch(error => {state.error=error.message;});},200); previewLoop(); void expressionLoop(); await discover(); } }
+  function destroy() { state.destroyed = true; state.generation++; navigation?.removeEventListener("hashchange", hashChanged); speech?.cancel(); timers.clearInterval(state.interval); timers.clearInterval(state.visualTimer); timers.clearTimeout(state.previewTimer); timers.clearTimeout(state.exprTimer); clearPreview(); }
+  return {init, destroy, start, stop, save, record, train, cympleRelay, loadReviews, applyReview, readForm, pollStatus, pollExpressions, togglePin, clearPins, resetPins, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs, morphControls, morphGroups, exprGroups};
 }
 if (typeof document !== "undefined") {
   let storage; try { storage = window.localStorage; } catch {}

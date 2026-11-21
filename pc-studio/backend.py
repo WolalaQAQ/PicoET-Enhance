@@ -134,6 +134,8 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                     return self.respond(400, {'error': str(error)})
             if path == '/api/status':
                 return self.respond(200, combined_status())
+            if path == '/api/expressions':
+                return self.respond(200, runtime.expression_snapshot())
             if path == '/api/update-check':
                 force = (query.get('force', [''])[0] or '').strip().lower() in ('1', 'true', 'yes')
                 return self.respond(200, checker.check(force=force))
@@ -259,7 +261,7 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                 return self.respond(400, {'error': str(error)})
 
         def log_message(self, format, *args):
-            if self.path.startswith('/api/status') or self.path.startswith('/api/preview.jpg'):
+            if self.path.startswith('/api/status') or self.path.startswith('/api/expressions') or self.path.startswith('/api/preview.jpg'):
                 return
             super().log_message(format, *args)
 

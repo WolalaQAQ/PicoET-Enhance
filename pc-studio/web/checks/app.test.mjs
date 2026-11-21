@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {createApp, captureProgress, deriveView, channelValue, requestJson, PRIMARY_CHANNELS, ROUTABLE_CHANNELS, MOUTH_PRESETS, PAGES, routePage} from "../app.mjs";
-import {DIAGNOSTIC_GROUPS, messages, preferredLanguage, initialLanguage, errorMessage, LANGUAGE_KEY} from "../i18n.mjs";
+import {createApp, captureProgress, deriveView, channelValue, requestJson, PRIMARY_CHANNELS, ROUTABLE_CHANNELS, MOUTH_PRESETS, PAGES, routePage, EXPRESSION_POLL_MS} from "../app.mjs";
+import {DIAGNOSTIC_GROUPS, messages, preferredLanguage, initialLanguage, errorMessage, LANGUAGE_KEY, PINNED_CHANNELS_KEY} from "../i18n.mjs";
 
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-const channels = [...new Set([...PRIMARY_CHANNELS, ...Array.from({length: 40}, (_, i) => `fixture${i}`)])];
+const channels = [...new Set([...PRIMARY_CHANNELS, "TongueLeft", "TongueUp", "TongueRoll", ...Array.from({length: 40}, (_, i) => `fixture${i}`)])];
 class Element {
   value = ""; textContent = ""; hidden = false; disabled = false; attributes = {}; listeners = {}; children = [];
   checked = false; open = false; valid = true;
@@ -47,8 +47,11 @@ function setup(t, options = {}) {
   function active(mode) {
     Object.assign(server.status, {running: true, connected: mode !== "replay", source_mode: mode === "capture" ? "live" : mode, capture_only: mode === "capture"});
     config.enabled = true;
-    Object.assign(server.status.prediction, {fresh: mode !== "capture", state: mode === "capture" ? "untrained" : "valid", valid_mask: mode === "capture" ? 0 : 1+16+32});
-    // PRIMARY_CHANNELS puts JawOpen at0, TongueOut at4, TongueLeft at5.
+    const validBits = trained.reduce((mask, name) => {
+      const idx = server.status.contract.channels.indexOf(name);
+      return idx >= 0 ? (mask | (1n << BigInt(idx))) : mask;
+    }, 0n);
+    Object.assign(server.status.prediction, {fresh: mode !== "capture", state: mode === "capture" ? "untrained" : "valid", valid_mask: mode === "capture" ? 0 : validBits.toString()});
     Object.assign(server.status.metrics, {source_fresh: mode !== "capture", video_fresh: true});
   }
   const fetcher = async (path, opts = {}) => {
@@ -58,6 +61,15 @@ function setup(t, options = {}) {
     if (path === "/api/display" || path === "/api/recording/display") return Response.json({accepted:true});
     if (path === "/api/model/select") return Response.json(server.selectedModel ?? {cancelled: true});
     if (path === "/static/guide-reference/manifest.json") return server.reference ? Response.json(server.reference) : Response.json({error: "Not found"}, {status: 404});
+    if (path === "/api/expressions") {
+      if (server.failExpressions) return Response.json({error: "Not found"}, {status: 404});
+      return Response.json({
+        running: server.status.running, connected: server.status.connected,
+        source_mode: server.status.source_mode, capture_only: server.status.capture_only,
+        metrics: {source_fresh: server.status.metrics.source_fresh, video_fresh: server.status.metrics.video_fresh},
+        prediction: server.status.prediction, live_stock: server.status.live_stock,
+      });
+    }
     if (path === "/api/status") { if (server.failStatus) throw TypeError("Failed to fetch"); return Response.json(server.status); }
     if (path === "/api/config") {
       if (opts.method === "POST") {
@@ -315,15 +327,15 @@ test("Start is strict inference, preserves UDP off and outputs direct named cont
   const config = JSON.parse(server.calls.find(c => c.path === "/api/config" && c.method === "POST").body);
   assert.equal(config.model_kind, "face50"); assert.equal(config.output_enabled, false); assert.ok(!("face_source" in config));
   assert.deepEqual(JSON.parse(server.calls.find(c => c.path === "/api/start").body), {mode: "live"});
-  assert.equal(row("TongueOut").output.textContent, "0.100"); assert.equal(row("TongueLeft").output.textContent, "0.200"); assert.equal(row("TongueUp").output.textContent, "—");
-  assert.equal(row("TongueUp").bar.hidden, true);
+  assert.equal(row("TongueOut").output.textContent, "0.100"); assert.equal(app.rows.get("channel-table/TongueLeft").output.textContent, "0.200"); assert.equal(app.rows.get("channel-table/TongueUp").output.textContent, "—");
+  assert.equal(app.rows.get("channel-table/TongueUp").bar.hidden, true);
 });
 test("untrained heads cannot be displayed as valid even with nonzero values and mask", async t => {
   const {app, server, row} = setup(t); await app.init(); await app.start();
   server.status.prediction.channels.TongueUp = .95; server.status.prediction.valid_mask = (1n << 50n).toString(); await app.pollStatus();
-  assert.equal(row("TongueUp").output.textContent, "—"); assert.equal(row("TongueOut").output.textContent, "—");
+  assert.equal(app.rows.get("channel-table/TongueUp").output.textContent, "—"); assert.equal(row("TongueOut").output.textContent, "—");
   server.status.prediction.valid_mask = ((1n << 50n)-1n).toString(); await app.pollStatus();
-  assert.equal(row("TongueUp").output.textContent, "—"); assert.equal(row("TongueOut").output.textContent, "0.100");
+  assert.equal(app.rows.get("channel-table/TongueUp").output.textContent, "—"); assert.equal(row("TongueOut").output.textContent, "0.100");
 });
 test("channel helper requires trained name, valid bit and finite value", () => {
   const status = {contract: {channels: ["TongueOut"]}, model: {trained_channels: ["TongueOut"]}, prediction: {valid_mask: "1", channels: {TongueOut: 0}}};
@@ -546,7 +558,7 @@ test("optional speech speaks each guide phase once and language switch needs no 
 test("record cancellation clears old output and preview and keeps archives indicated", async t => {
   const {app, el, row} = setup(t); await app.init(); await app.start(); el("person_id").value = "local"; el("record-consent").checked = true; el("person_id").emit("change");
   await app.record("begin"); await app.refreshPreview(); await app.record("cancel");
-  assert.equal(el("preview").hidden, true); assert.equal(row("TongueLeft").output.textContent, "—"); assert.equal(el("record-path").textContent, "D:/local/recording");
+  assert.equal(el("preview").hidden, true); assert.equal(app.rows.get("channel-table/TongueLeft").output.textContent, "—"); assert.equal(el("record-path").textContent, "D:/local/recording");
 });
 test("local training form is supplied by backend CLI spec and uses real operation/args", async t => {
   const {app, el, server} = setup(t); await app.init(); app.trainInputs.get("checkpoint").input.value = "student.pt"; app.trainInputs.get("output").input.value = "candidate.onnx"; await app.train();
@@ -1110,7 +1122,7 @@ test("three routing presets, 46-target customization, filters and bilingual swit
   server.status.live_stock = {wanted: true, active: true, fresh: true};
   await app.pollStatus();
   assert.equal(row("JawOpen").output.textContent, "0.450");
-  assert.equal(row("TongueUp").output.textContent, "—");
+  assert.equal(app.rows.get("channel-table/TongueUp").output.textContent, "—");
   assert.equal(el("hybrid-live-hint").textContent, messages["zh-CN"].hybridStockFresh);
 });
 
@@ -1198,13 +1210,13 @@ test("expression monitor renders 50 anatomical channels with live origin tags, r
   assert.equal(row("MouthPucker").originEl.textContent, messages.en.originModelFallback);
   assert.equal(row("MouthPucker").cardEl.attributes["data-active"], "true");
 
-  assert.equal(row("TongueLeft").output.textContent, "0.480");
-  assert.equal(row("TongueLeft").originEl.textContent, messages.en.originModel);
+  assert.equal(app.rows.get("channel-table/TongueLeft").output.textContent, "0.480");
+  assert.equal(app.rows.get("channel-table/TongueLeft").originEl.textContent, messages.en.originModel);
   assert.equal(app.rows.get("channel-table/MouthSmileL").cellEl.attributes["data-active"], "false");
-  assert.equal(row("TongueUp").output.textContent, "—");
-  assert.equal(row("TongueUp").originEl.textContent, messages.en.originOff);
-  assert.equal(row("TongueRoll").output.textContent, "—");
-  assert.equal(row("TongueRoll").originEl.textContent, messages.en.originUntrained);
+  assert.equal(app.rows.get("channel-table/TongueUp").output.textContent, "—");
+  assert.equal(app.rows.get("channel-table/TongueUp").originEl.textContent, messages.en.originOff);
+  assert.equal(app.rows.get("channel-table/TongueRoll").output.textContent, "—");
+  assert.equal(app.rows.get("channel-table/TongueRoll").originEl.textContent, messages.en.originUntrained);
   assert.match(el("live-stock-info").textContent, /Connected · fresh \(4\.2 ms\)/);
 
   // Active filter (> 0.02): MouthSmileL (0.015) hidden, JawOpen/TongueLeft visible.
@@ -1311,5 +1323,87 @@ test("language switch translates diagnostics tabs, regions, origin badges and co
   assert.equal(el("conn-card-rates-title").textContent, messages["zh-CN"].connCardRates);
   assert.equal(el("expr-freeze").textContent, messages["zh-CN"].exprResume);
   assert.equal(tongueRegionBtn.textContent, messages["zh-CN"].regionTongue);
-  assert.equal(row("TongueLeft").originEl.textContent, messages["zh-CN"].originModel);
+  assert.equal(app.rows.get("channel-table/TongueLeft").originEl.textContent, messages["zh-CN"].originModel);
+});
+
+test("pinned monitor supports pinning, unpinning, persistence, clear and reset defaults", async t => {
+  const {app, el, row, saved} = setup(t);
+  await app.init();
+  assert.deepEqual(app.state.pinnedChannels, PRIMARY_CHANNELS);
+  assert.equal(el("outputs").hidden, false);
+  assert.equal(el("expr-pins-empty").hidden, true);
+  assert.equal(el("expr-pins-reset").hidden, true);
+  assert.equal(el("expr-pins-clear").hidden, false);
+
+  // Pin TongueLeft from the 50-channel table.
+  app.rows.get("channel-table/TongueLeft").pinBtn.emit("click");
+  assert.ok(app.state.pinnedChannels.includes("TongueLeft"));
+  assert.ok(row("TongueLeft"));
+  assert.equal(el("expr-pins-reset").hidden, false);
+  assert.deepEqual(JSON.parse(saved.get(PINNED_CHANNELS_KEY)), app.state.pinnedChannels);
+
+  // Unpin directly from the top pinned card.
+  row("JawOpen").pinBtn.emit("click");
+  assert.ok(!app.state.pinnedChannels.includes("JawOpen"));
+  assert.equal(row("JawOpen"), undefined);
+  assert.equal(app.rows.get("channel-table/JawOpen").pinBtn.attributes["aria-pressed"], "false");
+
+  // Clear all pins hides grid and shows compact empty hint.
+  el("expr-pins-clear").emit("click");
+  assert.deepEqual(app.state.pinnedChannels, []);
+  assert.equal(el("outputs").hidden, true);
+  assert.equal(el("expr-pins-empty").hidden, false);
+  assert.equal(el("expr-pins-clear").hidden, true);
+  assert.equal(el("expr-pins-reset").hidden, false);
+
+  // Reset restores default balanced channels.
+  el("expr-pins-reset").emit("click");
+  assert.deepEqual(app.state.pinnedChannels, PRIMARY_CHANNELS);
+  assert.equal(el("outputs").hidden, false);
+  assert.equal(el("expr-pins-empty").hidden, true);
+  assert.equal(el("expr-pins-reset").hidden, true);
+});
+
+test("expression monitor polls /api/expressions at 30 Hz only when live and visible, pausing on freeze or tab switch", async t => {
+  const {app, server, el, doc, row} = setup(t);
+  await app.init();
+  await app.start();
+  assert.equal(EXPRESSION_POLL_MS, 33);
+
+  // On tracking page, pollExpressions is a no-op.
+  const callsBefore = server.calls.filter(c => c.path === "/api/expressions").length;
+  await app.pollExpressions();
+  assert.equal(server.calls.filter(c => c.path === "/api/expressions").length, callsBefore);
+
+  // Navigate to diagnostics → expressions: pollExpressions updates readouts directly.
+  app.navigate("diagnostics");
+  server.status.prediction.channels.JawOpen = 0.777;
+  await app.pollExpressions();
+  assert.equal(server.calls.filter(c => c.path === "/api/expressions").length, callsBefore + 1);
+  assert.equal(row("JawOpen").output.textContent, "0.777");
+  assert.equal(app.rows.get("channel-table/JawOpen").output.textContent, "0.777");
+
+  // Freeze pauses /api/expressions requests.
+  el("expr-freeze").emit("click");
+  const frozenCalls = server.calls.filter(c => c.path === "/api/expressions").length;
+  server.status.prediction.channels.JawOpen = 0.111;
+  await app.pollExpressions();
+  assert.equal(server.calls.filter(c => c.path === "/api/expressions").length, frozenCalls);
+  assert.equal(row("JawOpen").output.textContent, "0.777");
+
+  // Unfreeze resumes and immediately updates; switching to connection tab or hiding doc pauses again.
+  el("expr-freeze").emit("click");
+  await app.pollExpressions();
+  assert.equal(row("JawOpen").output.textContent, "0.111");
+
+  el("diag-tab-connection").emit("click");
+  const connCalls = server.calls.filter(c => c.path === "/api/expressions").length;
+  await app.pollExpressions();
+  assert.equal(server.calls.filter(c => c.path === "/api/expressions").length, connCalls);
+
+  el("diag-tab-expressions").emit("click");
+  doc.hidden = true;
+  const hiddenCalls = server.calls.filter(c => c.path === "/api/expressions").length;
+  await app.pollExpressions();
+  assert.equal(server.calls.filter(c => c.path === "/api/expressions").length, hiddenCalls);
 });

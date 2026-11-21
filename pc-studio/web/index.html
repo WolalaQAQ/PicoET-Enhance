@@ -191,10 +191,17 @@
             <button id="expr-freeze" class="expr-freeze-btn" type="button" disabled>Freeze</button>
           </div>
           <div class="expr-section-head">
-            <div><span id="output-eyebrow" class="eyebrow">KEY MORPH TARGETS</span><h2 id="output-title">Core expressions</h2></div>
-            <p id="output-note" class="hint"></p>
+            <div><span id="output-eyebrow" class="eyebrow">PINNED CHANNELS</span><h2 id="output-title">Pinned monitor</h2></div>
+            <div class="expr-pin-toolbar">
+              <p id="output-note" class="hint"></p>
+              <div class="actions expr-pin-actions">
+                <button id="expr-pins-reset" class="filter-chip" type="button" hidden>Reset defaults</button>
+                <button id="expr-pins-clear" class="filter-chip" type="button" hidden>Clear pins</button>
+              </div>
+            </div>
           </div>
           <div id="outputs" class="outputs expr-spotlight-grid"></div>
+          <p id="expr-pins-empty" class="expr-pins-empty hint" hidden></p>
         </div>
 
         <div class="panel expr-full-panel">

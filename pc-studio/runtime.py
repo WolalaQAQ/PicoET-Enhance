@@ -1309,6 +1309,37 @@ class Runtime:
         except RuntimeError:
             pass
 
+    def expression_snapshot(self):
+        with self.lock:
+            now = time.perf_counter_ns()
+            age, upper = self._age(self.last_header, now) if self.last_header else (None, None)
+            stock_fresh = False
+            stock_age_ms = None
+            if self.latest_stock is not None:
+                record, received_ns = self.latest_stock
+                stock_age_ms = round(max(0., (now - received_ns) / 1e6), 2)
+                session_id = self.source.session_id if self.source is not None else 0
+                stock_fresh = self._stock_is_fresh(record, received_ns, session_id, self.config, now)
+            return {
+                'running': self.running,
+                'connected': self.connected,
+                'source_mode': self.mode,
+                'capture_only': self.capture_only,
+                'metrics': {
+                    'source_age_ms': age if age is not None and math.isfinite(age) else None,
+                    'source_fresh': self.prediction['fresh'] and upper is not None and upper <= self.config['stale_ms'] and self.connected,
+                    'video_fresh': upper is not None and upper <= self.config['stale_ms'] and self.connected,
+                },
+                'prediction': json_value(self.prediction),
+                'live_stock': {
+                    'wanted': self._wants_psl(),
+                    'active': bool(self.stock_status['active']),
+                    'fresh': bool(stock_fresh),
+                    'age_ms': stock_age_ms,
+                    'error': self.stock_status.get('error'),
+                },
+            }
+
     def status(self):
         with self.lock:
             def hz(values):

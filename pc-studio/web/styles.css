@@ -382,10 +382,18 @@ html[data-guiding="true"] #guide-hint { font-size:12px; flex:1; margin:0; }
 .expr-section-head h2 { font-size:16px; color:#1c3532; }
 .expr-section-head #output-note { margin:0; font-size:12px; color:var(--muted); }
 
-.outputs.expr-spotlight-grid { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:12px; padding:0; }
+.outputs.expr-spotlight-grid { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px; padding:0; }
 .outputs label.expr-spot-card { display:flex; flex-direction:column; align-items:stretch; gap:8px; padding:14px 15px; margin:0; background:#fafcfb; border:1px solid var(--line); border-radius:11px; transition:border-color .15s, background .15s, box-shadow .15s; cursor:default; }
 .outputs label.expr-spot-card[data-active="true"] { background:#f1faf5; border-color:#9ad2b9; box-shadow:0 2px 8px #167d720d; }
+.expr-pin-toolbar { display:flex; align-items:center; gap:10px 14px; flex-wrap:wrap; margin-left:auto; }
+.expr-pin-actions { gap:6px; }
+.expr-pins-empty { margin:4px 0 0; padding:14px 16px; border:1px dashed #d3dfd9; border-radius:10px; background:#fafcfb; text-align:center; font-size:12px; color:var(--muted); }
 .expr-spot-head { display:flex; align-items:center; justify-content:space-between; gap:6px; min-width:0; }
+.expr-spot-head-right { display:flex; align-items:center; gap:5px; flex-shrink:0; }
+.expr-pin-btn { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; padding:0; border-radius:7px; border:1px solid transparent; background:transparent; color:#8ba098; font-size:12px; line-height:1; cursor:pointer; flex-shrink:0; filter:grayscale(1) opacity(.55); transition:background .12s, color .12s, border-color .12s, filter .12s; }
+.expr-pin-btn:hover:not(:disabled) { background:#eaf3ee; color:#18675b; border-color:#cde0d7; filter:grayscale(0) opacity(.95); }
+.expr-pin-btn[aria-pressed="true"] { background:#e2f2eb; color:#136b5c; border-color:#b2d9c9; filter:none; }
+.expr-pin-btn[aria-pressed="true"]:hover:not(:disabled) { background:#fdebe7; color:#a4483f; border-color:#ebbdb5; }
 .expr-spot-name { font-size:13px; font-weight:650; color:#1e3835; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .expr-spot-reading { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
 .expr-spot-code { font-family:Consolas, monospace; font-size:10px; color:#82948d; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

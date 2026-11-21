@@ -463,6 +463,29 @@ class RuntimeTests(unittest.TestCase):
                 self.assertFalse(rt.running)
             rt.udp.close()
 
+    def test_expressions_endpoint_returns_lightweight_snapshot(self):
+        import urllib.request
+        with tempfile.TemporaryDirectory() as tmp:
+            rt = Runtime(Path(tmp) / 'config.json')
+            server = make_server(rt, port=0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f'http://127.0.0.1:{server.server_port}'
+                with urllib.request.urlopen(base + '/api/expressions', timeout=3) as resp:
+                    self.assertEqual(resp.status, 200)
+                    data = json.loads(resp.read().decode('utf-8'))
+                self.assertIn('prediction', data)
+                self.assertIn('metrics', data)
+                self.assertIn('live_stock', data)
+                self.assertNotIn('contract', data)
+                self.assertNotIn('training', data)
+                self.assertFalse(data['running'])
+            finally:
+                server.shutdown()
+                server.server_close()
+                rt.udp.close()
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
