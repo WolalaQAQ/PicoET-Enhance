@@ -213,21 +213,16 @@ int main(int argc, char** argv) {
     std::fflush(stdout); status(root, c);
     uint64_t last_status = 0, last_identity_check = 0;
     Request request;
-    bool registered = false, validated = false;
+    bool registered = false, validated = false, prev_busy = true;
     int current[PTJ_STREAMS]{-1, -1, -1};
     for (;;) {
         const uint64_t now = mono_ns();
         c.daemon_heartbeat.store(now, std::memory_order_release);
-        PTJStats stats[PTJ_STREAMS]{};
-        for (uint32_t stream = 0; stream < PTJ_STREAMS; ++stream) {
-            core_ptj_get_stats(cores[stream], &stats[stream]);
-            store_stats(c.images[stream].core, stats[stream]);
-            core_ptj_get_borrow_stats(cores[stream], &borrowed[stream]);
-        }
+        bool just_validated = false;
         if (!registered && c.client_ready.load(std::memory_order_acquire)) {
             request = Request(c); registered = true;
             if (!validate_request(c, request)) break;
-            validated = true; last_identity_check = now;
+            validated = true; just_validated = true; last_identity_check = now;
             if (!c.stop_request && !interrupted) {
                 // The same verified Request remains immutable for this random session.
                 for (auto* source : cores)
@@ -254,15 +249,30 @@ int main(int argc, char** argv) {
         c.eye_subscription.store(eye_subscription, std::memory_order_release);
         if (change_results) c.results_applied.store(results_request, std::memory_order_release);
         if (change_eyes) c.eye_applied.store(eye_request, std::memory_order_release);
-#if defined(__ANDROID__)
         bool wanted = stock_subscription != 0 || eye_subscription != 0;
         for (const auto& image : c.images) wanted |= image.subscription.load() != 0;
+#if defined(__ANDROID__)
         demand.want(!stopping && wanted);
 #endif
         if (stopping) break;
+        bool busy = !validated || wanted || change_results || change_eyes;
+        for (uint32_t stream = 0; stream < PTJ_STREAMS; ++stream) {
+            if (current[stream] >= 0 || c.images[stream].pending.load(std::memory_order_relaxed)) busy = true;
+        }
+        const bool status_due = just_validated || change_results || change_eyes || busy != prev_busy ||
+            now - last_status >= (busy ? 100000000ULL : 5000000000ULL);
+        PTJStats stats[PTJ_STREAMS]{};
+        if (busy || status_due) {
+            for (uint32_t stream = 0; stream < PTJ_STREAMS; ++stream) {
+                core_ptj_get_stats(cores[stream], &stats[stream]);
+                store_stats(c.images[stream].core, stats[stream]);
+                core_ptj_get_borrow_stats(cores[stream], &borrowed[stream]);
+            }
+        }
         for (auto& slot : c.labels) {
             uint32_t pending = Pending;
             if (!slot.state.compare_exchange_strong(pending, Processing, std::memory_order_acq_rel)) continue;
+            busy = true;
             const int result = stock_subscription && stock_subscription == slot.subscription
                 ? core_ptj_submit_stock(core, &slot.record, stock_subscription) : PTJ_NO_SUBSCRIBER;
             if (result == PTJ_ACCEPTED) ++c.stock_dispatched;
@@ -272,19 +282,17 @@ int main(int argc, char** argv) {
         for (auto& slot : c.eyes) {
             uint32_t pending = Pending;
             if (!slot.state.compare_exchange_strong(pending, Processing, std::memory_order_acq_rel)) continue;
+            busy = true;
             if (eye_subscription && eye_subscription == slot.subscription)
                 core_ptj_submit_eye(eye, &slot.record, eye_subscription);
             slot.state.store(Free, std::memory_order_release);
         }
-        if (validated && now - last_identity_check >= 100000000ULL) {
+        const uint64_t identity_interval = busy ? 100000000ULL : 500000000ULL;
+        if (validated && now - last_identity_check >= identity_interval) {
             last_identity_check = now;
             int e = 0;
             if (birth(request.pid, e) != request.birth) {
                 failure(c, ClientIdentity, e ? e : ESRCH); break;
-            }
-            const uint64_t beat = c.client_heartbeat.load(), checked_now = mono_ns();
-            if (!beat || checked_now < beat || checked_now - beat > CLIENT_HEARTBEAT_NS) {
-                failure(c, ClientHeartbeat, ETIMEDOUT); break;
             }
         }
         for (uint32_t stream = 0; stream < PTJ_STREAMS; ++stream) {
@@ -297,6 +305,7 @@ int main(int argc, char** argv) {
             uint32_t pending = image.pending.load(std::memory_order_acquire);
             if (pending == 1 || pending == 2) {
                 if (image.pending.compare_exchange_strong(pending, 0, std::memory_order_acq_rel)) {
+                    busy = true;
                     const int index = int(pending - 1); Slot& slot = image.slots[index];
                     uint32_t expected = Pending;
                     if (!slot.state.compare_exchange_strong(expected, Processing, std::memory_order_acq_rel)) {
@@ -323,10 +332,14 @@ int main(int argc, char** argv) {
                 }
             }
           }
+          if (active >= 0) busy = true;
         }
         if (c.state == Failed) break;
-        if (now - last_status >= 100000000ULL) { status(root, c); last_status = now; }
-        pause_us(250);
+        if (status_due || busy != prev_busy) {
+            status(root, c); last_status = now;
+        }
+        prev_busy = busy;
+        pause_us(busy ? 250 : 100000);
     }
     for (auto& image : c.images) image.subscription.store(0, std::memory_order_release);
     c.stock_subscription.store(0, std::memory_order_release);

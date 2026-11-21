@@ -10,7 +10,7 @@ namespace ipc {
 static_assert(std::atomic<uint32_t>::is_always_lock_free && std::atomic<uint64_t>::is_always_lock_free,
               "Cross-process channel requires hardware lock-free atomics");
 static_assert(sizeof(std::atomic<uint32_t>) == 4 && sizeof(std::atomic<uint64_t>) == 8, "Atomic ABI");
-constexpr uint64_t HEARTBEAT_NS = 500000000ULL;
+constexpr uint64_t HEARTBEAT_NS = 1000000000ULL;
 constexpr uint64_t CLIENT_HEARTBEAT_NS = 2000000000ULL;
 enum State : uint32_t { Initializing, Ready, Stopping, Stopped, Failed };
 enum SlotState : uint32_t { Free, Writing, Pending, Processing };

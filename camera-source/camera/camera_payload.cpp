@@ -13,7 +13,9 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <link.h>
+#include <poll.h>
 #include <pthread.h>
+#include <sys/inotify.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -335,23 +337,64 @@ void start_video() {
     if (set_eye_sink) set_eye_sink(eye_callback, video);
     state = "armed";
 }
-void commands() {
+bool commands() {
     char path[1024], line[256]{};
     snprintf(path, sizeof(path), "%s/camera-control.txt", root);
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) return;
+    if (fd < 0) return false;
     ssize_t n = read(fd, line, sizeof(line) - 1); close(fd);
-    if (n <= 0 || line[n - 1] != '\n' || !strcmp(line, last_command)) return;
+    if (n <= 0 || line[n - 1] != '\n' || !strcmp(line, last_command)) return false;
     strcpy(last_command, line);
     uint64_t id = 0;
     CameraCommand command{};
     int parsed = parse_camera_control(line, owner_id, command_id, id, command);
-    if (parsed == 1) return;
-    if (parsed == -3) { ++rejected_owner; set_error(-2, "control owner mismatch"); return; }
-    if (parsed) { set_error(-2, "control needs: owner_hex command_id start|stop"); return; }
+    if (parsed == 1) return false;
+    if (parsed == -3) { ++rejected_owner; set_error(-2, "control owner mismatch"); return true; }
+    if (parsed) { set_error(-2, "control needs: owner_hex command_id start|stop"); return true; }
     command_id = id; command_result = 0; error[0] = 0;
     if (command == CameraCommand::Start) start_video();
     else stop_video();
+    return true;
+}
+bool any_stream_subscribed() {
+    if (!video) return false;
+    for (uint32_t i = 0; i < PTJ_STREAMS; ++i) {
+        PTJStats s{};
+        api.stream_stats(video, i, &s);
+        if (s.connected) return true;
+    }
+    return false;
+}
+void wait_idle_control(int inotify_fd, int timeout_ms) {
+    if (inotify_fd < 0) { usleep(static_cast<useconds_t>(timeout_ms) * 1000u); return; }
+    const uint64_t deadline = now_ns() + uint64_t(timeout_ms) * 1000000ULL;
+    for (;;) {
+        const uint64_t now = now_ns();
+        if (now >= deadline) return;
+        const int remain = int((deadline - now + 999999ULL) / 1000000ULL);
+        pollfd pfd{inotify_fd, POLLIN, 0};
+        const int rc = poll(&pfd, 1, remain);
+        if (rc == 0) return;
+        if (rc < 0) {
+            if (errno == EINTR) continue;
+            usleep(100000);
+            return;
+        }
+        bool woke = false;
+        alignas(inotify_event) char buf[1024];
+        for (;;) {
+            const ssize_t n = read(inotify_fd, buf, sizeof(buf));
+            if (n <= 0) break;
+            ssize_t off = 0;
+            while (off + ssize_t(sizeof(inotify_event)) <= n) {
+                const auto* ev = reinterpret_cast<const inotify_event*>(buf + off);
+                if ((ev->mask & IN_Q_OVERFLOW) || (ev->len > 0 && !strcmp(ev->name, "camera-control.txt")))
+                    woke = true;
+                off += ssize_t(sizeof(inotify_event)) + ssize_t(ev->len);
+            }
+        }
+        if (woke) return;
+    }
 }
 void* control(void*) {
     pthread_setname_np(pthread_self(), "camera-jpeg-ctl");
@@ -359,13 +402,32 @@ void* control(void*) {
     start_ticks = process_start_ticks();
     owner_id = now_ns() ^ (uint64_t(getpid()) << 32) ^ start_ticks;
     if (!start_ticks) { set_error(-1, "cannot bind process start_ticks"); state = "error"; }
+    int inotify_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (inotify_fd >= 0 && inotify_add_watch(inotify_fd, root, IN_MOVED_TO | IN_CLOSE_WRITE | IN_CREATE) < 0) {
+        close(inotify_fd);
+        inotify_fd = -1;
+    }
+    bool published = false, prev_subscribed = false;
+    uint64_t last_status_ns = 0;
     for (;;) {
-        if (start_ticks) commands();
+        bool dirty = !published;
+        if (start_ticks && commands()) dirty = true;
         if (video && bridge().identity_fault()) {
             stop_video("identity_fault");
             set_error(-4, "camera identity/sensor regressed; explicit start required for new owner");
+            dirty = true;
         }
-        status(); usleep(100000);
+        const bool subscribed = any_stream_subscribed();
+        const uint64_t now = now_ns();
+        const uint64_t interval = subscribed ? 100000000ULL : 30000000000ULL;
+        if (dirty || subscribed != prev_subscribed || now - last_status_ns >= interval) {
+            status();
+            published = true;
+            last_status_ns = now;
+        }
+        prev_subscribed = subscribed;
+        if (subscribed) usleep(100000);
+        else wait_idle_control(inotify_fd, 2000);
     }
     return nullptr;
 }

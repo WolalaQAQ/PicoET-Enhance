@@ -572,15 +572,22 @@ static void server_loop(PTJSource& s) {
         reap_jpeg_clients(s);
         // Detect an idle subscriber disappearing, even when there are no sources.
         std::shared_ptr<Client> current;
-        { std::lock_guard<std::mutex> lock(s.mutex); current = s.client; }
+        bool has_stock = false, has_jpeg = false;
+        {
+            std::lock_guard<std::mutex> lock(s.mutex);
+            current = s.client;
+            has_stock = s.stock_client != nullptr;
+            has_jpeg = !s.jpeg_clients.empty();
+        }
         if (current) {
             char c; int n = recv(current->fd, &c, 1, MSG_PEEK);
             if (n == 0 || (n < 0 && !would_block(socket_error()))) drop_client(s, current);
             // Stream connections are receive-only after their command.
             else if (n > 0) drop_client(s, current);
         }
+        const int wait_ms = has_stock ? 1 : ((current || has_jpeg) ? 20 : 200);
         PollFD polls[2]{{s.listener, POLLIN, 0}, {s.discovery, POLLIN, 0}};
-        if (poll_sockets(polls, 2, 1) <= 0) continue;
+        if (poll_sockets(polls, 2, wait_ms) <= 0) continue;
         if (polls[1].revents & POLLIN) answer_discovery(s);
         if (!(polls[0].revents & POLLIN)) continue;
         Socket fd = accept(s.listener, nullptr, nullptr);
