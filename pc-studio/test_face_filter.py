@@ -70,6 +70,31 @@ class FaceFilterTests(unittest.TestCase):
         self.assertGreater(result['values'][0], .75)
         self.assertEqual(result['raw_values'][0], 1.)
 
+    def test_explicit_one_euro_params_and_toggle(self):
+        # Explicit filter_enabled=False bypasses even with positive min_cutoff
+        self.config = dict(filter_enabled=False, filter_min_cutoff=1.0, filter_beta=0.0, filter_d_cutoff=1.0, stale_ms=350.)
+        self.frame(0., 1000)
+        self.assertEqual(self.frame(0.9, 1011)['values'][0], 0.9)
+
+        # Lower min_cutoff + lower beta smooths more aggressively than higher min_cutoff + higher beta
+        self.filter.clear()
+        self.config = dict(filter_enabled=True, filter_min_cutoff=1.0, filter_beta=0.0, filter_d_cutoff=1.0, stale_ms=350.)
+        self.frame(0., 1000)
+        heavy = self.frame(1.0, 1011)['values'][0]
+
+        self.filter.clear()
+        self.config = dict(filter_enabled=True, filter_min_cutoff=8.0, filter_beta=10.0, filter_d_cutoff=2.0, stale_ms=350.)
+        self.frame(0., 1000)
+        snappy = self.frame(1.0, 1011)['values'][0]
+        self.assertLess(heavy, snappy)
+        self.assertLess(snappy, 1.0)
+
+        # Changing beta or d_cutoff resets filter state cleanly at raw
+        self.config['filter_beta'] = 2.0
+        self.assertEqual(self.frame(0.3, 1022)['values'][0], 0.3)
+        self.config['filter_d_cutoff'] = 0.5
+        self.assertEqual(self.frame(0.6, 1033)['values'][0], 0.6)
+
 
 if __name__ == '__main__':
     unittest.main()

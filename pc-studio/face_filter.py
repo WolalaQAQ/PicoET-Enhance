@@ -4,6 +4,22 @@ import math
 from face_schema import CHANNELS
 
 
+def _resolve_filter_params(config):
+    if config.get('filter_enabled') is False:
+        return False, 0., 0., 1.
+    if 'filter_min_cutoff' in config:
+        min_cutoff = float(config['filter_min_cutoff'])
+        beta = float(config.get('filter_beta', 4.))
+        d_cutoff = float(config.get('filter_d_cutoff', 1.))
+        if min_cutoff <= 0:
+            return False, 0., beta, d_cutoff
+        return True, min_cutoff, beta, d_cutoff
+    smoothing = float(config.get('smoothing_ms', 0.))
+    if smoothing <= 0:
+        return False, 0., 4., 1.
+    return True, 1000. / (2. * math.pi * smoothing), 4., 1.
+
+
 class FaceFilter:
     def __init__(self):
         self.clear()
@@ -18,25 +34,23 @@ class FaceFilter:
     def apply(self, prediction, header, config):
         raw = list(prediction['values'])
         mask = prediction['valid_mask']
-        smoothing = float(config['smoothing_ms'])
-        key = (header.session_id, mask, smoothing)
+        enabled, min_cutoff, beta, d_cutoff = _resolve_filter_params(config)
+        key = (header.session_id, mask, enabled, min_cutoff, beta, d_cutoff)
         source = header.mouth_sensor_ns
         dt = (source-self.source_ns)/1e9 if self.source_ns is not None else 0.
         reset = (key != self.key or dt <= 0 or dt*1000 > config['stale_ms'])
         if not mask:
             self.clear()
-        elif smoothing == 0 or reset:
+        elif not enabled or reset:
             self.values, self.raw, self.derivative = raw[:], raw[:], [0.]*len(raw)
         else:
-            # smoothing_ms is the resting time constant, not a fixed output delay.
-            minimum_cutoff = 1000. / (2.*math.pi*smoothing)
-            derivative_alpha = self.alpha(1., dt)
+            derivative_alpha = self.alpha(d_cutoff, dt)
             for i, value in enumerate(raw):
                 if not mask & (1 << i):
                     continue
                 velocity = (value-self.raw[i])/dt
                 self.derivative[i] += derivative_alpha*(velocity-self.derivative[i])
-                cutoff = minimum_cutoff + 4.*abs(self.derivative[i])
+                cutoff = min_cutoff + beta*abs(self.derivative[i])
                 self.values[i] += self.alpha(cutoff, dt)*(value-self.values[i])
             self.raw = raw[:]
         values = self.values[:] if mask else raw

@@ -42,10 +42,11 @@ DATA = ROOT/'user-data'
 DEFAULT_CONFIG = dict(enabled=False, headset_host='',
                        headset_port=45681, model_path='', model_kind='face50',
                        device='auto', smoothing_ms=20.,
-                      uncertain_hold_ms=100., stale_ms=350., preview_fps=10, size_hysteresis=True,
-                      replay_path='',
-                      mouth_mode='curated', hybrid_channels=None, channel_sources=None,
-                      output_enabled=False, output_host='127.0.0.1', output_port=45682)
+                       filter_enabled=True, filter_min_cutoff=8.0, filter_beta=4.0, filter_d_cutoff=1.0,
+                       uncertain_hold_ms=100., stale_ms=350., preview_fps=10, size_hysteresis=True,
+                       replay_path='',
+                       mouth_mode='curated', hybrid_channels=None, channel_sources=None,
+                       output_enabled=False, output_host='127.0.0.1', output_port=45682)
 
 
 def json_value(value):
@@ -86,6 +87,15 @@ class Runtime:
                     self.legacy_configuration = saved
                     saved = {key: value for key, value in saved.items() if key not in ('model_kind', 'model_path')}
                 self.config.update(saved)
+                if 'filter_enabled' not in saved and 'filter_min_cutoff' not in saved and 'smoothing_ms' in saved:
+                    try:
+                        legacy_ms = float(saved['smoothing_ms'])
+                        if math.isfinite(legacy_ms) and legacy_ms >= 0:
+                            self.config['filter_enabled'] = legacy_ms > 0
+                            if legacy_ms > 0:
+                                self.config['filter_min_cutoff'] = round(1000. / (2. * math.pi * legacy_ms), 2)
+                    except (TypeError, ValueError):
+                        pass
         self.config.pop('face_source', None)  # Obsolete PC-side override; VRCFT owns source selection.
         if self.config.get('mouth_mode') not in MOUTH_MODES:
             self.config['mouth_mode'] = 'curated'
@@ -331,9 +341,28 @@ class Runtime:
                     updated['hybrid_channels'] = None
         elif 'hybrid_channels' in changes and updated['mouth_mode'] == 'hybrid':
             updated['channel_sources'] = None
+        filter_keys = ('filter_enabled', 'filter_min_cutoff', 'filter_beta', 'filter_d_cutoff')
+        has_filter_change = any(key in changes for key in filter_keys)
+        updated['filter_enabled'] = bool(updated['filter_enabled'])
+        for key in ('filter_min_cutoff', 'filter_d_cutoff'):
+            val = float(updated[key])
+            if not math.isfinite(val) or val <= 0:
+                raise ValueError(key+' must be a finite positive number')
+            updated[key] = val
+        beta_val = float(updated['filter_beta'])
+        if not math.isfinite(beta_val) or beta_val < 0:
+            raise ValueError('filter_beta must be a finite nonnegative number')
+        updated['filter_beta'] = beta_val
         for key in ('smoothing_ms', 'uncertain_hold_ms', 'stale_ms'):
             if not math.isfinite(float(updated[key])) or float(updated[key]) < 0:
                 raise ValueError(key+' must be a finite nonnegative number')
+        if has_filter_change and 'smoothing_ms' not in changes:
+            updated['smoothing_ms'] = 0. if not updated['filter_enabled'] else round(1000. / (2. * math.pi * updated['filter_min_cutoff']), 2)
+        elif 'smoothing_ms' in changes and not has_filter_change:
+            sm = float(updated['smoothing_ms'])
+            updated['filter_enabled'] = sm > 0
+            if sm > 0:
+                updated['filter_min_cutoff'] = round(1000. / (2. * math.pi * sm), 2)
         if not 1 <= int(updated['preview_fps']) <= 30:
             raise ValueError('preview_fps must be 1–30')
         if self.running and any(updated[k] != self.config[k] for k in

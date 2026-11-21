@@ -397,13 +397,26 @@ test("guide phase controls use real ready/finish/confirm/skip API, never auto-ap
   assert.equal(el("guide-ready").disabled, false); assert.equal(el("guide-confirm").disabled, true); await app.record("ready");
   assert.equal(el("guide-step").textContent, "Hold"); assert.ok(!server.calls.some(c => c.path.includes("review")));
 });
-test("One-Euro smoothing is configurable, bilingual and saving zero never starts tracking", async t => {
+test("One-Euro filter parameters are configurable, bilingual and toggling off disables inputs without starting tracking", async t => {
   const {app, server, el} = setup(t); await app.init();
-  assert.equal(el("smoothing_ms").value, "20");
-  el("smoothing_ms").value = "0"; el("settings").emit("input"); app.setLanguage("zh-CN");
-  assert.equal(el("smoothing-label").textContent, messages["zh-CN"].smoothing);
-  assert.equal(el("smoothing_ms").value, "0"); await app.save();
+  assert.equal(el("filter_enabled").checked, true);
+  assert.equal(el("filter_min_cutoff").value, "7.96");
+  assert.equal(el("filter_beta").value, "4");
+  assert.equal(el("filter_d_cutoff").value, "1");
+  el("filter_min_cutoff").value = "2.5"; el("filter_beta").value = "6.5"; el("filter_d_cutoff").value = "1.5";
+  el("filter_enabled").checked = false; el("settings").emit("input"); app.setLanguage("zh-CN");
+  assert.equal(el("filter-min-cutoff-label").textContent, messages["zh-CN"].filterMinCutoff);
+  assert.equal(el("filter-beta-label").textContent, messages["zh-CN"].filterBeta);
+  assert.equal(el("filter-d-cutoff-label").textContent, messages["zh-CN"].filterDCutoff);
+  assert.equal(el("filter_min_cutoff").disabled, true);
+  assert.equal(el("filter_beta").disabled, true);
+  assert.equal(el("filter_d_cutoff").disabled, true);
+  await app.save();
   const posted = JSON.parse(server.calls.find(c => c.path === "/api/config" && c.method === "POST").body);
+  assert.equal(posted.filter_enabled, false);
+  assert.equal(posted.filter_min_cutoff, 2.5);
+  assert.equal(posted.filter_beta, 6.5);
+  assert.equal(posted.filter_d_cutoff, 1.5);
   assert.equal(posted.smoothing_ms, 0);
   assert.ok(!server.calls.some(c => c.path === "/api/start"));
   assert.equal(posted.mouth_mode, "curated"); assert.equal(posted.hybrid_channels, null); assert.equal(posted.channel_sources, null); assert.ok(!("face_source" in posted));

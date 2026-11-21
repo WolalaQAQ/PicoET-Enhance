@@ -1,7 +1,9 @@
 import {DIAGNOSTIC_GROUPS, errorMessage, initialLanguage, LANGUAGE_KEY, messages, MORPH_GROUPS, PINNED_CHANNELS_KEY} from "./i18n.mjs";
 
 const TEXT_FIELDS = ["headset_host", "model_path", "device", "replay_path"];
-const NUMBER_FIELDS = ["headset_port", "stale_ms", "preview_fps", "output_port", "smoothing_ms"];
+const FILTER_NUMBER_FIELDS = ["filter_min_cutoff", "filter_beta", "filter_d_cutoff"];
+const NUMBER_FIELDS = ["headset_port", "stale_ms", "preview_fps", "output_port", ...FILTER_NUMBER_FIELDS];
+const CHECK_FIELDS = ["output_enabled", "filter_enabled"];
 const RELAY_OPTION_IDS = ["cymple-host", "cymple-port", "cymple-left-port", "cymple-right-port", "cymple-left-rotate", "cymple-left-hflip", "cymple-left-vflip", "cymple-right-rotate", "cymple-right-hflip", "cymple-right-vflip"];
 export const PRIMARY_CHANNELS = ["JawOpen", "MouthClose", "MouthPucker", "LipFunnelLower", "MouthSmileL", "MouthSmileR", "MouthRollLower", "TongueOut"];
 export const EXPRESSION_POLL_MS = 33;
@@ -50,8 +52,12 @@ export const PAGES = ["tracking", "recording", "training", "diagnostics", "prefe
 const PAGE_NAV = {tracking: "workspace", recording: "recording", training: "training", diagnostics: "diagnostics", preferences: "advanced"};
 export function routePage(hash = "") { const page = hash.replace(/^#\/?/, ""); return PAGES.includes(page) ? page : "tracking"; }
 const LABELS = {title: "title", "host-label": "host", "model-label": "model", "model-help": "modelHelp", start: "start", capture: "capture", stop: "stop",
-  "advanced-title": "advanced", "diagnostics-title": "diagnostics", "port-label": "port", "device-label": "device", "expiry-label": "expiry", "fps-label": "fps", "smoothing-label": "smoothing",
-  "filtering-title": "filteringTitle", "filtering-help": "filteringHelp", "inference-settings-title": "inferenceSettingsTitle", "inference-settings-help": "inferenceSettingsHelp", "connection-settings-help": "connectionSettingsHelp",
+  "advanced-title": "advanced", "diagnostics-title": "diagnostics", "port-label": "port", "device-label": "device", "expiry-label": "expiry", "expiry-help": "expiryHelp", "fps-label": "fps",
+  "filtering-title": "filteringTitle", "filtering-help": "filteringHelp", "filter-enabled-label": "filterEnabled",
+  "filter-min-cutoff-label": "filterMinCutoff", "filter-min-cutoff-help": "filterMinCutoffHelp",
+  "filter-beta-label": "filterBeta", "filter-beta-help": "filterBetaHelp",
+  "filter-d-cutoff-label": "filterDCutoff", "filter-d-cutoff-help": "filterDCutoffHelp",
+  "inference-settings-title": "inferenceSettingsTitle", "inference-settings-help": "inferenceSettingsHelp", "connection-settings-help": "connectionSettingsHelp",
   "udp-label": "udp", "output-port-label": "outputPort", "settings-help": "settingsHelp", save: "save", replay: "replay", "replay-path-label": "replayPath",
   "preview-label": "preview", "all-channels-title": "allChannels", "unknown-help": "unknownHelp", migration: "migration",
   "recording-title": "recordingTitle", "record-help": "recordHelp", "person-label": "person", "guided-label": "guided", "voice-label": "voice", "consent-label": "consent",
@@ -723,7 +729,8 @@ export function createApp(doc, options = {}) {
     get("start").hidden = current.running; get("stop").hidden = !current.running;
     get("capture").hidden = current.running; get("capture-stop").hidden = !current.running;
     get("save").disabled = !state.config || Boolean(state.busy) || !state.dirty;
-    for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled"]) get(id).disabled = Boolean(state.busy) || !state.config;
+    for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, ...CHECK_FIELDS]) get(id).disabled = Boolean(state.busy) || !state.config;
+    if (!get("filter_enabled").checked) for (const id of FILTER_NUMBER_FIELDS) get(id).disabled = true;
     get("config-state").textContent = state.config ? t(state.dirty ? "unsaved" : "saved") : "";
     renderConnection(current); renderPages();
     const error = state.error || state.pollError || state.status?.last_error;
@@ -752,14 +759,14 @@ export function createApp(doc, options = {}) {
     }
     const capturePending = ["starting", "recording", "stopping"].includes(state.status?.capture_control?.state);
     if (capturePending) {
-      for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled", "start", "capture", "replay", "save", "discover", "headset-select", "model-browse"])
+      for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, ...CHECK_FIELDS, "start", "capture", "replay", "save", "discover", "headset-select", "model-browse"])
         get(id).disabled = true;
     }
     if (state.status?.read_only) {
       get("status").textContent = t("visualReadonly");
       get("page-intro").textContent = t("visualReadonly");
       get("record-next").textContent = t("visualReadonly");
-      for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled", "start", "stop", "save",
+      for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, ...CHECK_FIELDS, "start", "stop", "save",
         "capture", "capture-stop", "replay", "discover", "model-browse", "headset-select",
         "record-start", "record-stop", "record-cancel", "train-start", "train-cancel", "voice-enabled"]) get(id).disabled = true;
     }
@@ -1025,8 +1032,15 @@ export function createApp(doc, options = {}) {
     state.config = config;
     if (!state.dirty) {
       makeMorphControls();
-      for (const key of [...TEXT_FIELDS, ...NUMBER_FIELDS]) get(key).value = config[key] == null ? "" : String(config[key]);
+      const legacySmoothing = Number(config.smoothing_ms ?? 20);
+      const fallbackCutoff = legacySmoothing > 0 ? Number((1000 / (2 * Math.PI * legacySmoothing)).toFixed(2)) : 8;
+      const defaults = {filter_min_cutoff: fallbackCutoff, filter_beta: 4, filter_d_cutoff: 1};
+      for (const key of [...TEXT_FIELDS, ...NUMBER_FIELDS]) {
+        const value = config[key] ?? defaults[key];
+        get(key).value = value == null ? "" : String(value);
+      }
       get("output_enabled").checked = config.output_enabled === true;
+      get("filter_enabled").checked = config.filter_enabled !== undefined ? config.filter_enabled === true : legacySmoothing > 0;
       state.channelSources = resolveChannelSources(config.mouth_mode, config.hybrid_channels, config.channel_sources);
     }
   }
@@ -1203,7 +1217,9 @@ export function createApp(doc, options = {}) {
     const channelSources = resolveChannelSources("curated", null, state.channelSources);
     const mouth_mode = matchingPreset(channelSources);
     const channel_sources = mouth_mode === "custom" ? channelSources : null;
-    return {...config, mouth_mode, hybrid_channels: null, channel_sources, output_enabled: get("output_enabled").checked, output_host: "127.0.0.1", model_kind: "face50"};
+    const filter_enabled = get("filter_enabled").checked;
+    const smoothing_ms = !filter_enabled ? 0 : (config.filter_min_cutoff > 0 ? Number((1000 / (2 * Math.PI * config.filter_min_cutoff)).toFixed(2)) : 0);
+    return {...config, filter_enabled, smoothing_ms, mouth_mode, hybrid_channels: null, channel_sources, output_enabled: get("output_enabled").checked, output_host: "127.0.0.1", model_kind: "face50"};
   }
   async function control(key, action) {
     if (state.busy || state.destroyed || state.status?.read_only) return; state.busy = key; state.generation++; state.error = ""; state.errorKey = ""; render();
@@ -1337,8 +1353,8 @@ export function createApp(doc, options = {}) {
   get("settings").addEventListener("submit", event => { event.preventDefault(); return start(); });
   for (const event of ["input", "change"]) {
     const changed = () => { state.dirty = true; state.errorKey = ""; render(); };
-    get("settings").addEventListener(event, e => { if (!e?.target || [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled"].includes(e.target.id)) changed(); });
-    get("page-preferences").addEventListener(event, e => { if (!e?.target || [...TEXT_FIELDS, ...NUMBER_FIELDS, "output_enabled"].includes(e.target.id)) changed(); });
+    get("settings").addEventListener(event, e => { if (!e?.target || [...TEXT_FIELDS, ...NUMBER_FIELDS, ...CHECK_FIELDS].includes(e.target.id)) changed(); });
+    get("page-preferences").addEventListener(event, e => { if (!e?.target || [...TEXT_FIELDS, ...NUMBER_FIELDS, ...CHECK_FIELDS].includes(e.target.id)) changed(); });
   }
   for (const [id, mode] of [["preset-curated", "curated"], ["preset-hybrid", "hybrid"], ["preset-model-only", "model_only"]]) {
     get(id).addEventListener("click", () => {

@@ -268,6 +268,14 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(self.runtime.config['output_enabled'])
         self.runtime.configure({'smoothing_ms': 30})
         self.assertTrue(self.runtime.running)
+        saved_oe = self.runtime.configure({'filter_enabled': True, 'filter_min_cutoff': 2.5, 'filter_beta': 6.0, 'filter_d_cutoff': 1.2})
+        self.assertTrue(self.runtime.running)
+        self.assertEqual(saved_oe['filter_min_cutoff'], 2.5)
+        self.assertEqual(saved_oe['filter_beta'], 6.0)
+        self.assertEqual(saved_oe['filter_d_cutoff'], 1.2)
+        saved_off = self.runtime.configure({'filter_enabled': False})
+        self.assertTrue(self.runtime.running)
+        self.assertEqual(saved_off['smoothing_ms'], 0.)
 
     def test_advanced_restart_settings_stop_the_actual_runtime(self):
         for key, value in [('device', 'cpu'), ('output_port', 45693), ('output_enabled', True), ('model_kind', 'mouthlink')]:
