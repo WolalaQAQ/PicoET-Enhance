@@ -788,6 +788,38 @@ class IPCTests(unittest.TestCase):
         h, _ = packet(sock)
         self.assertEqual(h['session_id'], fresh.session)
 
+    def test_26_transient_heartbeat_pause_recovers_automatically(self):
+        rt = self.runtime(daemon=False)
+        s = rt.fixture_source()
+        rt.responder.close()
+        rt.module.fixture(3)  # Active mouth subscription on fixture channel.
+        rt.module.fixture(1)  # Simulate suspend/wakeup stale daemon heartbeat.
+        self.assertEqual(s.submit(address=1), 5)
+        self.assertEqual(s.stats()['running'], 0)
+        self.assertEqual(rt.module.shim_status()['state'], 'peer_failed')
+        self.assertEqual(rt.module.shim_status()['stage'], 'daemon_heartbeat')
+        self.assertEqual(s.stats()['copy_count'], 0)
+        # Once daemon resumes beating, shim recovers automatically without stop/start.
+        rt.module.fixture(10)
+        self.assertEqual(s.stats()['running'], 1)
+        self.assertEqual(rt.module.shim_status()['state'], 'attached')
+        self.assertEqual(rt.module.shim_status()['stage'], 'none')
+        self.assertEqual(rt.module.shim_status()['errno'], 0)
+        self.assertEqual(s.submit(), 0)
+        self.assertEqual(s.stats()['copy_count'], 1)
+        rt.module.fixture(6)
+
+    def test_27_daemon_survives_idle_client_heartbeat_pause(self):
+        rt = self.runtime()
+        s = rt.source()
+        # Do not call stats() or submit() for > CLIENT_HEARTBEAT_NS while client process stays alive.
+        time.sleep(2.3)
+        self.assertIsNone(rt.process.poll())
+        sock = rt.connect()
+        self.assertEqual(s.submit(), 0)
+        h, _ = packet(sock)
+        self.assertEqual(h['session_id'], s.session)
+
 
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] in ('--client-worker', '--client-recover'):

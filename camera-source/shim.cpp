@@ -60,7 +60,7 @@ void peer_error(PTJSource& s, uint32_t stage, int code) {
 }
 bool heartbeat(const Channel& c) {
     const uint64_t beat = c.daemon_heartbeat.load(std::memory_order_acquire), now = mono_ns();
-    return beat && now >= beat && now - beat <= HEARTBEAT_NS;
+    return beat && (now >= beat ? now - beat <= HEARTBEAT_NS : beat - now <= HEARTBEAT_NS);
 }
 bool owner_matches(const PTJSource& s) {
     const Channel& c = *s.channel;
@@ -99,7 +99,16 @@ bool peer(PTJSource& s) {
     if (!s.peer_alive) return false;
     if (!owner_matches(s) || !request_matches(s)) { peer_error(s, OwnerEcho, EPROTO); return false; }
     if (!attach_matches(s)) { peer_error(s, AttachNonce, EPROTO); return false; }
-    if (!heartbeat(c)) { peer_error(s, Heartbeat, ETIMEDOUT); return false; }
+    if (!heartbeat(c)) {
+        // Transient suspend/wakeup heartbeat lag pauses submissions without permanently latching the channel.
+        uint32_t none = None;
+        if (s.error_stage.compare_exchange_strong(none, Heartbeat, std::memory_order_acq_rel))
+            s.error_code.store(uint32_t(ETIMEDOUT), std::memory_order_release);
+        return false;
+    }
+    uint32_t hb = Heartbeat;
+    if (s.error_stage.compare_exchange_strong(hb, None, std::memory_order_acq_rel))
+        s.error_code.store(0, std::memory_order_release);
     return true;
 }
 void transport_snapshot(PTJSource& s, uint32_t stream) {
