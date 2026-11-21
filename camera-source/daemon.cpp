@@ -132,9 +132,7 @@ std::string status_json(const Channel& c) {
 }
 void status(const std::string& root, Channel& c) {
     int error = 0;
-    if (!publish(root, "ipc-daemon-status.json", status_json(c), error) && !c.error_stage) {
-        failure(c, StatusWrite, error);
-    }
+    publish(root, "ipc-daemon-status.json", status_json(c), error);
 }
 uint32_t core_failure_stage() {
     const char* name = core_start_stage();
@@ -180,9 +178,9 @@ int main(int argc, char** argv) {
     }
     if (c.state != Failed) {
         for (auto* source : cores) {
-            const int membership = core_ptj_bind_camera_catalog(source, config.port,
+            // Multicast membership is best-effort; broadcast, HTTP /cameras and direct TCP do not depend on it.
+            (void)core_ptj_bind_camera_catalog(source, config.port,
                 uint16_t(config.port + 1), uint16_t(config.port + 2));
-            if (membership) { failure(c, CoreSetopt, membership); break; }
         }
     }
     if (c.state == Failed) {

@@ -1,4 +1,4 @@
-# PicoET-Enhance 2.6.1-dev.1
+# PicoET-Enhance 2.6.2-dev.1
 
 Eye-tracking enhancement for PICO 4 Pro running PICO OS 5.13.7 with Magisk.
 The installer checks the device's eye-tracking library hashes before installing.

@@ -132,10 +132,44 @@ class SourceOrder:
         return True, 'new_session' if changed else 'new_source', gap
 
 
-def sync_clock(host, port, count=12):
+_ORIG_CREATE_CONNECTION = socket.create_connection
+
+
+def connect_cancellable(host, port, timeout=3, *, stop_event=None, on_socket=None):
+    """Connect TCP socket while registering it so stop() can interrupt an unreachable-host wait."""
+    if stop_event is not None and stop_event.is_set():
+        raise OSError('Connection cancelled')
+    if socket.create_connection is not _ORIG_CREATE_CONNECTION:
+        return socket.create_connection((host, port), timeout=timeout)
+    last_error = None
+    infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    for family, socktype, proto, _, addr in infos:
+        if stop_event is not None and stop_event.is_set():
+            raise OSError('Connection cancelled')
+        sock = socket.socket(family, socktype, proto)
+        sock.settimeout(timeout)
+        if on_socket is not None:
+            on_socket(sock)
+        try:
+            if stop_event is not None and stop_event.is_set():
+                raise OSError('Connection cancelled')
+            sock.connect(addr)
+            return sock
+        except OSError as error:
+            last_error = error
+            sock.close()
+        finally:
+            if on_socket is not None:
+                on_socket(None)
+    raise last_error or OSError(f'Unable to connect to {host}:{port}')
+
+
+def sync_clock(host, port, count=12, *, stop_event=None, on_socket=None):
     samples = []
     for _ in range(count):
-        with socket.create_connection((host, port), timeout=3) as sock:
+        if stop_event is not None and stop_event.is_set():
+            raise OSError('Clock sync cancelled')
+        with connect_cancellable(host, port, timeout=3, stop_event=stop_event, on_socket=on_socket) as sock:
             start = time.perf_counter_ns()
             sock.sendall(b'PING\n')
             received, sent = struct.unpack('<QQ', read_exact(sock, 16))

@@ -10,6 +10,7 @@ if [ -x "$MODDIR/bin/picoet-inject" ]; then
 fi
 rmdir /data/local/tmp/picoet-runtime 2>/dev/null || true
 rm -f /data/local/tmp/picoet-runtime 2>/dev/null || true
+rm -rf /data/local/tmp/picoet-camera 2>/dev/null || true
 state=/data/adb/picoet-enhance
 rm -f "$state/boot.id" "$state/control.lock" "$state/recovery.used" \
     "$state/injection.blocked" "$state/unsafe.instance" "$state/unsafe.handled" \

@@ -20,6 +20,9 @@ struct PTJSource {
     AtomicStats local[PTJ_STREAMS];
     std::mutex stop_mutex;
     bool stopped = false;
+    int last_reported_alive = -1;
+    uint32_t last_reported_stage = None;
+    int last_reported_code = 0;
 };
 namespace {
 std::atomic<bool> failed_unacked{false};
@@ -317,7 +320,15 @@ extern "C" int ptj_get_stream_stats(const PTJSource* source, uint32_t stream, PT
         local.running = alive && c.state == Ready && !c.stop_request;
         local.connected = local.running ? c.images[stream].core.connected.load() : 0;
         local.queue_in_use = c.images[stream].in_use.load();
-        report(s.root, alive ? "attached" : "peer_failed", s.error_stage, int(s.error_code), &s);
+        const int alive_flag = alive ? 1 : 0;
+        const uint32_t stage = s.error_stage.load(std::memory_order_acquire);
+        const int code = int(s.error_code.load(std::memory_order_acquire));
+        if (alive_flag != s.last_reported_alive || stage != s.last_reported_stage || code != s.last_reported_code) {
+            s.last_reported_alive = alive_flag;
+            s.last_reported_stage = stage;
+            s.last_reported_code = code;
+            report(s.root, alive ? "attached" : "peer_failed", stage, code, &s);
+        }
     }
     *out = load_stats(local); return 0;
 }

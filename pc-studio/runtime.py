@@ -25,7 +25,17 @@ from face_schema import (
     matching_preset, resolve_channel_sources, validate_channel_sources,
 )
 from face_filter import FaceFilter
-from wire import END, JPEG, REPLAY, FrameHeader, SourceOrder, read_frame, result_packet, face_result_packet, sync_clock
+from wire import (
+    END, JPEG, REPLAY, FrameHeader, SourceOrder,
+    connect_cancellable, enable_keepalive, read_frame, result_packet, face_result_packet, sync_clock,
+)
+
+
+def _write_json_atomic(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(tmp, path)
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT/'user-data'
@@ -65,13 +75,17 @@ class Runtime:
         self.config = dict(DEFAULT_CONFIG)
         self.legacy_configuration = None
         if self.config_path.exists():
-            saved = json.loads(self.config_path.read_text(encoding='utf-8'))
-            self.legacy_configuration = saved.pop('legacy_configuration', None)
-            if saved.get('model_kind', 'segmentation') != 'face50':
-                # Preserve the old settings, but never silently resume mask geometry.
-                self.legacy_configuration = saved
-                saved = {key: value for key, value in saved.items() if key not in ('model_kind', 'model_path')}
-            self.config.update(saved)
+            try:
+                saved = json.loads(self.config_path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                saved = None
+            if isinstance(saved, dict):
+                self.legacy_configuration = saved.pop('legacy_configuration', None)
+                if saved.get('model_kind', 'segmentation') != 'face50':
+                    # Preserve the old settings, but never silently resume mask geometry.
+                    self.legacy_configuration = saved
+                    saved = {key: value for key, value in saved.items() if key not in ('model_kind', 'model_path')}
+                self.config.update(saved)
         self.config.pop('face_source', None)  # Obsolete PC-side override; VRCFT owns source selection.
         if self.config.get('mouth_mode') not in MOUTH_MODES:
             self.config['mouth_mode'] = 'curated'
@@ -117,6 +131,7 @@ class Runtime:
         self.preview = None
         self.clock = None
         self.socket = None
+        self._pending_sockets = set()
         self.threads = []
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.log = None
@@ -331,11 +346,10 @@ class Runtime:
         with self.lock:
             self.config = updated
             self.personal.set_checkpoint(updated['model_path'])
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
             saved = dict(updated)
             if self.legacy_configuration:
                 saved['legacy_configuration'] = self.legacy_configuration
-            self.config_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding='utf-8')
+            _write_json_atomic(self.config_path, saved)
         if updated['enabled'] and self.running:
             self._sync_psl_worker()
         return dict(self.config)
@@ -527,6 +541,34 @@ class Runtime:
             self.condition.notify()
         self._record_enqueue('frame', (header, payload))
         return True
+
+    def _track_pending_socket(self, sock):
+        with self.lock:
+            if sock is None:
+                return
+            self._pending_sockets.add(sock)
+            if self.stop_event.is_set():
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
+    def _untrack_pending_socket(self, sock):
+        if sock is None:
+            return
+        with self.lock:
+            self._pending_sockets.discard(sock)
+
+    def _connect(self, host, port, timeout=3):
+        holder = [None]
+        def on_socket(sock):
+            if sock is not None:
+                holder[0] = sock
+                self._track_pending_socket(sock)
+            elif holder[0] is not None:
+                self._untrack_pending_socket(holder[0])
+                holder[0] = None
+        return connect_cancellable(host, port, timeout=timeout, stop_event=self.stop_event, on_socket=on_socket)
 
     def _record_enqueue(self, kind, value):
         with self.record_condition:
@@ -871,20 +913,38 @@ class Runtime:
             self.inference_ready.wait()
             if self.stop_event.is_set():
                 return
-            calibrated = sync_clock(config['headset_host'], int(config['headset_port']))
+            host = config['headset_host'].strip()
+            port = int(config['headset_port'])
+            holder = [None]
+            def on_sock(sock):
+                if sock is not None:
+                    holder[0] = sock
+                    self._track_pending_socket(sock)
+                elif holder[0] is not None:
+                    self._untrack_pending_socket(holder[0])
+                    holder[0] = None
+            calibrated = sync_clock(host, port, stop_event=self.stop_event, on_socket=on_sock)
             self._set_clock(calibrated)
+            if self.stop_event.is_set():
+                return
             context = None
             if config['model_kind'] == 'face50':
                 from stock import read_capture_context
-                with socket.create_connection((config['headset_host'], int(config['headset_port'])), timeout=3) as control:
+                with self._connect(host, port, timeout=3) as control:
                     context = read_capture_context(control)
                 self.bind_capture(context.capture_session_id, context.service_generation, evidence=context.evidence)
                 self.capture_context = context.evidence
-            sock = socket.create_connection((config['headset_host'], int(config['headset_port'])), timeout=3)
+            if self.stop_event.is_set():
+                return
+            sock = self._connect(host, port, timeout=3)
+            enable_keepalive(sock)
             sock.settimeout(10)  # The first subscription may cold-start the native camera.
             with self.lock:
                 self.socket = sock
                 self.connected = True
+            if self.stop_event.is_set():
+                sock.close()
+                return
             sock.sendall(b'JPEG\n')
             with sock:
                 first_frame = True
@@ -926,7 +986,19 @@ class Runtime:
     def _clock_refresh(self):
         while not self.stop_event.wait(10):
             try:
-                calibrated = sync_clock(self.config['headset_host'], int(self.config['headset_port']), 3)
+                host = self.config['headset_host'].strip()
+                if not host:
+                    continue
+                holder = [None]
+                def on_sock(sock):
+                    if sock is not None:
+                        holder[0] = sock
+                        self._track_pending_socket(sock)
+                    elif holder[0] is not None:
+                        self._untrack_pending_socket(holder[0])
+                        holder[0] = None
+                calibrated = sync_clock(host, int(self.config['headset_port']), 3,
+                                        stop_event=self.stop_event, on_socket=on_sock)
                 self._set_clock(calibrated)
             except (OSError, EOFError, ValueError) as error:
                 with self.lock:
@@ -1181,36 +1253,61 @@ class Runtime:
             self.lifecycle += 1
             self.condition.notify_all()
             sock = self.socket
+            pending_socks = list(self._pending_sockets)
+            self._pending_sockets.clear()
+        for pending in pending_socks:
+            try:
+                pending.close()
+            except OSError:
+                pass
         if sock:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass  # Closing an already-disconnected owned connection.
-        for thread in self.threads:
-            if thread is not threading.current_thread():
-                thread.join(timeout=5)
-                if thread.is_alive():
-                    raise RuntimeError('Owned runtime worker did not stop: '+thread.name)
-        with self.lock:
-            if self.log:
-                self.log.flush()
-                self.log.close()
-                self.log = None
-            if self.input_stream:
-                self.input_stream.close()
-                self.input_stream = None
-            if self.clock_log:
-                self.clock_log.close()
-                self.clock_log = None
-            self.threads = []
-            self.running = self.connected = False
-            self.config['enabled'] = False
-            self.pending = None
-            self.prediction = self._invalid('stopped')
-            self.tongue.clear()
-            self.preview = None
-            if self.run_dir is not None:
-                (self.run_dir/'summary.json').write_text(json.dumps(self.status(), ensure_ascii=False, indent=2), encoding='utf-8')
+            try:
+                sock.close()
+            except OSError:
+                pass
+        join_error = None
+        try:
+            for thread in self.threads:
+                if thread is not threading.current_thread():
+                    thread.join(timeout=5)
+                    if thread.is_alive() and join_error is None:
+                        join_error = RuntimeError('Owned runtime worker did not stop: ' + thread.name)
+        finally:
+            with self.lock:
+                if self.log:
+                    self.log.flush()
+                    self.log.close()
+                    self.log = None
+                if self.input_stream:
+                    self.input_stream.close()
+                    self.input_stream = None
+                if self.clock_log:
+                    self.clock_log.close()
+                    self.clock_log = None
+                self.threads = []
+                self.socket = None
+                self.running = self.connected = False
+                self.config['enabled'] = False
+                self.pending = None
+                self.prediction = self._invalid('stopped')
+                self.tongue.clear()
+                self.preview = None
+                if self.run_dir is not None:
+                    (self.run_dir/'summary.json').write_text(
+                        json.dumps(self.status(), ensure_ascii=False, indent=2), encoding='utf-8'
+                    )
+        if join_error is not None:
+            raise join_error
+
+    def close(self):
+        try:
+            self.stop()
+        except RuntimeError:
+            pass
 
     def status(self):
         with self.lock:

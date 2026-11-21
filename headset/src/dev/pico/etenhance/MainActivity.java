@@ -35,6 +35,10 @@ public final class MainActivity extends ProcessingActivity {
         super.onCreate(bundle);
         channel=new PanelChannel(new File(createDeviceProtectedStorageContext().getFilesDir(),"control/camera"));
         pending=preferences.getString("camera_pending",""); pendingAction=preferences.getString("camera_action","");
+        if(pendingAction.equals("camera-status")) {
+            pending=""; pendingAction="";
+            preferences.edit().remove("camera_pending").remove("camera_action").apply();
+        }
         submitted=SystemClock.elapsedRealtime();
         buildScreen();
         selectTab(bundle!=null && bundle.getBoolean("tuning_tab"));
@@ -184,7 +188,8 @@ public final class MainActivity extends ProcessingActivity {
         if(!pending.isEmpty()) { render(); return; }
         try {
             pending=channel.submit(action,""); pendingAction=action; submitted=SystemClock.elapsedRealtime();
-            preferences.edit().putString("camera_pending",pending).putString("camera_action",action).apply();
+            if(!action.equals("camera-status"))
+                preferences.edit().putString("camera_pending",pending).putString("camera_action",action).apply();
         } catch(Exception exception) { issue=exception.getMessage(); }
         render();
     }
@@ -199,6 +204,11 @@ public final class MainActivity extends ProcessingActivity {
                         preferences.edit().remove("camera_pending").remove("camera_action").apply();
                         try { camera=CameraState.parse(reply[1]); issue=""; }
                         catch(RuntimeException invalid) { camera=null; issue="worker_unavailable"; }
+                    } else if(SystemClock.elapsedRealtime()-submitted>15000 &&
+                              (pendingAction.equals("camera-status") || !channel.requestQueued())) {
+                        issue=pendingAction.equals("camera-status")?"worker_unavailable":"operation_wait";
+                        pending=""; pendingAction=""; lastStatus=SystemClock.elapsedRealtime();
+                        preferences.edit().remove("camera_pending").remove("camera_action").apply();
                     }
                     render();
                 } else if(!tuningSelected && SystemClock.elapsedRealtime()-lastStatus>=2000) request("camera-status");

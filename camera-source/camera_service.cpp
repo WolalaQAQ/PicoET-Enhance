@@ -9,8 +9,10 @@
 #include <stdexcept>
 #include <vector>
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
+#include <net/if.h>
 #include <signal.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -89,12 +91,22 @@ struct Channel {
     ~Channel(){ipc::unmap_file(mapping);}
     ipc::Channel* get(){return static_cast<ipc::Channel*>(mapping.address);}
 };
-bool fresh(const ipc::Channel& channel) {
+bool daemon_alive(const ipc::Channel& channel) {
     int error=0;
+    return ipc::valid_header(channel) && ipc::birth(channel.daemon_pid,error)==channel.daemon_birth;
+}
+bool fresh(const ipc::Channel& channel) {
     const uint64_t beat=channel.daemon_heartbeat.load(std::memory_order_acquire);
     const uint64_t now=ipc::mono_ns();
-    return ipc::valid_header(channel) && ipc::birth(channel.daemon_pid,error)==channel.daemon_birth &&
-        camera_service::fresh_heartbeat(beat,now);
+    return daemon_alive(channel) && camera_service::fresh_heartbeat(beat,now);
+}
+bool wait_fresh(const ipc::Channel& channel, uint64_t timeout_ns=1500000000ULL) {
+    const auto deadline=ipc::mono_ns()+timeout_ns;
+    for(;;) {
+        if(fresh(channel))return true;
+        if(!daemon_alive(channel) || ipc::mono_ns()>=deadline)return false;
+        ipc::pause_us(50000);
+    }
 }
 bool reusable_stopped(const ipc::Channel* c) {
     if(!c)return true;
@@ -123,13 +135,16 @@ bool results_enabled(){return read(state_root+"/camera.results")=="1\n";}
 bool eyes_enabled(){return read(state_root+"/camera.eyes")=="1\n";}
 std::string address() {
     ifaddrs* entries=nullptr;if(getifaddrs(&entries))return {};
-    std::string result;
+    std::string preferred,fallback;
     for(auto* entry=entries;entry;entry=entry->ifa_next) {
-        if(!entry->ifa_addr || entry->ifa_addr->sa_family!=AF_INET || std::strcmp(entry->ifa_name,"wlan0"))continue;
+        if(!entry->ifa_addr || entry->ifa_addr->sa_family!=AF_INET)continue;
+        if((entry->ifa_flags & IFF_LOOPBACK) || !std::strcmp(entry->ifa_name,"lo"))continue;
         char text[INET_ADDRSTRLEN]{};
-        if(inet_ntop(AF_INET,&reinterpret_cast<sockaddr_in*>(entry->ifa_addr)->sin_addr,text,sizeof(text)))result=text;
+        if(!inet_ntop(AF_INET,&reinterpret_cast<sockaddr_in*>(entry->ifa_addr)->sin_addr,text,sizeof(text)))continue;
+        if(!std::strcmp(entry->ifa_name,"wlan0"))preferred=text;
+        else if(fallback.empty())fallback=text;
     }
-    freeifaddrs(entries);return result;
+    freeifaddrs(entries);return !preferred.empty()?preferred:fallback;
 }
 std::string status(const std::string& operation_error={}) {
     const bool wanted=enabled();bool online=false,results_online=false,eyes_online=false;
@@ -190,7 +205,11 @@ void start_daemon() {
         const std::string binary=module+"/bin/ptj_ipc_daemon";
         execl(binary.c_str(),binary.c_str(),instance.stage.c_str(),"45681",results,eyes,nullptr);_exit(127);
     }
-    wait([]{Channel channel;auto* c=channel.get();return c && fresh(*c) && c->state==ipc::Ready;},"daemon_start");
+    wait([]{
+        Channel channel;auto* c=channel.get();
+        if(c && ipc::valid_header(*c) && c->state==ipc::Failed)throw std::runtime_error("daemon_start");
+        return c && fresh(*c) && c->state==ipc::Ready;
+    },"daemon_start");
 }
 void sync_results(bool allowed, bool eyes=false) {
     Channel channel;auto* c=channel.get();
@@ -202,17 +221,57 @@ void sync_results(bool allowed, bool eyes=false) {
     request.store(policy,std::memory_order_release);
     wait([&]{return c->state==ipc::Ready && applied==policy && fresh(*c);},"results_timeout");
 }
+void cleanup_stage_dir(const std::string& dir) {
+    static const char* const files[]={
+        "video-channel.bin","ipc-daemon-status.json","ipc-daemon-status.json.tmp",
+        "ipc-shim-status.json","ipc-shim-status.json.tmp","camera-status.json","camera-status.json.tmp",
+        "camera-control.txt","camera-control.txt.new","daemon.log","inject.log",
+        "libptj_source.so","libptj_source.so.new","libpicoet_camera_jpeg.so","libpicoet_camera_jpeg.so.new"
+    };
+    for(const char* name:files) unlink((dir+"/"+name).c_str());
+    rmdir(dir.c_str());
+}
+void cleanup_old_stages() {
+    if(instance.boot.size()!=36)return;
+    DIR* dir=opendir(runtime_root.c_str());
+    if(!dir)return;
+    const std::string current_name=instance.boot+"-"+std::to_string(instance.pid)+"-"+std::to_string(instance.birth);
+    const std::string boot_prefix=instance.boot+"-";
+    while(dirent* entry=readdir(dir)) {
+        const std::string name=entry->d_name;
+        if(name=="." || name==".." || name==current_name)continue;
+        const std::string path=runtime_root+"/"+name;
+        struct stat st{};
+        if(lstat(path.c_str(),&st) || !S_ISDIR(st.st_mode))continue;
+        if(name.compare(0,boot_prefix.size(),boot_prefix)!=0) {
+            cleanup_stage_dir(path);
+            continue;
+        }
+        unsigned long long pid=0,birth=0;
+        if(std::sscanf(name.c_str()+boot_prefix.size(),"%llu-%llu",&pid,&birth)!=2 || !pid || !birth)continue;
+        int error=0;
+        if(ipc::birth(pid,error)==birth)continue;
+        ipc::Mapping mapping;
+        if(!ipc::map_file(mapping,path+"/video-channel.bin",sizeof(ipc::Channel),false)) {
+            const bool alive=daemon_alive(*static_cast<ipc::Channel*>(mapping.address));
+            ipc::unmap_file(mapping);
+            if(alive)continue;
+        }
+        cleanup_stage_dir(path);
+    }
+    closedir(dir);
+}
 void retire_dead_instance() {
     const std::string saved=read(state_root+"/camera.instance");
-    if(saved.empty() || saved==instance.key)return;
+    if(saved.empty() || saved==instance.key) { cleanup_old_stages(); return; }
     std::istringstream values(saved);std::string boot;uint64_t pid=0,birth=0;
     if(!(values>>boot>>pid>>birth) || boot.size()!=36)throw std::runtime_error("owner_changed");
-    if(boot!=instance.boot)return; // PIDs can repeat across boots; never signal from an old boot record.
+    if(boot!=instance.boot) { cleanup_old_stages(); return; } // PIDs can repeat across boots; never signal from an old boot record.
     int error=0;
     if(ipc::birth(pid,error)==birth)throw std::runtime_error("owner_changed");
     const std::string previous=runtime_root+"/"+boot+"-"+std::to_string(pid)+"-"+std::to_string(birth);
     ipc::Mapping mapping;
-    if(ipc::map_file(mapping,previous+"/video-channel.bin",sizeof(ipc::Channel),false))return;
+    if(ipc::map_file(mapping,previous+"/video-channel.bin",sizeof(ipc::Channel),false)) { cleanup_old_stages(); return; }
     auto& channel=*static_cast<ipc::Channel*>(mapping.address);
     try {
         if(ipc::valid_header(channel) && ipc::birth(channel.daemon_pid,error)==channel.daemon_birth) {
@@ -221,15 +280,18 @@ void retire_dead_instance() {
         }
     }catch(...){ipc::unmap_file(mapping);throw;}
     ipc::unmap_file(mapping);
+    cleanup_old_stages();
 }
 void start() {
     retire_dead_instance();
     camera_service::Owner current{};
     if(owner(current)) {
         Channel channel;auto* c=channel.get();
-        if(c && fresh(*c) && c->state==ipc::Ready && camera_service::attached(*c,instance.pid,instance.birth) && !std::strcmp(current.state,"armed"))return;
+        if(c && daemon_alive(*c) && c->state==ipc::Ready && camera_service::attached(*c,instance.pid,instance.birth) && !std::strcmp(current.state,"armed")) {
+            if(fresh(*c) || wait_fresh(*c))return;
+            if(daemon_alive(*c))throw std::runtime_error("service_unavailable");
+        }
     }
-    if(address().empty())throw std::runtime_error("service_unavailable");
     if(!owner(current)) {
         if(read("/proc/"+std::to_string(instance.pid)+"/maps").find("libpicoet_camera_jpeg.so")!=std::string::npos)
             throw std::runtime_error("foreign_adapter");
@@ -249,7 +311,10 @@ void start() {
     {
         Channel channel;auto* c=channel.get();
         if(c) {
-            if(fresh(*c) && c->state==ipc::Ready && camera_service::attached(*c,instance.pid,instance.birth) && !std::strcmp(current.state,"armed"))return;
+            if(daemon_alive(*c) && c->state==ipc::Ready && camera_service::attached(*c,instance.pid,instance.birth) && !std::strcmp(current.state,"armed")) {
+                if(fresh(*c) || wait_fresh(*c))return;
+                if(daemon_alive(*c))throw std::runtime_error("service_unavailable");
+            }
             if(!reusable_stopped(c))throw std::runtime_error("stop_pending");
         }
     }

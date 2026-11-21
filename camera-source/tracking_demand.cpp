@@ -1,5 +1,6 @@
 #include "tracking_demand.h"
 #include <cerrno>
+#include <chrono>
 #include <memory>
 #include <utility>
 #if defined(__ANDROID__)
@@ -78,7 +79,10 @@ void TrackingDemand::want(bool value) {
 void TrackingDemand::run() {
     std::unique_lock<std::mutex> lock(mutex);
     for (;;) {
-        changed.wait(lock, [&] { return closing || revision != observed_revision; });
+        if (!closing && desired && !state.active && revision == observed_revision)
+            changed.wait_for(lock, std::chrono::seconds(2), [&] { return closing || revision != observed_revision; });
+        else
+            changed.wait(lock, [&] { return closing || revision != observed_revision; });
         const bool next = !closing && desired;
         observed_revision = revision;
         if (bool(state.active) != next) {

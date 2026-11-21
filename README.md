@@ -4,7 +4,7 @@ English | [简体中文](README_zh.md)
 
 An eye-tracking enhancement Magisk module for the PICO 4 Pro: it opens the eye-tracking service's per-eye gate for real pupil data, decouples the facial expression model so each eye is processed on its own, and targets 90 Hz for both eye and mouth expressions by default instead of the stock rate of about 24 Hz. Use it with [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) and [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule).
 
-> v2.6.1-dev.1 (development branch) · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
+> v2.6.2-dev.1 (development branch) · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
 
 **End-to-end mouth tracking development:** `feat/tongue-pc` follows [MouthLink](https://github.com/UndefinedSignal/MouthLink)-style whole-mouth regression: the headset captures images, the PC handles configuration, recording, training and inference, and the matching UnifiedPicoModule branch merges the outputs. Personal images, teacher predictions and student weights stay on the user's PC. Follow the [source-build and testing guide](TONGUE.md); this branch's module includes optional LAN cameras, but no validated general-purpose mouth model.
 
@@ -72,8 +72,8 @@ The installer verifies the SHA-256 of the device's eye-tracking libraries and st
 2. Flash it in the Magisk app under Install from storage, or from a command line:
 
    ```sh
-    adb push magisk-picoet-enhance-v2.6.1-dev.1.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.1-dev.1.zip'
+    adb push magisk-picoet-enhance-v2.6.2-dev.1.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.2-dev.1.zip'
    ```
 
 3. Reboot the headset.

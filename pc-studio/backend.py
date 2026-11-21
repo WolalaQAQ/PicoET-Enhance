@@ -299,7 +299,11 @@ def main(argv=None):
     sealed_preset = SEALED_PROFILES[profile] if args.sealed_c else None
     capture = CaptureControl(runtime, LANCameraSource(runtime), continuation=continuation, sealed_preset=sealed_preset)
     cymple_relay = CympleEyeRelay(_relay_config_path(runtime), runtime=runtime)
-    server = make_server(runtime, port=args.port, capture=capture, cymple_relay=cymple_relay)
+    try:
+        server = make_server(runtime, port=args.port, capture=capture, cymple_relay=cymple_relay)
+    except OSError as error:
+        print(f'Mouth control could not start on http://127.0.0.1:{args.port} ({error}).', file=sys.stderr, flush=True)
+        return 1
     if args.sealed_c:
         print(f'Sealed C [{profile}] (awaiting explicit start): '
               f'http://127.0.0.1:{server.server_port}/#/recording', flush=True)

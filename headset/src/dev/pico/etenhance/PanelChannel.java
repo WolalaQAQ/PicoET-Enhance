@@ -30,6 +30,7 @@ final class PanelChannel {
         Files.move(next.toPath(), new File(directory, "request.txt").toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         return id;
     }
+    boolean requestQueued() { return new File(directory, "request.txt").isFile(); }
     String[] response(String id) throws IOException {
         File file = new File(directory, "reply.txt");
         if (!file.isFile()) return null;
