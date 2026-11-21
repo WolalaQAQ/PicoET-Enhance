@@ -311,10 +311,10 @@
         </div>
         <label class="check filter-toggle"><input id="filter_enabled" form="settings" type="checkbox"><span id="filter-enabled-label">Enable One-Euro filter</span></label>
         <div class="fields">
-          <label><span id="filter-min-cutoff-label">Min cutoff frequency (Hz)</span><input id="filter_min_cutoff" form="settings" type="number" min="0.05" max="60" step="0.1" required><span id="filter-min-cutoff-help" class="field-hint"></span></label>
-          <label><span id="filter-beta-label">Speed coefficient (beta)</span><input id="filter_beta" form="settings" type="number" min="0" max="100" step="0.1" required><span id="filter-beta-help" class="field-hint"></span></label>
-          <label><span id="filter-d-cutoff-label">Derivative cutoff (Hz)</span><input id="filter_d_cutoff" form="settings" type="number" min="0.05" max="60" step="0.1" required><span id="filter-d-cutoff-help" class="field-hint"></span></label>
-          <label><span id="expiry-label">Result expiry (ms)</span><input id="stale_ms" form="settings" type="number" min="1" required><span id="expiry-help" class="field-hint"></span></label>
+          <label><span id="filter-min-cutoff-label">Min cutoff frequency (Hz)</span><input id="filter_min_cutoff" form="settings" type="number" min="0.01" max="100" step="any" required><span id="filter-min-cutoff-help" class="field-hint"></span></label>
+          <label><span id="filter-beta-label">Speed coefficient (beta)</span><input id="filter_beta" form="settings" type="number" min="0" max="1000" step="any" required><span id="filter-beta-help" class="field-hint"></span></label>
+          <label><span id="filter-d-cutoff-label">Derivative cutoff (Hz)</span><input id="filter_d_cutoff" form="settings" type="number" min="0.01" max="100" step="any" required><span id="filter-d-cutoff-help" class="field-hint"></span></label>
+          <label><span id="expiry-label">Result expiry (ms)</span><input id="stale_ms" form="settings" type="number" min="1" step="any" required><span id="expiry-help" class="field-hint"></span></label>
         </div>
       </section>
       <details id="settings-inference" class="panel disclosure-panel"><summary id="inference-settings-title">Model &amp; inference</summary>

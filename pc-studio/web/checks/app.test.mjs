@@ -890,8 +890,10 @@ test("navigation displays exactly one task page and never starts or saves anythi
 test("HTML contains unique IDs and external advanced fields belong to the settings form", () => {
   const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
   assert.equal(new Set(ids).size, ids.length);
-  for (const field of ["headset_host", "headset_port", "model_path", "device", "stale_ms", "preview_fps", "output_enabled", "output_port", "replay_path"])
+  for (const field of ["headset_host", "headset_port", "model_path", "device", "stale_ms", "preview_fps", "output_enabled", "output_port", "replay_path", "filter_enabled", "filter_min_cutoff", "filter_beta", "filter_d_cutoff"])
     assert.match(html, new RegExp(`id="${field}" form="settings"`));
+  for (const floatField of ["filter_min_cutoff", "filter_beta", "filter_d_cutoff", "stale_ms"])
+    assert.match(html, new RegExp(`id="${floatField}"[^>]*step="any"`));
 });
 test("direct links and browser history switch pages without recreating the app", async t => {
   const events = new Map(), navigation = {location: {hash: "#/recording"},
