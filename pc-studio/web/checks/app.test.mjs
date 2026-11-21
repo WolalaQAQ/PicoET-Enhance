@@ -1029,7 +1029,7 @@ test("three routing presets, 46-target customization, filters and bilingual swit
   assert.equal(el("preset-curated").attributes["aria-pressed"], "true");
   assert.equal(el("preset-hybrid").attributes["aria-pressed"], "false");
   assert.equal(el("preset-model-only").attributes["aria-pressed"], "false");
-  assert.match(el("hybrid-channels-summary").textContent, /Native 6 · Model 40/);
+  assert.match(el("hybrid-channels-summary").textContent, /Native 4 · Model 42/);
   assert.equal(el("hybrid-live-hint").hidden, false);
   assert.equal(el("hybrid-live-hint").textContent, messages.en.hybridStockWaiting);
 
@@ -1059,7 +1059,7 @@ test("three routing presets, 46-target customization, filters and bilingual swit
   app.morphControls.get("TongueRoll").offBtn.emit("click");
   assert.equal(app.state.dirty, true);
   assert.equal(el("routing-preset-badge").textContent, messages.en.presetStateCustom);
-  assert.match(el("hybrid-channels-summary").textContent, /Native 7 · Model 38 · Off 1/);
+  assert.match(el("hybrid-channels-summary").textContent, /Native 5 · Model 40 · Off 1/);
 
   app.setLanguage("zh-CN");
   assert.equal(el("routing-preset-badge").textContent, messages["zh-CN"].presetStateCustom);

@@ -38,7 +38,7 @@ ROUTABLE_CHANNELS = tuple(name for name in CHANNELS if name not in AGGREGATE_STO
 PURE_EXTENDED_CHANNELS = tuple(name for name in EXTENDED_CHANNELS if name not in STOCK_AGGREGATE_PARENTS)
 STOCK_CAPABLE_CHANNELS = tuple(name for name in ROUTABLE_CHANNELS if name not in PURE_EXTENDED_CHANNELS)
 CURATED_STOCK_TARGETS = (
-    'JawOpen', 'MouthPucker', 'LipFunnelUpper', 'LipFunnelLower', 'MouthRollLower', 'MouthShrugUpper',
+    'JawOpen', 'MouthPucker', 'LipFunnelUpper', 'LipFunnelLower',
 )
 MOUTH_MODES = ('curated', 'hybrid', 'model_only', 'custom')
 PRESET_MODES = ('curated', 'hybrid', 'model_only')
