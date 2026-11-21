@@ -428,7 +428,9 @@ output.expr-spot-val { font-family:Consolas, monospace; font-size:19px; font-wei
 [data-active="true"][data-origin="fallback"] .expr-meter-slot progress::-moz-progress-bar { background:#b97c24; }
 
 .expr-compare { display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-top:2px; padding-top:7px; border-top:1px dashed #e6eeea; }
+.expr-compare[data-single="true"] { grid-template-columns:1fr; }
 .expr-compare[hidden] { display:none; }
+.expr-cmp-item[hidden] { display:none; }
 .expr-cmp-item { display:flex; flex-direction:column; gap:3px; min-width:0; opacity:.78; }
 .expr-cmp-item[data-selected="true"] { opacity:1; }
 .expr-cmp-item[data-available="false"] { opacity:.42; }

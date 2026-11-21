@@ -877,13 +877,17 @@ export function createApp(doc, options = {}) {
       if (entry.compare) {
         entry.compare.wrap.hidden = !state.exprCompare;
         if (state.exprCompare) {
-          const nativeVal = stockChannelValue(snap, entry.name, snapValid);
+          const hasNativeSlot = !PURE_EXTENDED_SET.has(entry.name);
+          const mergedParent = STOCK_AGGREGATE_PARENTS[entry.name] ?? null;
+          const nativeVal = hasNativeSlot ? stockChannelValue(snap, entry.name, snapValid) : null;
           const modelVal = modelChannelValue(snap, entry.name, snapValid);
           const nativeSelected = info.origin === "native";
           const modelSelected = info.origin === "model" || info.origin === "fallback";
-          const updateCmp = (slot, labelKey, val, selected) => {
+          const updateCmp = (slot, labelKey, val, selected, tooltip = "") => {
             const lbl = t(labelKey);
             if (slot.labelEl.textContent !== lbl) slot.labelEl.textContent = lbl;
+            if (tooltip) slot.labelEl.setAttribute("title", tooltip);
+            else slot.labelEl.removeAttribute("title");
             const valText = val == null ? "—" : val.toFixed(3);
             if (slot.valEl.textContent !== valText) slot.valEl.textContent = valText;
             slot.bar.value = val ?? 0;
@@ -892,7 +896,17 @@ export function createApp(doc, options = {}) {
             slot.item.setAttribute("data-available", String(val != null));
             slot.item.setAttribute("data-active", String(val != null && val >= 0.02));
           };
-          updateCmp(entry.compare.native, "exprCompareNative", nativeVal, nativeSelected);
+          entry.compare.wrap.setAttribute("data-single", String(!hasNativeSlot));
+          entry.compare.native.item.hidden = !hasNativeSlot;
+          if (hasNativeSlot) {
+            updateCmp(
+              entry.compare.native,
+              mergedParent ? "exprCompareNativeMerged" : "exprCompareNative",
+              nativeVal,
+              nativeSelected,
+              mergedParent ? `${entry.name} ← ${mergedParent}` : "",
+            );
+          }
           updateCmp(entry.compare.model, "exprCompareModel", modelVal, modelSelected);
         }
       }

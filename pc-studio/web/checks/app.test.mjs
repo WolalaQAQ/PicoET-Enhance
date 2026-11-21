@@ -1440,19 +1440,29 @@ test("expression diagnostics shows unselected native and model readouts side-by-
     valid_mask: (allBits & ~(1n << BigInt(tongueUpIdx))).toString(),
     model_valid_mask: allBits.toString(),
     native_channels: ["JawOpen"],
-    channels: {JawOpen: 0.72, MouthSmileL: 0.44},
-    stock_channels: {JawOpen: 0.72, MouthSmileL: 0.19},
-    model_channels: {JawOpen: 0.58, MouthSmileL: 0.44, TongueUp: 0.63},
+    channels: {JawOpen: 0.72, MouthSmileL: 0.44, CheekPuffLeft: 0.31},
+    stock_channels: {JawOpen: 0.72, MouthSmileL: 0.19, CheekPuffLeft: 0.25},
+    model_channels: {JawOpen: 0.58, MouthSmileL: 0.44, CheekPuffLeft: 0.31, TongueUp: 0.63},
   });
   await app.pollStatus();
 
   // JawOpen routed to native: shows native=0.720 (selected) AND unselected model=0.580
   const jawCard = row("JawOpen");
   assert.equal(jawCard.compare.wrap.hidden, false);
+  assert.equal(jawCard.compare.wrap.attributes["data-single"], "false");
+  assert.equal(jawCard.compare.native.item.hidden, false);
+  assert.equal(jawCard.compare.native.labelEl.textContent, messages.en.exprCompareNative);
   assert.equal(jawCard.compare.native.valEl.textContent, "0.720");
   assert.equal(jawCard.compare.native.item.attributes["data-selected"], "true");
   assert.equal(jawCard.compare.model.valEl.textContent, "0.580");
   assert.equal(jawCard.compare.model.item.attributes["data-selected"], "false");
+
+  // CheekPuffLeft (native merged parent): native slot explicitly labeled Native (merged)
+  const puffCell = app.rows.get("channel-table/CheekPuffLeft");
+  assert.equal(puffCell.compare.native.item.hidden, false);
+  assert.equal(puffCell.compare.native.labelEl.textContent, messages.en.exprCompareNativeMerged);
+  assert.equal(puffCell.compare.native.valEl.textContent, "0.250");
+  assert.equal(puffCell.compare.model.valEl.textContent, "0.310");
 
   // MouthSmileL routed to model: shows unselected native=0.190 AND model=0.440 (selected)
   const smileCell = app.rows.get("channel-table/MouthSmileL");
@@ -1461,10 +1471,11 @@ test("expression diagnostics shows unselected native and model readouts side-by-
   assert.equal(smileCell.compare.model.valEl.textContent, "0.440");
   assert.equal(smileCell.compare.model.item.attributes["data-selected"], "true");
 
-  // TongueUp routed off: main output stays "—", but model comparison readout still shows 0.630
+  // TongueUp (pure extended, unsupported by headset native): native column hidden, model comparison still shows 0.630
   const upCell = app.rows.get("channel-table/TongueUp");
   assert.equal(upCell.output.textContent, "—");
-  assert.equal(upCell.compare.native.valEl.textContent, "—");
+  assert.equal(upCell.compare.wrap.attributes["data-single"], "true");
+  assert.equal(upCell.compare.native.item.hidden, true);
   assert.equal(upCell.compare.model.valEl.textContent, "0.630");
 
   // Toggle dual-source comparison off/on
