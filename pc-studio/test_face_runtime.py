@@ -597,13 +597,13 @@ class FaceRuntimeTests(unittest.TestCase):
             self.assertAlmostEqual(fields[10 + INDEX['MouthPucker']], 0.61, places=5)
             self.assertAlmostEqual(fields[10 + INDEX['LipFunnelUpper']], 0.72, places=5)
             self.assertAlmostEqual(fields[10 + INDEX['LipFunnelLower']], 0.72, places=5)
-            self.assertFalse(fields[7] & (1 << INDEX['MouthRollLower']))
-            self.assertFalse(fields[7] & (1 << INDEX['MouthShrugUpper']))
+            self.assertAlmostEqual(fields[10 + INDEX['MouthRollLower']], 0.44, places=5)
+            self.assertAlmostEqual(fields[10 + INDEX['MouthShrugUpper']], 0.39, places=5)
             self.assertAlmostEqual(fields[10 + INDEX['TongueOut']], 0.1, places=5)
             self.assertAlmostEqual(fields[10 + INDEX['TongueLeft']], 0.2, places=5)
             self.assertFalse(fields[7] & (1 << INDEX['MouthSmileL']))
             self.assertEqual(set(self.runtime.prediction['native_channels']),
-                             set(CURATED_STOCK_TARGETS) | {'MouthFunnel'})
+                             set(CURATED_STOCK_TARGETS) | {'MouthFunnel', 'MouthLeft', 'MouthRight'})
 
             # Subdivided split: LipFunnelUpper from stock, LipFunnelLower from model, CheekPuffLeft from stock, TongueLeft off
             self.runtime.configure(dict(

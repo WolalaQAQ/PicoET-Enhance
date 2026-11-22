@@ -8,16 +8,23 @@ const RELAY_OPTION_IDS = ["cymple-host", "cymple-port", "cymple-left-port", "cym
 export const PRIMARY_CHANNELS = ["JawOpen", "MouthClose", "MouthPucker", "LipFunnelLower", "MouthSmileL", "MouthSmileR", "MouthRollLower", "TongueOut"];
 export const EXPRESSION_POLL_MS = 33;
 export const STOCK_CHANNELS = ["CheekPuff", "CheekSquintL", "CheekSquintR", "JawForward", "JawLeft", "JawOpen", "JawRight", "MouthClose", "MouthDimpleL", "MouthDimpleR", "MouthFrownL", "MouthFrownR", "MouthFunnel", "MouthLeft", "MouthLowerDownL", "MouthLowerDownR", "MouthPressL", "MouthPressR", "MouthPucker", "MouthRight", "MouthRollLower", "MouthRollUpper", "MouthShrugLower", "MouthShrugUpper", "MouthSmileL", "MouthSmileR", "MouthStretchL", "MouthStretchR", "MouthUpperUpL", "MouthUpperUpR", "NoseSneerL", "NoseSneerR", "TongueOut"];
-export const CURATED_STOCK_TARGETS = ["JawOpen", "MouthPucker", "LipFunnelUpper", "LipFunnelLower"];
+export const CURATED_MODEL_TARGETS = [
+  "TongueLeft", "TongueRight", "TongueUp", "TongueDown", "TongueRoll",
+  "CheekSuckLeft", "CheekSuckRight", "MouthTightenerLeft", "MouthTightenerRight",
+  "TongueOut", "CheekPuffLeft", "CheekPuffRight",
+  "MouthSmileL", "MouthSmileR", "MouthFrownL", "MouthFrownR", "MouthUpperUpL", "MouthUpperUpR",
+];
+const CURATED_MODEL_SET = new Set(CURATED_MODEL_TARGETS);
 const STOCK_AGGREGATE_PARENTS = {CheekPuffLeft: "CheekPuff", CheekPuffRight: "CheekPuff", LipFunnelUpper: "MouthFunnel", LipFunnelLower: "MouthFunnel", MouthUpperLeft: "MouthLeft", MouthLowerLeft: "MouthLeft", MouthUpperRight: "MouthRight", MouthLowerRight: "MouthRight"};
 const AGGREGATE_CHILDREN_MAP = {CheekPuff: ["CheekPuffLeft", "CheekPuffRight"], MouthFunnel: ["LipFunnelUpper", "LipFunnelLower"], MouthLeft: ["MouthUpperLeft", "MouthLowerLeft"], MouthRight: ["MouthUpperRight", "MouthLowerRight"]};
 const DEFAULT_DIAG_CHANNELS = DIAGNOSTIC_GROUPS.flatMap(group => group.items.map(item => item.name));
 const MORPH_META = new Map(DIAGNOSTIC_GROUPS.flatMap(group => group.items.map(item => [item.name, item])));
 export const ROUTABLE_CHANNELS = MORPH_GROUPS.flatMap(group => group.items.map(item => item.name));
+export const CURATED_STOCK_TARGETS = ROUTABLE_CHANNELS.filter(name => !CURATED_MODEL_SET.has(name));
 const PURE_EXTENDED_SET = new Set(MORPH_GROUPS.flatMap(group => group.items.filter(item => item.tag === "missing").map(item => item.name)));
 const PRESET_MODES = ["curated", "hybrid", "model_only"];
 export const MOUTH_PRESETS = {
-  curated: Object.fromEntries(ROUTABLE_CHANNELS.map(name => [name, CURATED_STOCK_TARGETS.includes(name) ? "stock" : "model"])),
+  curated: Object.fromEntries(ROUTABLE_CHANNELS.map(name => [name, CURATED_MODEL_SET.has(name) ? "model" : "stock"])),
   hybrid: Object.fromEntries(ROUTABLE_CHANNELS.map(name => [name, PURE_EXTENDED_SET.has(name) ? "model" : "stock"])),
   model_only: Object.fromEntries(ROUTABLE_CHANNELS.map(name => [name, "model"])),
 };

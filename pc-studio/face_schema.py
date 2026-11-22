@@ -37,13 +37,20 @@ STOCK_AGGREGATE_PARENTS = {
 ROUTABLE_CHANNELS = tuple(name for name in CHANNELS if name not in AGGREGATE_STOCK_CHANNELS)
 PURE_EXTENDED_CHANNELS = tuple(name for name in EXTENDED_CHANNELS if name not in STOCK_AGGREGATE_PARENTS)
 STOCK_CAPABLE_CHANNELS = tuple(name for name in ROUTABLE_CHANNELS if name not in PURE_EXTENDED_CHANNELS)
-CURATED_STOCK_TARGETS = (
-    'JawOpen', 'MouthPucker', 'LipFunnelUpper', 'LipFunnelLower',
+CURATED_MODEL_TARGETS = (
+    # 9 pure extended channels missing in PICO stock
+    'TongueLeft', 'TongueRight', 'TongueUp', 'TongueDown', 'TongueRoll',
+    'CheekSuckLeft', 'CheekSuckRight', 'MouthTightenerLeft', 'MouthTightenerRight',
+    # Synced tongue extension (PICO stock misses left/short/roll tongue) + left/right split cheek puff
+    'TongueOut', 'CheekPuffLeft', 'CheekPuffRight',
+    # 6 native channels with severe JawOpen / TongueOut crosstalk in PICO stock
+    'MouthSmileL', 'MouthSmileR', 'MouthFrownL', 'MouthFrownR', 'MouthUpperUpL', 'MouthUpperUpR',
 )
+CURATED_STOCK_TARGETS = tuple(name for name in ROUTABLE_CHANNELS if name not in CURATED_MODEL_TARGETS)
 MOUTH_MODES = ('curated', 'hybrid', 'model_only', 'custom')
 PRESET_MODES = ('curated', 'hybrid', 'model_only')
 MOUTH_PRESETS = {
-    'curated': {name: ('stock' if name in CURATED_STOCK_TARGETS else 'model') for name in ROUTABLE_CHANNELS},
+    'curated': {name: ('model' if name in CURATED_MODEL_TARGETS else 'stock') for name in ROUTABLE_CHANNELS},
     'hybrid': {name: ('stock' if name in STOCK_CAPABLE_CHANNELS else 'model') for name in ROUTABLE_CHANNELS},
     'model_only': {name: 'model' for name in ROUTABLE_CHANNELS},
 }
@@ -51,6 +58,8 @@ MOUTH_PRESETS = {
 assert len(ROUTABLE_CHANNELS) == 46
 assert len(PURE_EXTENDED_CHANNELS) == 9
 assert len(STOCK_CAPABLE_CHANNELS) == 37
+assert len(CURATED_MODEL_TARGETS) == 18
+assert len(CURATED_STOCK_TARGETS) == 28
 
 
 def validate_channel_sources(channel_sources):
