@@ -44,19 +44,82 @@ class FaceModel(TongueModel):
             raise ValueError('Whole-mouth input dimensions must be between 1 and 400')
         self.input_shape = (1, 1, self.height, self.width)
         self.output_shape = (1, 50)
+        self.temporal_kind = 'stateless'
+        self.state_input_name = None
+        self.state_output_name = None
+        self.state_shape = None
+        self._parse_temporal_meta(meta)
         if device.startswith(('torch:', 'torchscript:')):
             raise ValueError('Whole-mouth models support ONNX Runtime backends only')
         super().__init__(str(path), device)
         inputs, outputs = self.session.get_inputs(), self.session.get_outputs()
-        if (len(inputs) != 1 or inputs[0].name != self.input_name or inputs[0].type != 'tensor(float)' or
-                inputs[0].shape[1:] != list(self.input_shape[1:]) or
-                len(outputs) != 1 or outputs[0].name != self.output_name or
-                outputs[0].type != 'tensor(float)' or outputs[0].shape[1:] != [50]):
+        frame_ok = (len(inputs) >= 1 and inputs[0].name == self.input_name and inputs[0].type == 'tensor(float)' and
+                    inputs[0].shape[1:] == list(self.input_shape[1:]) and
+                    len(outputs) >= 1 and outputs[0].name == self.output_name and
+                    outputs[0].type == 'tensor(float)' and outputs[0].shape[1:] == [50])
+        if self.state_input_name is not None:
+            state_ok = (len(inputs) == 2 and len(outputs) == 2 and
+                        inputs[1].name == self.state_input_name and inputs[1].type == 'tensor(float)' and
+                        list(inputs[1].shape) == list(self.state_shape) and
+                        outputs[1].name == self.state_output_name and outputs[1].type == 'tensor(float)' and
+                        list(outputs[1].shape) == list(self.state_shape))
+        else:
+            state_ok = (len(inputs) == 1 and len(outputs) == 1)
+        if not (frame_ok and state_ok):
             raise ValueError('Whole-mouth ONNX frame/blendshapes contract does not match its manifest')
+        self.is_temporal = self.state_input_name is not None
+        self.reset_state()
         self.predict(np.zeros((400, 400), np.uint8))
+        self.reset_state()
+
+    def _parse_temporal_meta(self, meta):
+        temporal = meta.get('temporal')
+        if isinstance(temporal, dict):
+            kind = str(temporal.get('kind', 'gru_stateful'))
+            s_in = temporal.get('state_input', 'h_in')
+            s_out = temporal.get('state_output', 'h_out')
+            s_shape = temporal.get('state_shape')
+        elif meta.get('state_input_name') or meta.get('temporal_kind') not in (None, 'stateless'):
+            kind = str(meta.get('temporal_kind', 'gru_stateful'))
+            s_in = meta.get('state_input_name', 'h_in')
+            s_out = meta.get('state_output_name', 'h_out')
+            s_shape = meta.get('state_shape')
+        else:
+            return
+        if kind == 'stateless':
+            return
+        if (not isinstance(s_in, str) or not s_in or not isinstance(s_out, str) or not s_out or
+                not isinstance(s_shape, (list, tuple)) or len(s_shape) != 2 or
+                int(s_shape[0]) != 1 or int(s_shape[1]) <= 0):
+            raise ValueError('Whole-mouth temporal manifest requires valid state_input, state_output, and state_shape [1, H]')
+        self.temporal_kind = kind
+        self.state_input_name = s_in
+        self.state_output_name = s_out
+        self.state_shape = (1, int(s_shape[1]))
+
+    def _configure_ort_state(self, session):
+        if self.state_input_name is not None:
+            return
+        inputs, outputs = session.get_inputs(), session.get_outputs()
+        if len(inputs) == 2 and len(outputs) == 2:
+            s_in, s_out = inputs[1], outputs[1]
+            if (s_in.name == 'h_in' and s_out.name == 'h_out' and
+                    s_in.type == 'tensor(float)' and s_out.type == 'tensor(float)' and
+                    len(s_in.shape) == 2 and s_in.shape[0] == 1 and
+                    isinstance(s_in.shape[1], int) and s_in.shape[1] > 0 and
+                    list(s_in.shape) == list(s_out.shape)):
+                self.state_input_name = s_in.name
+                self.state_output_name = s_out.name
+                self.state_shape = (1, int(s_in.shape[1]))
+                self.temporal_kind = 'gru_stateful'
+
+    def reset_state(self):
+        self._state = np.zeros(self.state_shape, np.float32) if self.state_shape is not None else None
+        self._state_session_id = None
+        self._state_source_ns = None
 
     def describe(self):
-        return dict(engine=self.engine, device=self.device, checkpoint=self.checkpoint, artifact=self.artifact,
+        info = dict(engine=self.engine, device=self.device, checkpoint=self.checkpoint, artifact=self.artifact,
                     requested_device=self.requested_device, provider=self.provider, providers=self.providers,
                     available_providers=self.available_providers, fallbacks=self.fallbacks,
                     model_kind='face50', schema=SCHEMA, channels=list(CHANNELS),
@@ -65,25 +128,67 @@ class FaceModel(TongueModel):
                     unsupported_channels=[name for name in CHANNELS if name not in self.output_channels],
                     image_shape=[400, 400], input_shape=list(self.input_shape),
                     preprocessing='Pillow BILINEAR GRAY8 /255; no crop or horizontal flip',
-                    temporal_smoothing=False, runtime_filter='One-Euro; smoothing_ms=0 bypasses',
+                    temporal_smoothing=bool(self.is_temporal), temporal_kind=self.temporal_kind,
+                    runtime_filter='One-Euro; smoothing_ms=0 bypasses',
                     geometry=False, cpu_threads=1, load_ms=self.load_ms)
+        if self.is_temporal:
+            info['state_shape'] = list(self.state_shape)
+        return info
 
-    def predict(self, image, config=None):
+    def predict(self, image, config=None, *, session_id=None, source_ns=None):
         if image.shape != (400, 400) or image.dtype != np.uint8:
             raise ValueError('image must be a 400x400 uint8 grayscale array')
         start = time.perf_counter()
         x = prepare_input(image, self.width, self.height)
         pre = time.perf_counter()
-        if self.engine == 'onnxgraph':
-            self.input_value.update_inplace(x)
-            self.binding.synchronize_inputs()
-            self.session.run_with_iobinding(self.binding)
-            self.binding.synchronize_outputs()
-            output = self.binding.copy_outputs_to_cpu()[0]
+        if self.is_temporal:
+            stale_ms = float(config.get('stale_ms', 120.)) if isinstance(config, dict) else 120.
+            if self._state is None:
+                self.reset_state()
+            elif session_id is not None and self._state_session_id is not None and session_id != self._state_session_id:
+                self.reset_state()
+            elif source_ns is not None and self._state_source_ns is not None:
+                dt_ms = (source_ns - self._state_source_ns) / 1e6
+                if dt_ms <= 0 or dt_ms > stale_ms:
+                    self.reset_state()
+            state = self._state
+            if state is None:
+                state = np.zeros(self.state_shape, np.float32)
+            if self.engine == 'onnxgraph':
+                self.input_value.update_inplace(x)
+                self.state_in_value.update_inplace(state)
+                self.binding.synchronize_inputs()
+                self.session.run_with_iobinding(self.binding)
+                self.binding.synchronize_outputs()
+                outputs = self.binding.copy_outputs_to_cpu()
+                output, next_state = outputs[0], outputs[1]
+            else:
+                output, next_state = self.session.run(
+                    [self.output_name, self.state_output_name],
+                    {self.input_name: x, self.state_input_name: state},
+                )
+            if output.shape != self.output_shape or not np.isfinite(output).all():
+                self.reset_state()
+                raise ValueError('Whole-mouth model returned invalid blendshapes')
+            if next_state.shape != self.state_shape or not np.isfinite(next_state).all():
+                self.reset_state()
+                raise ValueError('Whole-mouth model returned invalid temporal state')
+            self._state = np.ascontiguousarray(next_state, dtype=np.float32)
+            if session_id is not None:
+                self._state_session_id = session_id
+            if source_ns is not None:
+                self._state_source_ns = source_ns
         else:
-            output = self.session.run([self.output_name], {self.input_name: x})[0]
-        if output.shape != self.output_shape or not np.isfinite(output).all():
-            raise ValueError('Whole-mouth model returned invalid blendshapes')
+            if self.engine == 'onnxgraph':
+                self.input_value.update_inplace(x)
+                self.binding.synchronize_inputs()
+                self.session.run_with_iobinding(self.binding)
+                self.binding.synchronize_outputs()
+                output = self.binding.copy_outputs_to_cpu()[0]
+            else:
+                output = self.session.run([self.output_name], {self.input_name: x})[0]
+            if output.shape != self.output_shape or not np.isfinite(output).all():
+                raise ValueError('Whole-mouth model returned invalid blendshapes')
         named = dict(zip(self.channels, np.clip(output[0], 0, 1).tolist()))
         # Optimization is not output permission. An explicit zero mask quarantines a candidate.
         values = [named[name] if name in self.output_channels else 0. for name in CHANNELS]

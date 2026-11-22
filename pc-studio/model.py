@@ -98,6 +98,9 @@ class TongueModel:
     output_name = 'logits'
     input_shape = (1, 1, 224, 224)
     output_shape = (1, 1, 56, 56)
+    state_input_name = None
+    state_output_name = None
+    state_shape = None
 
     def __init__(self, checkpoint: str, device: str = "auto"):
         start = time.perf_counter()
@@ -187,22 +190,40 @@ class TongueModel:
             raise RuntimeError(provider+" did not initialize; active providers: "+str(session.get_providers()))
         # Own the selection, so ORT cannot switch providers behind the status display.
         session.disable_fallback()
+        self._configure_ort_state(session)
         sample = np.zeros(self.input_shape, np.float32)
+        state_sample = np.zeros(self.state_shape, np.float32) if self.state_input_name else None
         if engine == "onnxgraph":
             input_value = ort.OrtValue.ortvalue_from_numpy(sample, "cuda", 0)
             output_value = ort.OrtValue.ortvalue_from_shape_and_type(self.output_shape, np.float32, "cuda", 0)
             binding = session.io_binding()
             binding.bind_ortvalue_input(self.input_name, input_value)
             binding.bind_ortvalue_output(self.output_name, output_value)
+            if self.state_input_name:
+                state_in_value = ort.OrtValue.ortvalue_from_numpy(state_sample, "cuda", 0)
+                state_out_value = ort.OrtValue.ortvalue_from_shape_and_type(self.state_shape, np.float32, "cuda", 0)
+                binding.bind_ortvalue_input(self.state_input_name, state_in_value)
+                binding.bind_ortvalue_output(self.state_output_name, state_out_value)
+            else:
+                state_in_value = state_out_value = None
             for _ in range(3):
                 session.run_with_iobinding(binding)
                 binding.synchronize_outputs()
             self.input_value, self.output_value, self.binding = input_value, output_value, binding
+            self.state_in_value, self.state_out_value = state_in_value, state_out_value
         else:
             # Test compilation and first execution before choosing this provider.
-            session.run(None, {self.input_name: sample})
+            feed = {self.input_name: sample}
+            if self.state_input_name:
+                feed[self.state_input_name] = state_sample
+            session.run(None, feed)
+            self.state_in_value = self.state_out_value = None
         self.engine, self.device, self.provider = engine, device, provider
         self.session, self.providers = session, session.get_providers()
+
+    def _configure_ort_state(self, session):
+        """Hook for stateful subclasses to detect and configure recurrent ORT state tensors."""
+        pass
 
     def describe(self) -> dict:
         return dict(engine=self.engine, device=self.device, checkpoint=self.checkpoint, artifact=self.artifact,

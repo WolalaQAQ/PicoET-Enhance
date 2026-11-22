@@ -571,6 +571,7 @@ class Runtime:
                 self.prediction_source = None
                 self.last_header = None
                 self.tongue.clear()
+                self._reset_model_state()
                 if self.personal.wizard is not None:
                     self.personal.cancel()
                     self.personal.error = 'Camera session changed during calibration'
@@ -1136,6 +1137,11 @@ class Runtime:
                        up=prediction.get('up', 0.), down=prediction.get('down', 0.), roll=prediction.get('roll', 0.))
         self.udp.sendto(data, (self.config['output_host'], int(self.config['output_port'])))
 
+    def _reset_model_state(self):
+        reset = getattr(self.model, 'reset_state', None)
+        if callable(reset):
+            reset()
+
     def _expire(self):
         if self.last_header is None or not self.prediction.get('fresh'):
             return
@@ -1144,6 +1150,7 @@ class Runtime:
         if upper > self.config['stale_ms']:
             self.prediction = self._invalid('stale')
             self.tongue.clear()
+            self._reset_model_state()
             self._send_result(self.last_header, self.prediction, upper)
 
     def _inference(self):
@@ -1153,6 +1160,7 @@ class Runtime:
             if not self.capture_only:
                 for _ in range(2):
                     self.model.predict(np.zeros((400, 400), dtype=np.uint8), dict(self.config))
+                self._reset_model_state()
             # Warm Pillow's lazy JPEG plugin and default font before real sources.
             warm_picture = Image.fromarray(np.zeros((400, 400), dtype=np.uint8)).convert('RGB')
             ImageDraw.Draw(warm_picture).text((0, 0), 'warm', fill='white')
@@ -1187,8 +1195,13 @@ class Runtime:
                     decoded = time.perf_counter_ns()
                     if image.shape != (400, 400):
                         raise ValueError('Decoded source dimensions changed')
-                    raw = (dict(values=[0.]*50, valid_mask=0) if self.capture_only else
-                           self.model.predict(image, config))
+                    if self.capture_only:
+                        raw = dict(values=[0.]*50, valid_mask=0)
+                    elif getattr(self.model, 'is_temporal', False):
+                        raw = self.model.predict(image, config, session_id=header.session_id,
+                                                 source_ns=header.mouth_sensor_ns)
+                    else:
+                        raw = self.model.predict(image, config)
                 except Exception:
                     with self.lock:
                         if self.stop_event.is_set() or header.session_id != self.order.session or model_version != self.model_version:
@@ -1335,6 +1348,7 @@ class Runtime:
                 self.socket = None
                 self.running = self.connected = False
                 self.config['enabled'] = False
+                self._reset_model_state()
                 self.pending = None
                 self.prediction = self._invalid('stopped')
                 self.tongue.clear()
