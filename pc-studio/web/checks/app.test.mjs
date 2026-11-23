@@ -629,6 +629,8 @@ test("preview toggle is independent, one request at a time and hidden tabs do no
 test("raw HTTP errors stay available with bilingual known-error explanations", async () => {
   const raw = "POST /api/start · HTTP 400: trained_channels missing"; assert.ok(errorMessage("zh-CN", raw).includes(messages["zh-CN"].manifestInvalid));
   assert.equal(errorMessage("en", "POST /api/model/select · HTTP 400: The adjacent JSON model manifest was not found"), messages.en.modelMissing);
+  assert.equal(errorMessage("zh-CN", "Waiting for next PTJ1 frame"), messages["zh-CN"].cameraStreamWaiting);
+  assert.equal(errorMessage("en", "Waiting for next PTJ1 frame"), messages.en.cameraStreamWaiting);
   await assert.rejects(requestJson(async () => Response.json({error: "model missing"}, {status: 422}), "/api/start", {}), /POST \/api\/start.*HTTP 422.*model missing/);
   await assert.rejects(requestJson(async () => new Response("not json"), "/api/status"), /HTTP 200.*not json/);
 });

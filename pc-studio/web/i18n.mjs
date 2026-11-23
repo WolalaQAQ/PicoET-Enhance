@@ -160,6 +160,7 @@ export const messages = {
     requestError: "That didn't work. Troubleshooting details are under Diagnostics → Connection diagnostics.", modelRequired: "Choose a trained model before you start tracking.", consentRequired: "Tick the consent box before you record.",
     requestTimeout: "The local service took too long to respond.", serviceUnavailable: "The browser can't reach the local service. Check that it is still running.",
     cameraStreamClosed: "The headset camera stream disconnected.",
+    cameraStreamWaiting: "Timed out waiting for frames from the headset mouth camera. Wake the headset, make sure face tracking is active, then stop and start again.",
     modelMissing: "The ONNX model, or the manifest file next to it, was not found.", manifestInvalid: "The model manifest needs the schema pico-mouth50-v1 and a trained_channels list.",
     providerMissing: "The execution provider for the selected device is not installed. Pick another inference device under Settings → Model & inference.", providerInitFailed: "The execution provider for the selected device failed to start. Pick another inference device under Settings → Model & inference.",
     cympleRelayEyebrow: "EYE CAMERA RELAY", cympleRelayTitle: "Forward eye cameras to Cymple",
@@ -381,6 +382,7 @@ export const messages = {
     snapshot: "当前状态快照", expiredSnapshot: "状态快照已失效", unsafeInteger: "数值过大，浏览器无法精确显示；后端应以文本形式返回", requestError: "操作没有完成。排查详情在「诊断」→「连接诊断」中。",
     modelRequired: "开始追踪前，请先选择训练好的模型。", consentRequired: "录制前请先勾选同意。", requestTimeout: "本机服务响应超时。", serviceUnavailable: "浏览器连不上本机服务，请确认服务仍在运行。",
     cameraStreamClosed: "头显相机画面连接已断开。",
+    cameraStreamWaiting: "等待头显嘴部相机画面超时。请确认头显已唤醒并开启面捕，然后先点击停止再重新开始。",
     modelMissing: "找不到 ONNX 模型文件，或它旁边的同名 manifest 文件。", manifestInvalid: "模型 manifest 需要声明 pico-mouth50-v1，并列出 trained_channels。",
     providerMissing: "所选设备对应的执行提供器未安装。请在「设置」→「模型与推理」中换一个推理设备。", providerInitFailed: "所选设备对应的执行提供器启动失败。请在「设置」→「模型与推理」中换一个推理设备。",
     cympleRelayEyebrow: "眼动相机转发", cympleRelayTitle: "把头显眼动相机转发给 Cymple",
@@ -453,7 +455,7 @@ const knownErrors = [["Configure a model checkpoint", "modelRequired"], ["Confir
   ["Start capture-only", "captureRequired"], ["CONTEXT refused", "contextUnavailable"], ["PTJ1 session contradicts", "contextMismatch"],
   ["trained_channels", "manifestInvalid"], ["manifest schema", "manifestInvalid"], ["No such file", "modelMissing"],
   ["ONNX model does not exist", "modelMissing"], ["model manifest was not found", "modelMissing"], ["is not installed", "providerMissing"], ["did not initialize", "providerInitFailed"],
-  ["PTJ1 connection ended within a frame", "cameraStreamClosed"], ["PTJ1 stream closed", "cameraStreamClosed"], ["request timed out", "requestTimeout"], ["Failed to fetch", "serviceUnavailable"],
+  ["Waiting for next PTJ1 frame", "cameraStreamWaiting"], ["PTJ1 connection ended within a frame", "cameraStreamClosed"], ["PTJ1 stream closed", "cameraStreamClosed"], ["request timed out", "requestTimeout"], ["Failed to fetch", "serviceUnavailable"],
   ["No PICO camera service found", "cympleNoDevice"], ["Multiple PICO camera services found", "cympleMultiDevice"],
   ["Invalid Cymple relay settings", "cympleInvalidConfig"], ["Stop the Cymple eye relay before changing", "cympleRelayRunningErr"], ["Cymple eye relay is already running", "cympleRelayRunningErr"]];
 export function errorMessage(language, raw) {
