@@ -6,9 +6,9 @@ An eye-tracking enhancement Magisk module for the PICO 4 Pro: it opens the eye-t
 
 > v2.6.2-dev.1 (development branch) · PICO 4 Pro / PICO OS 5.13.7 · [Changelog](CHANGELOG.md)
 
-**End-to-end mouth tracking development:** `feat/tongue-pc` follows [MouthLink](https://github.com/UndefinedSignal/MouthLink)-style whole-mouth regression: the headset captures images, the PC handles configuration, recording, training and inference, and the matching UnifiedPicoModule branch merges the outputs. Personal images, teacher predictions and student weights stay on the user's PC. Follow the [source-build and testing guide](TONGUE.md); this branch's module includes optional LAN cameras, but no validated general-purpose mouth model.
+**End-to-end mouth tracking development:** `feat/tongue-pc` follows [MouthLink](https://github.com/UndefinedSignal/MouthLink)-style whole-mouth regression: the headset streams LAN camera frames, the PC workbench handles recording, training, 50-channel inference, and native blending, and the matching [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule/tree/feat/tongue-pc) branch feeds VRCFT. Images, labels, and personal weights stay on your PC. See the [PC whole-mouth tracking guide](TONGUE.md) (this branch includes optional LAN cameras and no bundled mouth weights).
 
-Whole-mouth output supports module-side `Hybrid` (fresh native-first) and `ModelOnly` modes. The PC app offers source-time One-Euro smoothing under Settings; `smoothing_ms=0` passes values through unchanged. See [runtime settings](TONGUE.md#3-run-end-to-end).
+The PC workbench provides three channel-routing presets (default **Curated hybrid**: 28 native + 18 model targets, with per-channel overrides) and standard One-Euro filter controls on model channels. See [Run end to end](TONGUE.md#3-run-end-to-end).
 
 ## What it does
 

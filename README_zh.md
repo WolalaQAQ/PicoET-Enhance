@@ -6,9 +6,9 @@
 
 > v2.6.2-dev.1（开发分支）· PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
 
-**端到端嘴追开发：**`feat/tongue-pc`采用[MouthLink](https://github.com/UndefinedSignal/MouthLink)式整嘴回归：头显取图，PC配置、录制、训练和推理，配套UnifiedPicoModule同名分支合并输出。个人图像、教师预测与学生权重留在用户PC。按[源码构建与测试说明](TONGUE_zh.md)使用；本分支的模块包含可选局域网相机，不附带已验收的通用整嘴权重。
+**端到端嘴追开发：**`feat/tongue-pc` 采用 [MouthLink](https://github.com/UndefinedSignal/MouthLink) 式整嘴回归：头显端传输局域网相机画面，PC 工作台完成录制、训练、50 通道推理与原厂合流，配套 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule/tree/feat/tongue-pc) 同名分支输出给 VRCFT。所有图像、标注与个人权重留在用户本机。详见 [PC 端到端整嘴追踪使用指南](TONGUE_zh.md)（本分支包含可选局域网相机，不附带通用整嘴权重）。
 
-整嘴输出可在模块端选择`Hybrid`（原厂有效新鲜值优先）或`ModelOnly`（完整模型）模式。PC设置页提供按源时间计算的One-Euro平滑，`smoothing_ms=0`逐值直通。见[运行设置](TONGUE_zh.md#3-连通全链路)。
+PC 工作台内置三套通道分流预设（推荐默认 **精选混合**：28 项原厂 + 18 项新模型，亦可逐通道自定义），并在模型通道上提供标准 One-Euro 滤波参数。详见[连通全链路](TONGUE_zh.md#3-连通全链路)。
 
 ## 它做什么
 
