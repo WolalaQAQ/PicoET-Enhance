@@ -102,17 +102,17 @@ Stop先disarm并排空回调，再确认shim的join后ACK才标记停止。禁�
 1. 按[接收端说明](https://github.com/WolalaQAQ/UnifiedPicoModule/blob/feat/tongue-pc/TONGUE_zh.md)构建、安装配套UnifiedPicoModule分支。
 2. 启动正常PICO面捕客户端，例如PicoFacialBridge；测试整嘴回归时让VRCFT将面部输出分配给PICO。
 3. PC Studio 选中发现的头显，用“选择文件”选取整嘴 `.onnx` 后启动推理；准备发送结果时启用本机 UDP45682。只有采集需求时，不加载模型、不发送有效模型结果。
-4. 在**追踪**页查看画面；在**诊断**页可独立切换**表情诊断**（核心速览 + 按部位对称分组的 50 通道面板，支持实时来源标签、活跃／来源筛选、搜索与冻结读数）与**连接诊断**（帧率、延迟、提供器、原厂流、源／队列读数和错误详情）；通道分流、后端、时序和端口位于**设置**页。中英文切换保留当前页、未保存输入、诊断视图与筛选状态。
+4. 在**追踪**页查看画面；在**诊断**页可切换**表情诊断**（30 Hz 实时刷新、顶部可置顶监控卡片、按部位分组的 50 通道面板，支持实时来源标签、活跃／来源筛选、搜索、冻结读数，以及可选的**原厂与模型并排对照**，对照视图会标出原厂合并槽位并省略原厂不支持的列）与**连接诊断**（帧率、延迟、提供器、原厂流、源／队列读数和错误详情）；通道分流、滤波、推理和端口位于**设置**页。中英文切换保留当前页、未保存输入、诊断视图与筛选状态。
 
-App 不争夺 PICO 与 Cymple 的嘴部所有权；日常 Cymple 嘴＋PICO 眼使用时保持本工作台停止即可。在设置页上方提供三套分流预设：**精选混合（`curated`，推荐默认）**对实测高信噪比、低串扰的原厂通道（`JawOpen`、`MouthPucker`、`LipFunnelUpper`、`LipFunnelLower`）优先使用头显原生结果，其余低质量／带偏移通道与原厂缺失通道均交由 One-Euro 平滑后的 50 路新模型；**原厂全量混合（`hybrid`）**对头显支持的 37 项均优先用原生值，仅 9 项原厂缺失扩展通道用新模型；**仅新模型（`model_only`）**全部 46 项形态键均用新模型且不订阅 `LABELS\n`。三套预设共用下方的**逐项调整形态键来源**（46 项按解剖部位分 6 组，覆盖全部 29 项独立原厂键、8 项由头显合并源拆分出的上下／左右独立通道及 9 项原厂缺失键）；调整任意单键后会自动记为 `custom`（若仍需至少 1 路原厂通道，则按需复用同一条 `PSL1` 连接）。保存分流修改后会立即热切换，无需中断相机追踪或重启 VRCFT。`UnifiedPicoModule` 在 UDP45682 收到活跃 `MFR1` 流时直接输出合流结果，并自动让 `Bridge` 仅订阅眼动（`PXR_SUB` 掩码 3 → 1，眼动不断流），停止发送或超时后无缝恢复 `Bridge` 直连面捕。
+App 不争夺 PICO 与 Cymple 的嘴部所有权；日常 Cymple 嘴＋PICO 眼使用时保持本工作台停止即可。在设置页上方提供三套分流预设：**精选混合（`curated`，推荐默认）**将 28 项稳定基础口型交由头显原生 `final33` 直接驱动，将 18 项交由 One-Euro 滤波后的 50 路新模型——包括 9 项原厂缺失通道（`TongueLeft`/`Right`/`Up`/`Down`/`Roll`、`CheekSuckLeft`/`Right`、`MouthTightenerLeft`/`Right`）、3 项耦合或单侧拆分通道（`TongueOut`、`CheekPuffLeft`/`Right`）以及 6 项原厂串扰明显的通道（`MouthSmileL`/`R`、`MouthFrownL`/`R`、`MouthUpperUpL`/`R`）；**原厂全量混合（`hybrid`）**对头显支持的 37 项均优先用原生值，仅 9 项原厂缺失扩展通道用新模型；**仅新模型（`model_only`）**全部 46 项形态键均用新模型且不订阅 `LABELS\n`。三套预设共用下方的**逐项调整形态键来源**（46 项按解剖部位分 6 组，覆盖全部 29 项独立原厂键、8 项由头显合并源拆分出的上下／左右独立通道及 9 项原厂缺失键）；调整任意单键后会自动记为 `custom`（只要仍有至少 1 路选择原厂，就会按需复用同一条 `PSL1` 连接）。保存分流修改后会立即热切换，无需中断相机追踪或重启 VRCFT。`UnifiedPicoModule` 在 UDP45682 收到活跃 `MFR1` 流时直接输出合流结果，并自动让 `Bridge` 仅订阅眼动（`PXR_SUB` 掩码 3 → 1，眼动不断流），停止发送或超时后无缝恢复 `Bridge` 直连面捕。
 
-设置→连接与性能提供 **One-Euro静止平滑（毫秒）**（`smoothing_ms`，默认20；0逐值直通）。face50每个有效通道按实际`mouth_sensor_ns`差值计算，静止截止频率为`1000/(2π*smoothing_ms)` Hz，速度估计截止频率1 Hz、速度系数4，动作越快平滑越弱。新会话、换模型、无效输出、掩码变化和超过`stale_ms`的源间隔都会清状态。日志同时保留`raw_values`／`raw_channels`、滤波值和发布时间。滤波用于减小抖动，不修复模型持续误判。
+**设置→滤波与平滑**提供标准 One-Euro 滤波控件，保存后即时热生效：**启用 One-Euro 滤波**（`filter_enabled`，默认开启）、**最小截止频率 min_cutoff（Hz）**（`filter_min_cutoff`，默认 `8.0`）、**速度系数 beta**（`filter_beta`，默认 `4.0`）和**导数截止频率 d_cutoff（Hz）**（`filter_d_cutoff`，默认 `1.0`）；旧配置中的 `smoothing_ms` 仍自动换算兼容（`min_cutoff = 1000/(2π*smoothing_ms)` Hz，`0` 关闭滤波）。face50 模式下，滤波先按实际 `mouth_sensor_ns` 间隔作用于各有效模型通道，再合入原厂通道，因此原生 `stock` 通道直通头显 `final33`，不会叠加二次滤波。新会话、换模型、无效输出、掩码变化和超过 `stale_ms` 的源间隔都会重置滤波状态。日志同时保留 `raw_values`／`raw_channels`、滤波值与发布时间。模型路径、推理设备、结果有效期（`stale_ms`）和预览帧率位于**设置→模型与推理**；头显地址与端口位于**设置→头显与端口连接**。
 
 ### 整嘴模型契约
 
 schema为`pico-mouth50-v1`，字段顺序由`pc-studio/face_schema.py`定义：MouthLink原44字段，再追加上下唇各自左右横移四项和上下Funnel两项。保留旧聚合head，不从单个原厂量伪造独立上下／左右。
 
-同名JSON声明schema、`channels`、输入`width/height`、`trained_channels`、`validated_channels`和`valid_mask`。训练记录优化覆盖，只有通过独立验证的通道才可置输出位；运行端也遵守显式的零掩码或更窄掩码。不传`--approval`的导出保留训练来源，输出有效位为零。预处理为完整灰度图的Pillow `BILINEAR`缩放后除以255，归一化由模型完成，不使用旧sqrt／mask几何，也不做侧视图水平翻转。
+同名JSON声明schema、`channels`、输入`width/height`、`trained_channels`、`validated_channels`和`valid_mask`。训练记录优化覆盖，只有通过独立验证的通道才可置输出位；运行端也遵守显式的零掩码或更窄掩码。不传`--approval`的导出保留训练来源，输出有效位为零。预处理为完整灰度图的Pillow `BILINEAR`缩放后除以255，归一化由模型完成。除标准单帧 ONNX（`frame` → `blendshapes`）外，运行端也兼容带 `[1, H]` 隐藏状态输入输出（`h_in`／`h_out`）的有状态时序 ONNX 模型，并在新会话、换模型、无效输出或超过 `stale_ms` 的源间隔时重置隐藏状态。不使用旧sqrt／mask几何，也不做侧视图水平翻转。
 
 MFR1直接发送命名连续控制值，不套用旧TJR方向.15–.55映射、伸舌硬阈值或Out方向相乘。旧TJR只由配套接收器保留数值兼容。输入源仍是400×400／90Hz JPEG95；模型输入尺寸在PC决定，模型必须在实际压缩域及不同佩戴上验证。
 
