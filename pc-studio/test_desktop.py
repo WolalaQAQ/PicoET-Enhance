@@ -1,4 +1,6 @@
 """Local discovery, native path selection and HTTP wiring; no headset access."""
+from contextlib import ExitStack
+import errno
 import json
 from pathlib import Path
 import socket
@@ -18,6 +20,24 @@ from runtime import Runtime, ROOT
 from stock import CaptureContext
 
 
+def bind_discovery_loopback(server_type, handler):
+    """Reserve UDP first: Windows TCP may allocate a port excluded for UDP."""
+    for attempt in range(10):
+        with ExitStack() as cleanup:
+            udp = cleanup.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+            udp.bind(('127.0.0.1', 0))
+            try:
+                tcp = server_type(udp.getsockname(), handler)
+            except OSError as exc:
+                retryable = exc.errno in (errno.EACCES, errno.EADDRINUSE, 10013, 10048)
+                if not retryable or attempt == 9:
+                    raise
+                continue
+            udp.settimeout(.1)
+            cleanup.pop_all()
+            return tcp, udp
+
+
 class Source:
     def __init__(self, context, advertised=None, duplicate=False):
         self.commands = []
@@ -30,11 +50,8 @@ class Source:
                 if command == b'CONTEXT\n':
                     self.request.sendall(context)
 
-        self.tcp = socketserver.TCPServer(('127.0.0.1', 0), Handler)
+        self.tcp, self.udp = bind_discovery_loopback(socketserver.TCPServer, Handler)
         self.endpoint = self.tcp.server_address
-        self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp.bind(self.endpoint)
-        self.udp.settimeout(.1)
         self.stopped = threading.Event()
         self.thread = threading.Thread(target=self.tcp.serve_forever, kwargs={'poll_interval': .01})
         self.thread.start()

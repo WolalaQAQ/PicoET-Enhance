@@ -25,6 +25,7 @@ from face_schema import INDEX
 from face_weak_supervision import choose_mapping, derive_row, pair_rejections
 from runtime import Runtime
 from stock import CaptureContext, StockRecord
+from test_desktop import bind_discovery_loopback
 from test_face_runtime import FaceManualRuntime
 from test_runtime import header, jpeg, wait_for
 
@@ -97,15 +98,11 @@ class LoopbackCamera:
                             self.request.sendall(stock.pack())
                     self.request.recv(1)
 
-        self.tcp = socketserver.ThreadingTCPServer(('127.0.0.1', 0), Handler)
+        self.tcp, self.udp = bind_discovery_loopback(socketserver.ThreadingTCPServer, Handler)
         self.tcp.daemon_threads = True
         self.endpoint = self.tcp.server_address
         self.tcp_thread = threading.Thread(target=self.tcp.serve_forever, kwargs={'poll_interval': .01})
         self.tcp_thread.start()
-        self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp.bind(self.endpoint)
-        self.udp.settimeout(.1)
-
         def answer():
             while not self.stopped.is_set():
                 try:
