@@ -192,6 +192,25 @@ Key training options:
 - **Student input & learning rates**: MobileNetV3-small defaults to 160×160 (`--student-input 224` enables higher resolution); default head learning rates are `1e-4` for teachers and `1e-3` for students.
 - **Loss & augmentation**: defaults to masked MSE with no augmentation; `--loss huber` enables Smooth L1 (β=0.1) and `--augmentation mild` adds small shifts, rotations, exposure/gamma jitter, and noise without horizontal flipping.
 
+### Full-resolution continuous training pipeline (`mouth50_trainer`)
+
+For full 400×400 50-channel continuous regression—using the spatial-pyramid student (`VFTStudent50`), de-binarized continuous loss (`debinarized_continuous_loss`), 5-TTA confidence-weighted soft distillation, IR physical domain augmentation, and optional causal GRU-256 temporal fine-tuning—use the standalone offline package under `pc-studio/mouth50_trainer/`:
+
+```powershell
+pc-studio/.venv/Scripts/python.exe pc-studio/mouth50_trainer/pipeline.py --help
+```
+
+The pipeline exposes four stages (pass local backbone source and weights via `--dino-repo`, `--dino-weights`, and `--mnv3-weights`, or set `MOUTH50_DINO_REPO`, `MOUTH50_DINO_WEIGHTS`, and `MOUTH50_MNV3_WEIGHTS`):
+
+| Stage | Purpose |
+|---|---|
+| `teacher` | Fine-tune the DINOv3-L teacher with a 12-query spatial attention head and `debinarized_continuous_loss` |
+| `kd` | Generate 5-TTA soft targets and continuous confidence weights (supports `--resume`) |
+| `student` | Distill a single-frame `VFTStudent50` (`small@384 pyramid roi=400` by default) with cosine restarts, EMA, and ONNX export |
+| `temporal` | Optional: fine-tune a stateful `StatefulGRUStudent50` on contiguous clips and export ONNX with `h_in`/`h_out` |
+
+Pass `--data-dir` (containing `vft50_train.jsonl` and `vft50_val71.jsonl`) and `--out-dir` to each stage. Exported `.onnx` / `.json` pairs match the workbench manifest contract and default to `valid_mask: 0` until validated.
+
 ### Local replay
 
 Use **Settings → Replay a saved recording** to test offline with a local `.npz` file containing `images[N, 400, 400]` (uint8), `seq[N]`, and `times[N, 3]` (source nanoseconds), plus optional `vendor_ns` and `raw_identity`. Stop replay before starting a live recording.

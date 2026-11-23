@@ -192,6 +192,25 @@ pc-studio/.venv/Scripts/python.exe pc-studio/face_train.py --help
 - **学生输入与学习率**：学生默认 160×160（可用 `--student-input 224` 提升分辨率，基于 MobileNetV3-small），默认头学习率教师 `1e-4`、学生 `1e-3`。
 - **损失与增强**：默认掩码 MSE、无增强；支持 `--loss huber`（Smooth L1，β=0.1）与 `--augmentation mild`（小幅平移、旋转、曝光／gamma 与噪声，不做水平镜像）。
 
+### 进阶全分辨率连续训练流水线（`mouth50_trainer`）
+
+如果需要训练全 400×400 输入的 50 通道连续回归模型（支持空间金字塔学生 `VFTStudent50`、解二值化连续损失 `debinarized_continuous_loss`、5-TTA 置信度软蒸馏、近红外物理域增强与可选因果 GRU-256 时序微调），可直接调用独立的离线训练包 `pc-studio/mouth50_trainer/`：
+
+```powershell
+pc-studio/.venv/Scripts/python.exe pc-studio/mouth50_trainer/pipeline.py --help
+```
+
+流水线分为四个独立子命令（本地骨干源码与权重可通过 `--dino-repo`、`--dino-weights`、`--mnv3-weights` 传入，或设置环境变量 `MOUTH50_DINO_REPO`、`MOUTH50_DINO_WEIGHTS`、`MOUTH50_MNV3_WEIGHTS`）：
+
+| 子命令 | 作用 |
+|---|---|
+| `teacher` | 使用 `debinarized_continuous_loss` 与 12-query 空间注意力头微调 DINOv3-L 教师模型 |
+| `kd` | 生成 5-TTA 软标签与连续置信度权重（支持 `--resume` 断点续跑） |
+| `student` | 蒸馏训练单帧 `VFTStudent50`（默认 `small@384 pyramid roi=400`，含余弦重启、EMA 与 ONNX 导出） |
+| `temporal` | 可选：在连续片段上微调有状态 `StatefulGRUStudent50` 并导出带 `h_in`／`h_out` 的 ONNX |
+
+各阶段通过 `--data-dir` 指定包含 `vft50_train.jsonl`、`vft50_val71.jsonl` 的数据目录，通过 `--out-dir` 指定输出路径；导出的 `.onnx` 与同名 `.json` 清单可直接被工作台加载（默认保持 `valid_mask: 0`，需经独立验收后再解锁对应通道）。
+
 ### 本地数据回放
 
 在 **设置 → 回放已保存的录制** 中可加载本地 `.npz` 数据集离线调试（无需连接头显），文件需包含 `images[N, 400, 400]`（uint8）、`seq[N]` 与 `times[N, 3]`（源纳秒），可选附带 `vendor_ns` 与 `raw_identity`。开始实时录制前需先停止回放。
