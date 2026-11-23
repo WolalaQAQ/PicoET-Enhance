@@ -16,6 +16,31 @@ from cymple_relay import CympleEyeRelay
 from updater import UpdateChecker
 
 
+_STATIC_CONTENT_TYPES = {
+    '.mjs': 'text/javascript; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+    '.htm': 'text/html; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.ico': 'image/x-icon',
+    '.webp': 'image/webp',
+}
+
+
+def _static_content_type(file):
+    # Windows registry associations must not override the web assets' media types.
+    content_type = _STATIC_CONTENT_TYPES.get(file.suffix.lower())
+    if content_type is not None:
+        return content_type
+    content_type = mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
+    return f'{content_type}; charset=utf-8' if content_type.startswith('text/') else content_type
+
+
 def make_guide_server(store, port=57102):
     """No Runtime or data routes: safe to forward only this display port to the headset."""
     web = ROOT/'web'
@@ -54,8 +79,7 @@ def make_guide_server(store, port=57102):
             file = (web/relative).resolve() if relative else None
             if not file or not file.is_relative_to(web.resolve()) or not file.is_file():
                 return self.respond(404, {'error': 'Display route not found'})
-            return self.respond(200, file.read_bytes(),
-                                mimetypes.guess_type(file.name)[0] or 'application/octet-stream')
+            return self.respond(200, file.read_bytes(), _static_content_type(file))
 
         def do_POST(self):
             if urlsplit(self.path).path != '/api/display':
@@ -154,15 +178,7 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
             file = (web/relative).resolve()
             if not file.is_relative_to(web.resolve()) or not file.is_file():
                 return self.respond(404, {'error': 'Not found'})
-            if file.name.endswith('.ico'):
-                content_type = 'image/x-icon'
-            elif file.name.endswith('.png'):
-                content_type = 'image/png'
-            else:
-                content_type = mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
-            if content_type.startswith('text/') or content_type == 'application/javascript':
-                content_type += '; charset=utf-8'
-            return self.respond(200, file.read_bytes(), content_type)
+            return self.respond(200, file.read_bytes(), _static_content_type(file))
 
         def do_POST(self):
             origin = self.headers.get('Origin')

@@ -215,12 +215,24 @@ class DisplayServerTests(unittest.TestCase):
             thread.start()
             base = f'http://127.0.0.1:{server.server_port}'
             try:
-                with urlopen(base+'/') as response:
-                    self.assertEqual(response.read(), (Path(__file__).parent/'web/index.html').read_bytes())
+                with patch('mimetypes.guess_type', return_value=('text/plain', None)):
+                    for path, filename, content_type in (
+                        ('/', 'index.html', 'text/html; charset=utf-8'),
+                        ('/static/app.mjs', 'app.mjs', 'text/javascript; charset=utf-8'),
+                        ('/static/i18n.mjs', 'i18n.mjs', 'text/javascript; charset=utf-8'),
+                        ('/static/styles.css', 'styles.css', 'text/css; charset=utf-8'),
+                        ('/static/guide-reference/manifest.json', 'guide-reference/manifest.json',
+                         'application/json; charset=utf-8'),
+                        ('/static/guide-reference/TongueRoll-motion.webp', 'guide-reference/TongueRoll-motion.webp',
+                         'image/webp'),
+                    ):
+                        with self.subTest(path=path), urlopen(base+path) as response:
+                            self.assertEqual(response.status, 200)
+                            self.assertEqual(response.headers['Content-Type'], content_type)
+                            self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+                            self.assertEqual(response.read(), (Path(__file__).parent/'web'/filename).read_bytes())
                 with urlopen(base+'/api/status') as response:
                     self.assertTrue(json.load(response)['read_only'])
-                with urlopen(base+'/static/guide-reference/TongueRoll-motion.webp') as response:
-                    self.assertGreater(len(response.read()), 1000)
                 for path in ('/api/recording/image', '/api/preview.jpg', '/api/training', '/static/../backend.py', '/static/guide-viewer.mjs'):
                     with self.assertRaises(HTTPError) as error:
                         urlopen(base+path)

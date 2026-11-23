@@ -402,10 +402,18 @@ class RuntimeTests(unittest.TestCase):
             self.assertFalse(json.load(response)['running'])
         with urlopen(base+'/api/preview.jpg') as response:
             self.assertEqual(response.status, 204)
-        for module in (ROOT/'web').glob('*.mjs'):
-            with self.subTest(module=module.name), urlopen(base+'/static/'+module.name) as response:
-                self.assertIn(response.headers.get_content_type(), ('text/javascript', 'application/javascript'))
-                self.assertEqual(response.read(), module.read_bytes())
+        with patch('mimetypes.guess_type', return_value=('text/plain', None)):
+            for path, filename, content_type in (
+                ('/', 'index.html', 'text/html; charset=utf-8'),
+                ('/static/app.mjs', 'app.mjs', 'text/javascript; charset=utf-8'),
+                ('/static/i18n.mjs', 'i18n.mjs', 'text/javascript; charset=utf-8'),
+                ('/static/styles.css', 'styles.css', 'text/css; charset=utf-8'),
+            ):
+                with self.subTest(path=path), urlopen(base+path) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.headers['Content-Type'], content_type)
+                    self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+                    self.assertEqual(response.read(), (ROOT/'web'/filename).read_bytes())
         request = Request(base+'/api/config', json.dumps({'model_path': ''}).encode(),
                           {'Content-Type': 'application/json'})
         with urlopen(request) as response:
