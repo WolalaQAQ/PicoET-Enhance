@@ -1,4 +1,4 @@
-"""Mouth50 v4 label rules. Capture windows, holdout membership and calibration are caller inputs."""
+"""Mouth50 v6 label rules. Capture windows, holdout membership and calibration are caller inputs."""
 from collections.abc import Sequence
 from copy import deepcopy
 
@@ -27,15 +27,30 @@ SPEECH_WEAK_CHANNELS = {
 
 # Directional tongue TongueOut targets raised so turning tongue does not under-extend TongueOut
 DIRECTIONAL_TONGUE_OUT_TARGETS = {
-    "TongueLeft": 0.78,
-    "TongueRight": 0.85,
-    "TongueUp": 0.85,
-    "TongueDown": 0.85,
-    "tongue_right_up": 0.78,
-    "tongue_right_down": 0.78,
-    "tongue_left_down": 0.78,
-    "tongue_left_up": 0.68,
-    "TongueRoll": 0.65,
+    "TongueLeft": 0.94,
+    "TongueRight": 0.94,
+    "TongueUp": 0.94,
+    "TongueDown": 0.94,
+    "tongue_right_up": 0.90,
+    "tongue_right_down": 0.90,
+    "tongue_left_down": 0.90,
+    "tongue_left_up": 0.88,
+    "TongueRoll": 0.90,
+}
+
+TONGUE_OUT_GRADIENT_TARGETS = {
+    "tongue_short": 0.42,
+    "tongue_medium": 0.82,
+    "TongueOut": 0.96,
+    "tongue_long": 0.99,
+    "jaw_tongue_small": 0.88,
+    "jaw_tongue_large": 0.92,
+}
+
+CHEEK_SUCK_HOLDS = {
+    "CheekSuckLeft": ({"CheekSuckLeft": 0.90}, 2.8),
+    "CheekSuckRight": ({"CheekSuckRight": 0.90}, 2.8),
+    "suck_both": ({"CheekSuckLeft": 0.90, "CheekSuckRight": 0.90}, 2.4),
 }
 
 # Conflicting composite prompts excluded from training/val/KD/clips (kept in session_order for adjacency settling)
@@ -61,6 +76,7 @@ ISOLATED_POSE_POSITIVES = {
 _SQUINT = ("CheekSquintL", "CheekSquintR")
 _SNEER = ("NoseSneerL", "NoseSneerR")
 _SUCK = ("CheekSuckLeft", "CheekSuckRight")
+_TIGHTENER = ("MouthTightenerLeft", "MouthTightenerRight")
 _ROLL = ("MouthRollLower", "MouthRollUpper")
 _FROWN = ("MouthFrownL", "MouthFrownR")
 _FUNNEL = ("MouthFunnel", "LipFunnelUpper", "LipFunnelLower")
@@ -69,9 +85,9 @@ _FUNNEL_PROMPTS = (*_FUNNEL, "funnel_both")
 
 _NEGATIVE_GROUPS = (
     (("MouthClose", "MouthPucker", "negative_pucker_release", *_FROWN, *_ROLL,
-      "MouthPressL", "MouthPressR", "MouthTightenerLeft", "MouthTightenerRight",
+      "MouthPressL", "MouthPressR", *_TIGHTENER,
       *_FUNNEL, "TongueRoll"), _SUCK),
-    ((*_SUCK, "suck_both"), _ROLL),
+    ((*_SUCK, "suck_both"), (*_ROLL, *_TIGHTENER)),
     (("MouthSmileL", "MouthSmileR", "negative_teeth"), ("CheekPuffLeft", "CheekPuffRight")),
     (("MouthPressL", "MouthPressR", "MouthClose", "CheekPuff", "CheekPuffLeft", "CheekPuffRight"), _FROWN),
     (_FUNNEL_PROMPTS, ("MouthPucker",)),
@@ -101,6 +117,12 @@ def apply_v4_prompt_rules(pid: str, spec: dict) -> dict:
         out.setdefault("pos", {})[pid] = 0.70
     if pid in DIRECTIONAL_TONGUE_OUT_TARGETS:
         out.setdefault("pos", {})["TongueOut"] = DIRECTIONAL_TONGUE_OUT_TARGETS[pid]
+    if pid in TONGUE_OUT_GRADIENT_TARGETS:
+        out.setdefault("pos", {})["TongueOut"] = TONGUE_OUT_GRADIENT_TARGETS[pid]
+    if pid in CHEEK_SUCK_HOLDS:
+        suck_pos, suck_w = CHEEK_SUCK_HOLDS[pid]
+        out["pos"] = dict(suck_pos)
+        out["pos_weight"] = suck_w
     if pid in ISOLATED_POSE_NEGATIVES:
         base = () if pid == "TongueLeft" else out.get("neg", ())
         out["neg"] = list(dict.fromkeys((*base, *ISOLATED_POSE_NEGATIVES[pid])))
@@ -213,7 +235,7 @@ def build_frame_labels(
             weights[IDX[c]] = 1.4
 
     elif phase == "sweep_left":
-        targets[IDX["TongueOut"]] = 0.80
+        targets[IDX["TongueOut"]] = 0.92
         weights[IDX["TongueOut"]] = 2.2
         targets[IDX["TongueLeft"]] = 0.85
         weights[IDX["TongueLeft"]] = 2.2
@@ -228,7 +250,7 @@ def build_frame_labels(
             weights[IDX["JawOpen"]] = 0.25
 
     elif phase == "sweep_center":
-        targets[IDX["TongueOut"]] = 0.90
+        targets[IDX["TongueOut"]] = 0.96
         weights[IDX["TongueOut"]] = 2.2
         for c in ("TongueLeft", "TongueRight", "TongueUp", "TongueDown", "TongueRoll"):
             targets[IDX[c]] = 0.0
@@ -241,7 +263,7 @@ def build_frame_labels(
             weights[IDX["JawOpen"]] = 0.25
 
     elif phase == "sweep_right":
-        targets[IDX["TongueOut"]] = 0.85
+        targets[IDX["TongueOut"]] = 0.92
         weights[IDX["TongueOut"]] = 2.2
         targets[IDX["TongueRight"]] = 0.85
         weights[IDX["TongueRight"]] = 2.2
@@ -270,6 +292,7 @@ def build_frame_labels(
 
     elif phase == "carryover_release":
         # Re-attributed prompt k release tail inside prompt k+1 [0.0, t_carry_end]
+        pos_dict = spec.get("pos", {})
         allowed_weak = allowed_weak_channels_v3(pid, spec)
         next_avoid = set()
         if next_spec is not None and next_pid is not None:
@@ -303,10 +326,10 @@ def build_frame_labels(
                 targets[ci] = round(v, 4)
                 weights[ci] = 0.65 if (0.05 < v < 0.80) else 0.40
 
-        # Priority 3: Gated frozen-DINOv3 ramp targets for non-HIGH_SNR channels
+        # Priority 3: Gated frozen-DINOv3 ramp targets for non-HIGH_SNR channels owned by pid
         if ramp_targets:
             for ch, val in ramp_targets.items():
-                if ch in HIGH_SNR_RAW33:
+                if ch not in pos_dict or ch in HIGH_SNR_RAW33:
                     continue
                 targets[IDX[ch]] = float(val)
                 weights[IDX[ch]] = 0.80
@@ -399,7 +422,7 @@ def build_frame_labels(
                 weights[IDX[c]] = max(weights[IDX[c]], w_to)
 
         # 4. Explicit pose positives
-        pos_w = 2.2 if spec.get("vis") == "CLEAR" else 1.8
+        pos_w = spec.get("pos_weight", 2.2 if spec.get("vis") == "CLEAR" else 1.8)
         for ch, val in pos_dict.items():
             v = float(val)
             if ch in HIGH_SNR_RAW33 and cal33 is not None and not (ch == "MouthPucker" and pucker_excluded):

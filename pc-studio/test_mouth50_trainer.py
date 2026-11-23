@@ -423,14 +423,30 @@ class PortableTrainerTests(unittest.TestCase):
         self.assertIn("MouthUpperRight", left["neg"])
         self.assertIn("JawRight", rules.apply_v4_prompt_rules("MouthLowerLeft", source)["neg"])
         suck = rules.apply_v4_prompt_rules("CheekSuckLeft", {"tongue_safe_zero": True})
+        self.assertEqual(suck["pos"], {"CheekSuckLeft": 0.90})
+        self.assertEqual(suck["pos_weight"], 2.8)
         self.assertIn("MouthRollLower", suck["neg"])
         self.assertIn("MouthRollUpper", suck["neg"])
+        self.assertIn("MouthTightenerLeft", suck["neg"])
+        self.assertIn("MouthTightenerRight", suck["neg"])
         self.assertNotIn("MouthRollLower", rules.allowed_weak_channels_v3("CheekSuckLeft", suck))
+        t_hold, w_hold = rules.build_frame_labels("CheekSuckLeft", "hold", suck)
+        self.assertEqual(t_hold[face_schema.INDEX["CheekSuckLeft"]], 0.90)
+        self.assertEqual(w_hold[face_schema.INDEX["CheekSuckLeft"]], 2.8)
+        t_carry, w_carry = rules.build_frame_labels(
+            "CheekSuckLeft", "carryover_release", suck,
+            ramp_targets={"CheekSuckLeft": 0.45, "CheekSuckRight": 0.55},
+        )
+        self.assertEqual(t_carry[face_schema.INDEX["CheekSuckLeft"]], 0.45)
+        self.assertIsNone(t_carry[face_schema.INDEX["CheekSuckRight"]])
+        self.assertEqual(w_carry[face_schema.INDEX["CheekSuckRight"]], 0.0)
         self.assertIn("CheekSuckRight", rules.apply_v4_prompt_rules("TongueRoll", {})["neg"])
         funnel = rules.apply_v4_prompt_rules("LipFunnelUpper", {"coact": {"MouthPucker", "JawOpen"}})
         self.assertEqual(funnel["coact"], {"JawOpen"})
         self.assertIn("MouthPucker", funnel["neg"])
-        self.assertEqual(rules.apply_v4_prompt_rules("TongueLeft", {})["pos"], {"TongueLeft": 0.85, "TongueOut": 0.78})
+        self.assertEqual(rules.apply_v4_prompt_rules("TongueLeft", {})["pos"], {"TongueLeft": 0.85, "TongueOut": 0.94})
+        self.assertEqual(rules.apply_v4_prompt_rules("TongueRoll", {})["pos"], {"TongueOut": 0.90})
+        self.assertEqual(rules.apply_v4_prompt_rules("tongue_medium", {})["pos"], {"TongueOut": 0.82})
         self.assertEqual(rules.SKIPPED_PROMPTS, {"lips_opposed_a", "lips_opposed_b"})
 
     def test_v4_physical_coactivation_and_decoupled_zeros(self):
