@@ -20,6 +20,10 @@ class CaptureContextUnavailable(ConnectionError):
     """The daemon did not provide an attached, verified capture owner."""
 
 
+class IdleStockTimeout(TimeoutError):
+    """No new PSL1/PSE1 record started before the socket read timeout."""
+
+
 @dataclass(frozen=True)
 class CaptureContext:
     capture_session_id: int
@@ -146,7 +150,12 @@ class StockRecord:
 def _read_exact(sock, count, name):
     data = bytearray()
     while len(data) < count:
-        part = sock.recv(count - len(data))
+        try:
+            part = sock.recv(count - len(data))
+        except TimeoutError as error:
+            if not data:
+                raise IdleStockTimeout(f'Waiting for next {name}') from error
+            raise
         if not part:
             raise EOFError(f'partial {name}: {len(data)}/{count}')
         data.extend(part)

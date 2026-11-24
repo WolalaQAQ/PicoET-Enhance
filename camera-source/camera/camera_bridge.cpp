@@ -100,6 +100,10 @@ void CameraBridge::on_frame(uint64_t entry_epoch, const void* listener, const vo
     // Predicate update under the same mutex prevents lost wakeups in detach_and_drain.
     lock.lock(); --flight; lock.unlock(); drained.notify_all();
 }
+void CameraBridge::set_audited(bool audited) {
+    std::lock_guard<std::mutex> lock(gate);
+    audited_camera5 = audited;
+}
 void CameraBridge::on_stock(const PTJStockRecord& input) {
     std::unique_lock<std::mutex> lock(gate, std::try_to_lock);
     if (!lock.owns_lock() || !accepting.load(std::memory_order_acquire) || !stock_submit) return;

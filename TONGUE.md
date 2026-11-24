@@ -71,7 +71,7 @@ After installing this branch's Magisk module and companion app:
 
 1. Close other eye- and face-tracking clients on the headset once before first attachment.
 2. Open **PicoET-Enhance → LAN broadcast** on the headset and turn on the master switch (defaults off and remembers your choice; the page displays live status, stream addresses, and client counts). The **Post-processing** tab keeps the original eye/mouth parameter panel.
-3. If you want to blend native mouth channels on the PC or save native labels while recording, also turn on **Mouth** under **Result sharing**.
+3. If you want to blend native mouth channels on the PC or save native labels while recording, also turn on **Mouth** under **Result sharing** (`PSL1` records are emitted by the enhancement hook, so keep `PicoET-Enhance` active in enhancement mode rather than stock `off`).
 
 > The LAN TCP streams are unencrypted and unauthenticated. Use them only on a trusted private network and do not expose or forward these ports externally.
 
@@ -104,7 +104,7 @@ Keep the `--state` file across `status`, `stop`, and subsequent `start` calls wi
 3. In the PC workbench, choose your headset and whole-mouth `.onnx` model, then click **Start tracking**. Once video and meters look right, turn on **Send expressions to VRCFaceTracking** under **Settings** (local UDP `45682`).
 4. Watch the live feed on **Tracking** and verify channel response and latency on **Diagnostics**.
 
-While `UnifiedPicoModule` receives active `MFR1` frames on UDP `45682`, it writes the merged 50-channel output directly and lowers Bridge's face demand to eye-only (`PXR_SUB` mask `3 → 1`), keeping eye tracking uninterrupted; stopping or expiring seamlessly restores direct Bridge face tracking. When running a Cymple-mouth / PICO-eyes setup, simply leave this workbench stopped.
+While `UnifiedPicoModule` receives active `MFR1` frames on UDP `45682`, it writes the channels enabled in `valid_mask`. When all 33 native mouth channels are covered, it lowers Bridge's face demand to eye-only (`PXR_SUB` mask `3 → 1`) without interrupting eye tracking. If a model covers only a subset (such as a tongue-only personal model) or headset `PSL1` is temporarily unavailable, uncovered channels stay `valid_mask=0` and Bridge keeps native face tracking active (`mask=3`) so jaw and lip shapes do not drop to zero; channels explicitly set to **Off** (`off`) are emitted as `valid_mask=1, value=0.0`. Stopping or expiring restores direct Bridge tracking. When running a Cymple-mouth / PICO-eyes setup, simply leave this workbench stopped.
 
 ### Channel routing presets
 

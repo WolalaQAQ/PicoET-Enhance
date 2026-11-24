@@ -15,6 +15,10 @@ English | [简体中文](CHANGELOG_zh.md)
 - Keep live camera preview visible during guidance. Choose automatic or manual step advance, adjust preparation time, move to any step, and resume the last unfinished guide from the recording page.
 - Distinguish an image stream closing between frames from an incomplete header or payload.
 
+### Fixed
+- **PSL1 stock-stream stability & reconnect reliability**: distinguish idle record-boundary waits (`IdleStockTimeout`) from partial-read stalls in PC Studio's `LABELS\n` reader so brief cold-start or idle gaps no longer tear down and reconnect the TCP stream every 3 s; enable TCP keepalive, `TCP_NODELAY`, and cancellable connects on the stock socket. On the headset side, automatically bind `picoet_set_stock_sink` in the camera control loop if `libpicoet_hook.so` attaches after camera startup, reclaim dead single-slot `stock_client` sockets before accepting a new `LABELS`/`EYES` subscriber, and drain queued stock records per loop iteration.
+- **Explicit `off` vs missing-channel `MFR1` semantics**: emit channels explicitly set to `off` as `valid_mask=1, value=0.0` while leaving unsupported model channels or unavailable `PSL1` stock channels at `valid_mask=0`, allowing `UnifiedPicoModule` to preserve Bridge native jaw/lip tracking for partial-channel models and `PSL1` dropouts.
+
 ### Design Rationale
 - Keep channel-routing decisions and live tuning in PC Studio rather than VRCFaceTracking module JSON so users can toggle native/model per channel in real time while direct `Bridge → UnifiedPicoModule` users keep their existing path untouched, and reuse the single `PSL1` TCP slot allowed per headset daemon.
 - Use actual image-sensor intervals and a speed-adaptive cutoff to reduce jitter without a fixed frame queue. Keep model inference stateless and filtering in the runtime.

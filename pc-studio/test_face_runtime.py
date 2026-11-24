@@ -111,6 +111,7 @@ class FaceRuntimeTests(unittest.TestCase):
         self.assertEqual(self.runtime.recorder.status()['stocks'], 0)
 
     def test_named_values_are_direct_and_manifest_mask_wins_over_random_heads(self):
+        self.runtime.configure(dict(mouth_mode='model_only'))
         with patch('runtime.apply_calibration', side_effect=AssertionError('mask geometry used')):
             self.start(); self.submit(); wait_for(lambda: self.runtime.counts['inferred'] == 1)
         p = self.runtime.prediction
@@ -131,6 +132,7 @@ class FaceRuntimeTests(unittest.TestCase):
         self.assertEqual(self.runtime._face_prediction(raw)['valid_mask'], 1 << INDEX['TongueOut'])
 
     def test_face50_logs_keep_raw_output_and_stop_clears_filter(self):
+        self.runtime.configure(dict(mouth_mode='model_only'))
         self.start(); self.submit()
         wait_for(lambda: self.runtime.counts['inferred'] == 1)
         self.assertEqual(self.runtime.prediction['raw_values'], self.runtime.prediction['values'])
@@ -143,7 +145,7 @@ class FaceRuntimeTests(unittest.TestCase):
     def test_mfr1_all_fields_stop_expiry_and_session_release(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sink:
             sink.bind(('127.0.0.1', 0)); sink.settimeout(2)
-            self.runtime.configure(dict(output_enabled=True, output_port=sink.getsockname()[1]))
+            self.runtime.configure(dict(output_enabled=True, output_port=sink.getsockname()[1], mouth_mode='model_only'))
             self.start(); self.submit()
             fields = FACE_RESULT.unpack(sink.recv(1024))
             self.assertEqual(fields[:3], (b'MFR1', 1, 256)); self.assertEqual(fields[9], 0)
@@ -480,8 +482,13 @@ class FaceRuntimeTests(unittest.TestCase):
                 self.runtime.latest_stock = (record, time.perf_counter_ns() - 1_000_000_000)
             self.submit(12, 1)
             fields = FACE_RESULT.unpack(sink.recv(1024))
-            self.assertAlmostEqual(fields[10 + INDEX['JawOpen']], 0.3)
-            self.assertEqual(fields[7].bit_count(), 4)
+            # Stale stock leaves stock-routed channels unset (valid bit = 0) so Bridge keeps native fallback.
+            self.assertFalse(fields[7] & (1 << INDEX['JawOpen']))
+            self.assertFalse(fields[7] & (1 << INDEX['CheekSquintL']))
+            self.assertAlmostEqual(fields[10 + INDEX['TongueOut']], 0.1)
+            self.assertAlmostEqual(fields[10 + INDEX['TongueLeft']], 0.2)
+            self.assertAlmostEqual(fields[10 + INDEX['LipFunnelLower']], 0.7)
+            self.assertEqual(fields[7].bit_count(), 3)
 
     def test_live_hybrid_shares_single_psl_connection_across_recording_and_model_only_skips_labels(self):
         labels_connections = []
@@ -620,9 +627,57 @@ class FaceRuntimeTests(unittest.TestCase):
             self.assertAlmostEqual(fields[10 + INDEX['CheekPuffLeft']], 0.85, places=5)
             self.assertFalse(fields[7] & (1 << INDEX['CheekPuff']))
             self.assertFalse(fields[7] & (1 << INDEX['CheekPuffRight']))
-            self.assertFalse(fields[7] & (1 << INDEX['TongueLeft']))
+            # Explicit 'off' sets valid bit = 1 with value = 0.0 so the receiver zeros it explicitly.
+            self.assertTrue(fields[7] & (1 << INDEX['TongueLeft']))
+            self.assertAlmostEqual(fields[10 + INDEX['TongueLeft']], 0.0, places=5)
             self.assertIn('contract', self.runtime.status())
             self.assertEqual(len(self.runtime.status()['contract']['routable_channels']), 46)
+
+            # Aggregate parent is bit=1/val=0 only when both split children are 'off', never when mixed.
+            self.runtime.configure(dict(
+                mouth_mode='curated',
+                channel_sources={'CheekPuffLeft': 'off', 'CheekPuffRight': 'off', 'JawOpen': 'off'},
+            ))
+            with self.runtime.lock:
+                self.runtime.latest_stock = None
+            self.submit(22, 1)
+            fields = FACE_RESULT.unpack(sink.recv(1024))
+            for off_name in ('CheekPuff', 'CheekPuffLeft', 'CheekPuffRight', 'JawOpen'):
+                self.assertTrue(fields[7] & (1 << INDEX[off_name]), off_name)
+                self.assertAlmostEqual(fields[10 + INDEX[off_name]], 0.0, places=5)
+            # Missing PSL1 leaves stock-routed channels unset (valid bit = 0).
+            self.assertFalse(fields[7] & (1 << INDEX['MouthPucker']))
+            self.assertFalse(fields[7] & (1 << INDEX['MouthFunnel']))
+            self.assertFalse(fields[7] & (1 << INDEX['LipFunnelUpper']))
+            self.assertFalse(fields[7] & (1 << INDEX['LipFunnelLower']))
+
+    def test_stock_idle_timeout_keeps_connection_open_and_recovers_on_next_record(self):
+        from stock import IdleStockTimeout
+        class Connection:
+            def __init__(self):
+                self.timeouts = []
+                self.closed = False
+            def __enter__(self): return self
+            def __exit__(self, *args): self.closed = True
+            def settimeout(self, t): self.timeouts.append(t)
+            def sendall(self, data): self.command = data
+        connection = Connection()
+        self.runtime.stock_stop.clear()
+        record = StockRecord(1, 99, 10, 10*11_111_111, [.2]*33, [.3]*33, [.4]*33, [1., 1.],
+                             True, association_valid=True, raw_identity=10, warmup=False)
+        t = [0.0]
+        def fake_mono():
+            val = t[0]
+            t[0] += 2.0
+            return val
+        with patch('runtime.socket.create_connection', return_value=connection) as connect_mock, \
+             patch('stock.read_stock', side_effect=[IdleStockTimeout('idle 1'), IdleStockTimeout('idle 2'), record, EOFError('done')]), \
+             patch('runtime.time.monotonic', side_effect=fake_mono):
+            Runtime._stock_receive(self.runtime)
+        connect_mock.assert_called_once()
+        self.assertEqual(connection.timeouts, [2.0])
+        self.assertEqual(self.runtime.stock_status['records'], 1)
+        self.assertEqual(self.runtime.stock_status['associated'], 1)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

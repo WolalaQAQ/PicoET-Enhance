@@ -450,25 +450,30 @@ static void drop_stock_client(PTJSource& s, const std::shared_ptr<Client>& clien
     s.stock_client.reset(); s.stock_size = 0;
 }
 static void send_stock(PTJSource& s) {
-    std::shared_ptr<Client> client;
-    ResultPacket record;
-    bool present = false;
-    {
-        std::lock_guard<std::mutex> lock(s.mutex);
-        client = s.stock_client;
-        if (client && s.stock_size) {
-            record = s.stock_records[s.stock_head];
-            s.stock_head = (s.stock_head + 1) % s.stock_records.size();
-            --s.stock_size; present = true;
+    for (size_t sent = 0; sent < s.stock_records.size(); ++sent) {
+        std::shared_ptr<Client> client;
+        ResultPacket record;
+        bool present = false;
+        {
+            std::lock_guard<std::mutex> lock(s.mutex);
+            client = s.stock_client;
+            if (client && s.stock_size) {
+                record = s.stock_records[s.stock_head];
+                s.stock_head = (s.stock_head + 1) % s.stock_records.size();
+                --s.stock_size; present = true;
+            }
+        }
+        if (!client) return;
+        char byte;
+        const int n = recv(client->fd, &byte, 1, MSG_PEEK);
+        if (n == 0 || n > 0 || (n < 0 && !would_block(socket_error()))) { drop_stock_client(s, client); return; }
+        if (!present) return;
+        if (write_all(s, client->fd, record.bytes.data(), record.size,
+                      mono_ns() + uint64_t(s.timeout_ms) * 1000000ULL) != IOResult::Ok) {
+            drop_stock_client(s, client);
+            return;
         }
     }
-    if (!client) return;
-    char byte;
-    const int n = recv(client->fd, &byte, 1, MSG_PEEK);
-    if (n == 0 || n > 0 || (n < 0 && !would_block(socket_error()))) { drop_stock_client(s, client); return; }
-    if (present && write_all(s, client->fd, record.bytes.data(), record.size,
-                            mono_ns() + uint64_t(s.timeout_ms) * 1000000ULL) != IOResult::Ok)
-        drop_stock_client(s, client);
 }
 static std::string camera_catalog(PTJSource& s) {
     std::lock_guard<std::mutex> lock(s.mutex);
@@ -647,6 +652,16 @@ static void server_loop(PTJSource& s) {
         } else if ((!s.stream_id && !std::strcmp(command, "LABELS")) ||
                    (s.stream_id == PTJ_EYE_LEFT && !std::strcmp(command, "EYES"))) {
             auto client = std::make_shared<Client>(fd, false);
+            std::shared_ptr<Client> existing;
+            {
+                std::lock_guard<std::mutex> lock(s.mutex);
+                existing = s.stock_client;
+            }
+            if (existing) {
+                char byte;
+                const int n = recv(existing->fd, &byte, 1, MSG_PEEK);
+                if (n == 0 || n > 0 || (n < 0 && !would_block(socket_error()))) drop_stock_client(s, existing);
+            }
             std::lock_guard<std::mutex> lock(s.mutex);
             if (s.running && s.results_allowed && !s.stock_client) {
                 s.stock_client = std::move(client); ++s.stock_connection;

@@ -179,6 +179,7 @@ class Runtime:
         self.record_wants_stock = False
         self.source_closed = False
         self.stock_socket = None
+        self._stock_pending_socket = None
         self.stock_stop = threading.Event()
         self.stock_thread = None
         self.stock_status = dict(active=False, records=0, associated=0, unassociated=0, error=None)
@@ -235,8 +236,8 @@ class Runtime:
         model_values = list(prediction['values'])
         model_channels = dict(prediction['channels'])
         model_mask = int(prediction['valid_mask'])
-        values = list(model_values)
-        mask = model_mask
+        values = [0.] * len(CHANNELS)
+        mask = 0
         native_channels = []
         sources = self._resolved_sources(config)
         record, received_ns = self.latest_stock if self.latest_stock else (None, None)
@@ -258,44 +259,60 @@ class Runtime:
             src = sources[name]
             if src == 'off':
                 values[i] = 0.
-                mask &= ~(1 << i)
-            elif src == 'stock' and stock_ok and i < len(record.final33):
-                value = float(record.final33[i])
-                if math.isfinite(value):
-                    values[i] = min(1., max(0., value))
-                    mask |= 1 << i
-                    native_channels.append(name)
+                mask |= 1 << i
+            elif src == 'stock':
+                if stock_ok and i < len(record.final33):
+                    value = float(record.final33[i])
+                    if math.isfinite(value):
+                        values[i] = min(1., max(0., value))
+                        mask |= 1 << i
+                        native_channels.append(name)
+            elif model_mask & (1 << i):
+                values[i] = model_values[i]
+                mask |= 1 << i
         for name, parent in STOCK_AGGREGATE_PARENTS.items():
             sub_i, parent_i = INDEX[name], INDEX[parent]
             src = sources[name]
             if src == 'off':
                 values[sub_i] = 0.
-                mask &= ~(1 << sub_i)
-            elif src == 'stock' and stock_ok and parent_i < len(record.final33):
-                value = float(record.final33[parent_i])
-                if math.isfinite(value):
-                    values[sub_i] = min(1., max(0., value))
-                    mask |= 1 << sub_i
-                    native_channels.append(name)
-            elif not (model_mask & (1 << sub_i)) and (model_mask & (1 << parent_i)):
+                mask |= 1 << sub_i
+            elif src == 'stock':
+                if stock_ok and parent_i < len(record.final33):
+                    value = float(record.final33[parent_i])
+                    if math.isfinite(value):
+                        values[sub_i] = min(1., max(0., value))
+                        mask |= 1 << sub_i
+                        native_channels.append(name)
+            elif model_mask & (1 << sub_i):
+                values[sub_i] = model_values[sub_i]
+                mask |= 1 << sub_i
+            elif model_mask & (1 << parent_i):
                 values[sub_i] = model_values[parent_i]
                 mask |= 1 << sub_i
         for parent, children in AGGREGATE_CHILDREN.items():
             parent_i = INDEX[parent]
-            if any(sources[c] == 'off' for c in children):
+            if all(sources[c] == 'off' for c in children):
                 values[parent_i] = 0.
-                mask &= ~(1 << parent_i)
-            elif all(sources[c] == 'stock' for c in children) and stock_ok and parent_i < len(record.final33):
-                value = float(record.final33[parent_i])
-                if math.isfinite(value):
-                    values[parent_i] = min(1., max(0., value))
-                    mask |= 1 << parent_i
-                    native_channels.append(parent)
+                mask |= 1 << parent_i
+            elif all(sources[c] == 'stock' for c in children):
+                if stock_ok and parent_i < len(record.final33):
+                    value = float(record.final33[parent_i])
+                    if math.isfinite(value):
+                        values[parent_i] = min(1., max(0., value))
+                        mask |= 1 << parent_i
+                        native_channels.append(parent)
+            elif all(sources[c] == 'model' for c in children) and (model_mask & (1 << parent_i)):
+                values[parent_i] = model_values[parent_i]
+                mask |= 1 << parent_i
         for name in PURE_EXTENDED_CHANNELS:
-            if sources[name] == 'off':
-                ext_i = INDEX[name]
+            ext_i = INDEX[name]
+            src = sources[name]
+            if src == 'off':
                 values[ext_i] = 0.
-                mask &= ~(1 << ext_i)
+                mask |= 1 << ext_i
+            elif src == 'model' and (model_mask & (1 << ext_i)):
+                values[ext_i] = model_values[ext_i]
+                mask |= 1 << ext_i
         native_set = set(native_channels)
         ordered_native = [name for name in CHANNELS if name in native_set]
         return dict(prediction,
@@ -688,19 +705,38 @@ class Runtime:
             else:
                 self._stop_psl_worker_locked()
 
+    def _connect_stock(self, host, port, timeout=3):
+        holder = [None]
+        def on_socket(sock):
+            if sock is not None:
+                holder[0] = sock
+                self._stock_pending_socket = sock
+                self._track_pending_socket(sock)
+                if self.stock_stop.is_set():
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+            elif holder[0] is not None:
+                if self._stock_pending_socket is holder[0]:
+                    self._stock_pending_socket = None
+                self._untrack_pending_socket(holder[0])
+                holder[0] = None
+        return connect_cancellable(host, port, timeout=timeout, stop_event=self.stock_stop, on_socket=on_socket)
+
     def _stop_psl_worker_locked(self):
         self.stock_stop.set()
-        sock = self.stock_socket
-        if sock:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            if hasattr(sock, 'close'):
+        for sock in (self.stock_socket, self._stock_pending_socket):
+            if sock:
                 try:
-                    sock.close()
+                    sock.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
+                if hasattr(sock, 'close'):
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
         thread = self.psl_thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=5)
@@ -712,26 +748,46 @@ class Runtime:
             self.stock_status['active'] = False
 
     def _stock_receive(self):
-        from stock import read_stock
+        from stock import IdleStockTimeout, read_stock
         try:
-            sock = socket.create_connection((self.config['headset_host'], int(self.config['headset_port'])), timeout=3)
+            host = self.config['headset_host'].strip()
+            port = int(self.config['headset_port'])
+            sock = self._connect_stock(host, port, timeout=3)
             if self.stock_stop.is_set():
                 if hasattr(sock, 'close'):
                     sock.close()
                 return
+            enable_keepalive(sock)
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except (OSError, AttributeError):
+                pass
+            if hasattr(sock, 'settimeout'):
+                sock.settimeout(2.0)
             self.stock_socket = sock
+            last_record_mono = time.monotonic()
             with self.lock:
                 self.stock_status['active'] = True
                 self.stock_status['error'] = None
             with sock:
                 sock.sendall(b'LABELS\n')
                 while not self.stock_stop.is_set():
-                    record = read_stock(sock)
+                    try:
+                        record = read_stock(sock)
+                    except IdleStockTimeout:
+                        if self.stock_stop.is_set():
+                            break
+                        if time.monotonic() - last_record_mono >= 3.0:
+                            with self.lock:
+                                self.stock_status['error'] = 'Timed out waiting for headset mouth results (PSL1)'
+                        continue
+                    last_record_mono = time.monotonic()
                     received_ns = time.perf_counter_ns()
                     with self.lock:
                         self.latest_stock = (record, received_ns)
                         self.stock_status['records'] += 1
                         self.stock_status['associated' if record.association_valid else 'unassociated'] += 1
+                        self.stock_status['error'] = None
                     if self.record_wants_stock:
                         self._record_enqueue('stock', record)
         except (OSError, EOFError, ValueError) as error:
