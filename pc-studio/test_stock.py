@@ -8,6 +8,7 @@ from stock import (
     CaptureContextUnavailable,
     CONTEXT_WIRE,
     EyeRecord,
+    IdleStockTimeout,
     STOCK_BYTES,
     StockRecord,
     read_capture_context,
@@ -116,6 +117,28 @@ class StockTests(unittest.TestCase):
     def test_truncated_tcp(self):
         with self.assertRaises(EOFError):
             read_stock(FragmentSocket(sample().pack()[:-1]))
+
+    def test_idle_vs_partial_timeout(self):
+        class TimeoutSocket:
+            def __init__(self, first=b''):
+                self.first = first
+
+            def recv(self, n):
+                if self.first:
+                    out, self.first = self.first, b''
+                    return out
+                raise TimeoutError('timed out')
+
+        with self.assertRaises(IdleStockTimeout):
+            read_stock(TimeoutSocket())
+        with self.assertRaises(TimeoutError) as ctx:
+            read_stock(TimeoutSocket(b'PSL1'))
+        self.assertNotIsInstance(ctx.exception, IdleStockTimeout)
+        with self.assertRaises(IdleStockTimeout):
+            read_eye(TimeoutSocket())
+        with self.assertRaises(TimeoutError) as eye_ctx:
+            read_eye(TimeoutSocket(b'PSE1'))
+        self.assertNotIsInstance(eye_ctx.exception, IdleStockTimeout)
 
     def test_bad_header_and_stage_are_rejected(self):
         for offset in (0, 4, 6, 8, 92):

@@ -193,6 +193,18 @@ class StockNativeTests(ipc.IPCTests):
         source.stop()
         self.assertEqual(self.submit(source, stock(session=source.session)), 5)
 
+    def test_stock_fast_reconnect_reaps_closed_client_and_drains_burst(self):
+        rt = self.runtime(); source = rt.source()
+        first = self.labels(rt)
+        first_sub = rt.module.probe()['stock_subscription']
+        first.close()
+        second = rt.connect(b'LABELS\n', wait_subscription=False)
+        ipc.wait(lambda: rt.module.probe()['stock_subscription'] > first_sub)
+        for seq in range(1, 5):
+            self.assertEqual(self.submit(source, stock(seq=seq, session=source.session)), 0)
+        seqs = [read_stock(second).label_seq for _ in range(4)]
+        self.assertEqual(seqs, [1, 2, 3, 4])
+
     def test_stock_session_replacement_does_not_accept_old_record(self):
         old_rt = self.runtime(); old = old_rt.source(); self.labels(old_rt)
         old_session = old.session; old.stop()

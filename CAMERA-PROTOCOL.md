@@ -111,7 +111,7 @@ The existing `PICO_MOUTH_DISCOVER_V1\n` / PTC1 discovery and mouth-only `LABELS\
 
 PSL1 carries 33 mouth channels at four stages (raw, action-postprocessed before clamping, clamped instant, and final filtered output), two quality values, validity, classification and source identity. It does not contain eye-expression vectors; ordinary eye/face result forwarding remains the Bridge path. A JPEG or MJPEG subscription receives images, not these result records.
 
-On the module-managed source, enable **Mouth** under **LAN broadcast → Result sharing** to allow `LABELS` subscriptions while broadcasting. Result sharing defaults off and remembers your choice. Turning it off rejects new label connections and closes the current one without interrupting images. Third-party clients may reconnect when it is enabled again; one label client can subscribe at a time.
+On the module-managed source, enable **Mouth** under **LAN broadcast → Result sharing** to allow `LABELS` subscriptions while broadcasting (`PSL1` records are produced by the enhancement hook, so `PicoET-Enhance` must be active in enhancement mode rather than stock `off`; if the hook attaches after camera startup, the camera payload automatically binds the stock sink on its control loop). Result sharing defaults off and remembers your choice. Turning it off rejects new label connections and closes the current one without interrupting images. Third-party clients may reconnect when it is enabled again; one label client can subscribe at a time.
 
 PC Studio's camera preview and eye relay subscribe only to image streams and never open `LABELS` or `EYES` result connections. Python clients can read the result protocols using `read_stock` and `read_eye` in `pc-studio/stock.py`.
 

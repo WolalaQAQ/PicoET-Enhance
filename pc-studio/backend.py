@@ -27,13 +27,27 @@ def _relay_config_path(runtime):
     return config_path.parent / 'cymple_relay.json' if isinstance(config_path, Path) else None
 
 
+_STATIC_CONTENT_TYPES = {
+    '.mjs': 'text/javascript; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+    '.htm': 'text/html; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.ico': 'image/x-icon',
+    '.webp': 'image/webp',
+}
+
+
 def _content_type(name):
-    if name.endswith('.mjs') or name.endswith('.js'):
-        return 'application/javascript; charset=utf-8'
-    if name.endswith('.ico'):
-        return 'image/x-icon'
-    if name.endswith('.png'):
-        return 'image/png'
+    # Windows registry associations must not override the web assets' media types.
+    content_type = _STATIC_CONTENT_TYPES.get(Path(name).suffix.lower())
+    if content_type is not None:
+        return content_type
     mime = mimetypes.guess_type(name)[0] or 'application/octet-stream'
     return f'{mime}; charset=utf-8' if mime.startswith('text/') else mime
 

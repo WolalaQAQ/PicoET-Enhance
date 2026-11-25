@@ -280,9 +280,20 @@ class RuntimeAndHttpTests(unittest.TestCase):
                 with urlopen(base + '/api/preview.jpg') as r:
                     self.assertEqual(r.status, 204)
 
-                # Static JS module serves cleanly and path traversal outside web/ fails with 404.
-                with urlopen(base + '/static/app.mjs') as r:
-                    self.assertIn('javascript', r.headers.get('Content-Type', ''))
+                # Static web assets pin their MIME types regardless of Windows registry overrides,
+                # and path traversal outside web/ fails with 404.
+                with patch('mimetypes.guess_type', return_value=('text/plain', None)):
+                    for path, filename, content_type in (
+                        ('/', 'index.html', 'text/html; charset=utf-8'),
+                        ('/static/app.mjs', 'app.mjs', 'text/javascript; charset=utf-8'),
+                        ('/static/i18n.mjs', 'i18n.mjs', 'text/javascript; charset=utf-8'),
+                        ('/static/styles.css', 'styles.css', 'text/css; charset=utf-8'),
+                    ):
+                        with self.subTest(path=path), urlopen(base + path) as r:
+                            self.assertEqual(r.status, 200)
+                            self.assertEqual(r.headers['Content-Type'], content_type)
+                            self.assertEqual(r.headers['X-Content-Type-Options'], 'nosniff')
+                            self.assertEqual(r.read(), (ROOT / 'web' / filename).read_bytes())
                 with self.assertRaises(HTTPError) as ctx:
                     urlopen(base + '/static/../runtime.py')
                 self.assertEqual(ctx.exception.code, 404)

@@ -308,6 +308,23 @@ void stop_video(const char* stopped_state = "stopped") {
     // Keep the video DSO and disabled hook resident. Never dlclose from a callback.
     state = stopped_state;
 }
+bool bind_main_payload_sinks() {
+    if (!video || stock_sink_registered) return false;
+    void* main_payload = dlopen("libpicoet_hook.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!main_payload) return false;
+    set_stock_sink = reinterpret_cast<decltype(set_stock_sink)>(dlsym(main_payload, "picoet_set_stock_sink"));
+    set_eye_sink = reinterpret_cast<decltype(set_eye_sink)>(dlsym(main_payload, "picoet_set_eye_sink"));
+    auto identity_version = reinterpret_cast<uint32_t (*)()>(dlsym(main_payload, "picoet_stock_input_identity_version"));
+    stock_input_identity_supported = identity_version && identity_version() == 1;
+    dlclose(main_payload); // The installed main payload remains resident.
+    bridge().set_audited(hook_status == 1 && stock_input_identity_supported);
+    if (set_stock_sink) {
+        set_stock_sink(stock_callback, nullptr);
+        stock_sink_registered = true;
+    }
+    if (set_eye_sink) set_eye_sink(eye_callback, video);
+    return stock_sink_registered;
+}
 void start_video() {
     if (video) { set_error(-3, "already started; stop before creating another owner"); return; }
     state = "starting";
@@ -319,22 +336,10 @@ void start_video() {
     for (auto& stream : stream_stats) stream = {};
     ++starts;
     // Existing main payload owns inference; no second inference/camera tool.
-    void* main_payload = dlopen("libpicoet_hook.so", RTLD_NOW | RTLD_NOLOAD);
-    if (main_payload) {
-        set_stock_sink = reinterpret_cast<decltype(set_stock_sink)>(dlsym(main_payload, "picoet_set_stock_sink"));
-        set_eye_sink = reinterpret_cast<decltype(set_eye_sink)>(dlsym(main_payload, "picoet_set_eye_sink"));
-        auto identity_version = reinterpret_cast<uint32_t (*)()>(dlsym(main_payload, "picoet_stock_input_identity_version"));
-        stock_input_identity_supported = identity_version && identity_version() == 1;
-        dlclose(main_payload); // The installed main payload remains resident.
-    }
     bridge().arm(video, api.session_id(video), api.submit, api.stock, start_ticks,
-                 hook_status == 1 && stock_input_identity_supported, api.submit_stream, api.capture_epoch);
-    if (set_stock_sink) {
-        set_stock_sink(stock_callback, nullptr);
-        stock_sink_registered = true;
-    }
-    else log("stock labels unavailable: main payload has no stock sink");
-    if (set_eye_sink) set_eye_sink(eye_callback, video);
+                 false, api.submit_stream, api.capture_epoch);
+    if (!bind_main_payload_sinks())
+        log("stock labels unavailable: main payload not loaded or has no stock sink");
     state = "armed";
 }
 bool commands() {
@@ -412,6 +417,10 @@ void* control(void*) {
     for (;;) {
         bool dirty = !published;
         if (start_ticks && commands()) dirty = true;
+        if (video && !stock_sink_registered && bind_main_payload_sinks()) {
+            log("stock labels sink bound after main payload load");
+            dirty = true;
+        }
         if (video && bridge().identity_fault()) {
             stop_video("identity_fault");
             set_error(-4, "camera identity/sensor regressed; explicit start required for new owner");

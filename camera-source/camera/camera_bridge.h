@@ -49,6 +49,7 @@ public:
     void arm(PTJSource* owner, uint64_t owner_session, CameraSubmit function, StockSubmit labels = nullptr,
              uint64_t generation = 0, bool audited = false, CameraSubmitStream streams = nullptr,
              CameraEpoch capture = nullptr);
+    void set_audited(bool audited);
     void on_stock(const PTJStockRecord&);
     uint64_t ticket() const { return accepting.load(std::memory_order_acquire); }
     // All borrowed frame access and the synchronous submit finish before this returns.
