@@ -72,6 +72,28 @@ class StockTests(unittest.TestCase):
             read_stock(TimeoutSocket(b'PSL1'))
         self.assertNotIsInstance(ctx.exception, IdleStockTimeout)
 
+        # OS keepalive death (WSAETIMEDOUT 10060) must NOT become IdleStockTimeout.
+        class OsTimeoutSocket:
+            def recv(self, n):
+                err = TimeoutError(10060, 'keepalive dead')
+                err.winerror = 10060
+                raise err
+
+            def sendall(self, data):
+                pass
+
+        with self.assertRaises(TimeoutError) as os_ctx:
+            read_stock(OsTimeoutSocket())
+        self.assertNotIsInstance(os_ctx.exception, IdleStockTimeout)
+
+        class PollTimeoutCtxSocket(TimeoutSocket):
+            def sendall(self, data):
+                pass
+
+        with self.assertRaises(TimeoutError) as ctx_to:
+            read_capture_context(PollTimeoutCtxSocket())
+        self.assertNotIsInstance(ctx_to.exception, IdleStockTimeout)
+
     def test_bad_header_and_stage_are_rejected(self):
         for offset in (0, 4, 6, 8, 92):
             data = bytearray(sample().pack())

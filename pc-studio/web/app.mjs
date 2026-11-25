@@ -786,10 +786,11 @@ export function createApp(doc, options = {}) {
     const technicalParts = [...new Set([error, state.discoveryError, state.relayError, state.status?.cymple_relay?.error, ...relayEyeErrors, state.status?.recording?.error, state.status?.training?.error].filter(Boolean))];
     get("technical-error").textContent = technicalParts.join("\n\n") || "—";
     get("migration").hidden = !state.status?.legacy_configuration_available;
-    get("placeholder").textContent = t(!get("preview-enabled").checked ? "previewOff" : state.previewError ? "previewError" : "noVideo");
     const owner = `${state.status?.source?.session_id}/${state.status?.output_session_id}`;
-    if (owner !== state.previewOwner) { clearPreview(); state.previewOwner = owner; }
+    if (owner !== state.previewOwner) { state.previewError = false; clearPreview(); state.previewOwner = owner; }
+    if (!current.running) state.previewError = false;
     if (!current.video || state.busy || !get("preview-enabled").checked) clearPreview();
+    get("placeholder").textContent = t(!get("preview-enabled").checked ? "previewOff" : state.previewError ? "previewError" : "noVideo");
     renderDiagnostics(current, technicalParts);
     const replay = state.status?.replay; get("replay-info").textContent = replay?.path ? `${replay.path} · ${display(replay.position)} / ${display(replay.total)} ${t("frames")}${replay.finished ? ` · ${t("replayDone")}` : ""}` : t("replayReady");
     const focused=state.page==="recording" && state.status?.recording?.state==="recording" && state.status?.recording?.guide?.step;
@@ -1280,11 +1281,12 @@ export function createApp(doc, options = {}) {
     finally { state.pickingModel = false; if (!state.destroyed) render(); }
   }
   async function pollStatus() {
-    if (state.polling || state.busy || state.destroyed) return; state.polling = true; const generation = state.generation;
+    if (state.polling || state.busy || state.destroyed) return; state.polling = true; const generation = state.generation; const wasOnline = state.online;
     try {
-      const status = await requestJson(fetcher, "/api/status");
+      const status = await requestJson(fetcher, "/api/status", undefined, 1400);
       if (generation !== state.generation || state.destroyed) return;
       state.status = status; applyConfig(status.config ?? await requestJson(fetcher, "/api/config")); applyCympleRelay(status.cymple_relay); state.online = true; state.at = now(); state.pollError = "";
+      if (!wasOnline || (status.running && status.connected && !status.last_error)) state.error = "";
       const record=status.recording;
       const saved=status.managed_capture && record?.state==="stopped" && record.session_id &&
         ["completed","error"].includes(status.capture_control?.state);
@@ -1306,10 +1308,18 @@ export function createApp(doc, options = {}) {
     const smoothing_ms = !filter_enabled ? 0 : (config.filter_min_cutoff > 0 ? Number((1000 / (2 * Math.PI * config.filter_min_cutoff)).toFixed(2)) : 0);
     return {...config, filter_enabled, smoothing_ms, mouth_mode, hybrid_channels: null, channel_sources, output_enabled: get("output_enabled").checked, output_host: "127.0.0.1", model_kind: "face50"};
   }
-  async function control(key, action) {
-    if (state.busy || state.destroyed || state.status?.read_only) return; state.busy = key; state.generation++; state.error = ""; state.errorKey = ""; render();
+  async function control(key, action, {reportError = true} = {}) {
+    if (state.busy || state.destroyed || state.status?.read_only) return; state.busy = key; state.generation++;
+    if (reportError) { state.error = ""; state.errorKey = ""; }
+    render();
     try { await action(); state.status = await requestJson(fetcher, "/api/status"); applyConfig(state.status.config ?? state.config); applyCympleRelay(state.status.cymple_relay); state.online = true; state.at = now(); state.pollError = ""; }
-    catch (error) { state.error = error.message; }
+    catch (error) {
+      if (reportError) state.error = error.message;
+      try {
+        const status = await requestJson(fetcher, "/api/status", undefined, 1400);
+        if (!state.destroyed) { state.status = status; applyConfig(status.config ?? state.config); applyCympleRelay(status.cymple_relay); state.online = true; state.at = now(); state.pollError = ""; }
+      } catch {}
+    }
     finally { state.busy = ""; if (!state.destroyed) render(); }
   }
   async function persistConfig() { const saved = await requestJson(fetcher, "/api/config", readForm(), 20000); state.dirty = false; applyConfig(saved); }
@@ -1321,9 +1331,10 @@ export function createApp(doc, options = {}) {
   async function save() { if (!get("save").disabled && validate("save", false)) await control("saving", persistConfig); }
   async function start(mode = "live") {
     if (get(mode === "capture" ? "capture" : "start").disabled || !validate(mode === "capture" ? "live" : mode, mode !== "capture")) return;
+    state.previewError = false;
     await control("starting", async () => { await persistConfig(); await requestJson(fetcher, "/api/start", {mode}, 60000); });
   }
-  async function stop() { if (!get("stop").disabled) await control("stopping", () => requestJson(fetcher, "/api/stop", {}, 20000)); }
+  async function stop() { if (!get("stop").disabled) { state.previewError = false; await control("stopping", () => requestJson(fetcher, "/api/stop", {}, 20000)); } }
   async function cympleRelay(action) {
     if (state.status?.read_only || state.status?.capture_control?.sealed_c) return;
     const btn = get(action === "start" ? "cymple-relay-start" : "cymple-relay-stop");
@@ -1345,7 +1356,7 @@ export function createApp(doc, options = {}) {
         state.relayError = error.message;
         throw error;
       }
-    });
+    }, {reportError: false});
   }
   async function record(action, stepIndex) {
     const button = {begin: "record-start", stop: "record-stop", cancel: "record-cancel", ready: "guide-ready", finish: "guide-finish", confirm: "guide-confirm", skip: "guide-skip", pause:"guide-pause",resume:"guide-pause",select_step:"guide-select"}[action]; if (!button || get(button).disabled) return;
@@ -1390,9 +1401,11 @@ export function createApp(doc, options = {}) {
     if (state.exprPromise) return state.exprPromise;
     if (!isExpressionMonitorLive()) return;
     const generation = state.generation;
+    const controller = new AbortController();
+    const timeout = timers.setTimeout(() => controller.abort(), 2000);
     state.exprPromise = (async () => {
       try {
-        const response = await fetcher("/api/expressions", {method: "GET", cache: "no-store"});
+        const response = await fetcher("/api/expressions", {method: "GET", cache: "no-store", signal: controller.signal});
         if (generation !== state.generation || state.destroyed) return;
         if (response.status === 404) { state.exprEndpointMissing = true; return; }
         if (!response.ok) return;
@@ -1415,7 +1428,7 @@ export function createApp(doc, options = {}) {
         if (prevRunning !== snap.running) render();
         else renderExpressionPanel(view());
       } catch {}
-      finally { state.exprPromise = null; }
+      finally { timers.clearTimeout(timeout); state.exprPromise = null; }
     })();
     return state.exprPromise;
   }
@@ -1433,7 +1446,7 @@ export function createApp(doc, options = {}) {
       scheduleExpressions(250);
     }
   }
-  function previewLoop() { void refreshPreview(); if (!state.destroyed) state.previewTimer = timers.setTimeout(previewLoop, 1000/Math.min(10, Math.max(1, state.config?.preview_fps ?? 10))); }
+  function previewLoop() { void refreshPreview(); if (!state.destroyed) state.previewTimer = timers.setTimeout(previewLoop, 1000/Math.min(30, Math.max(1, state.config?.preview_fps ?? 10))); }
   function setLanguage(language) { if (!Object.hasOwn(messages, language)) return; state.language = language; try { storage?.setItem(LANGUAGE_KEY, language); } catch {} render(); }
   get("settings").addEventListener("submit", event => { event.preventDefault(); return start(); });
   for (const event of ["input", "change"]) {

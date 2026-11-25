@@ -77,7 +77,7 @@ with urlopen("http://<headset-ip>:45681/stream.mjpg", timeout=10) as stream:
         output.write(jpeg)
 ```
 
-Close the connection to unsubscribe. Eight image consumers may share each stream, mixing MJPEG and PTJ1. An additional HTTP subscription receives503. Each consumer has its own writer and one pending compressed frame; slow consumers may skip frames or be disconnected after a write deadline. Other consumers continue, and their JPEG bytes come from the same single encoding of that source frame.
+Close the connection to unsubscribe. Eight image consumers may share each stream, mixing MJPEG and PTJ1. An additional HTTP subscription receives 503. Stream connections (`GET /stream.mjpg`, `JPEG`, `PAIR`, `LABELS`, `EYES`) are strictly **receive-only after their initial command/request**: any unexpected bytes sent by the client cause immediate disconnect. There is no application-level heartbeat on idle streams; the managed daemon uses a 1200 ms per-frame image write deadline and Linux TCP keepalive (`10s` idle, `3s`×3 probes) plus `TCP_USER_TIMEOUT` (`15s`). Each image consumer has its own writer and one pending compressed frame; slow consumers may skip frames or be disconnected after the write deadline. Other consumers continue, and their JPEG bytes come from the same single encoding of that source frame.
 
 On Android, the first image or label subscription acquires one native tracking lease for this service. The last subscription releases that lease. A client does not need ADB or a separate tracking application to receive frames from an already-started source. The headset's normal camera/IR availability still applies; a connected socket alone does not establish that a fresh image is available.
 
@@ -105,21 +105,37 @@ All three lanes inherit **one camera5 parent sensor timestamp**; the three named
 
 `PAIR\n` is an exclusive per-stream diagnostic mode: each source emits raw flag2 bytes and then JPEG flag1. It shares the original protected raw-slot lease through the last read and cannot coexist with JPEG/MJPEG consumers of that same stream.
 
-Before collecting metadata, send `CONTEXT\n` on a separate control connection. Its 24-byte response is `<4sHHQQ>`: magic `PTC1`, version1, size24, capture session, service generation. Re-handshake after a service/session change. `PING\n` returns two uint64 monotonic nanosecond values: request received and response prepared.
+Before collecting metadata, send `CONTEXT\n` on a separate control connection. Its 24-byte response is `<4sHHQQ>`: magic `PTC1`, version 1, size 24, capture session, service generation. When the daemon is not attached to a verified service instance, `CONTEXT\n` closes immediately with 0 bytes (EOF). Re-handshake after a service/session change. `PING\n` returns two uint64 monotonic nanosecond values: request received and response prepared.
 
 The existing `PICO_MOUTH_DISCOVER_V1\n` / PTC1 discovery and mouth-only `LABELS\n` / PSL1 side channel remain available. Labels have their own subscription; they do not supply missing image identity.
 
 PSL1 carries 33 mouth channels at four stages (raw, action-postprocessed before clamping, clamped instant, and final filtered output), two quality values, validity, classification and source identity. It does not contain eye-expression vectors; ordinary eye/face result forwarding remains the Bridge path. A JPEG or MJPEG subscription receives images, not these result records.
 
-On the module-managed source, enable **Mouth** under **LAN broadcast → Result sharing** to allow `LABELS` subscriptions while broadcasting (`PSL1` records are produced by the enhancement hook, so `PicoET-Enhance` must be active in enhancement mode rather than stock `off`; if the hook attaches after camera startup, the camera payload automatically binds the stock sink on its control loop). Result sharing defaults off and remembers your choice. Turning it off rejects new label connections and closes the current one without interrupting images. Third-party clients may reconnect when it is enabled again; one label client can subscribe at a time.
+Each little-endian 640-byte `PSL1` record has Python layout `<4sHHII9QiI134f2I` (`camera-source/stock_record.h`):
 
-The PC workbench opens a label subscription at the start of a recording only if **Receive headset mouth results** is selected. Preview never opens it. **Training label stage** still controls how training labels are derived. If the label connection is unavailable, images continue and missing labels remain unknown.
+| Offset | Type | Fields, in order |
+|---:|---|---|
+| 0 | 4 bytes | `PSL1` |
+| 4 | 2×uint16 | `version=1`, `header_bytes=96` |
+| 8 | 2×uint32 | `record_bytes=640`, `flags` (bit 0 `VALID=1`, bit 1 `ASSOCIATED=2`, bit 2 `WARMUP=4`) |
+| 16 | 9×uint64 | `capture_session_id`, `service_generation`, `source_seq`, `mouth_sensor_ns`, `stock_input_ns`, `vendor_ns`, `raw_identity`, `produced_mono_ns`, `label_seq` |
+| 88 | int32, uint32 | `classification`, `stages=15` |
+| 96 | 33×float32 | `raw33` |
+| 228 | 33×float32 | `instant33` |
+| 360 | 33×float32 | `final33` |
+| 492 | 2×float32 | `quality2` |
+| 500 | 33×float32 | `instant_preclamp33` |
+| 632 | 2×uint32 | `reserved[2]` (always `0` on wire) |
+
+On the module-managed source, enable **Mouth** under **LAN broadcast → Result sharing** to allow `LABELS` subscriptions while broadcasting (`PSL1` records are produced by the enhancement hook, so `PicoET-Enhance` must be active in enhancement mode rather than stock `off`; if the hook attaches after camera startup, the camera payload automatically binds the stock sink on its control loop). Result sharing defaults off and remembers your choice. Turning it off rejects new label connections and closes the current one with EOF (no `END` frame) without interrupting images. One label client can subscribe at a time; a second concurrent `LABELS\n` connection closes immediately with EOF while the first is alive. Third-party clients may reconnect when it is enabled again.
+
+The PC workbench opens a `LABELS` subscription during live inference whenever any active channel uses headset stock output (for example the default curated/hybrid blend), and at the start of a recording when **Receive headset mouth results** is selected. Pure image preview does not open it. **Training label stage** still controls how training labels are derived. If the label connection is unavailable, images continue and missing labels remain unknown.
 
 PSL1 and images are delivered independently. Pair only records marked associated, using the capture session, verified service generation, original frame number, sensor and vendor timestamps, and raw frame identity. Missing records or images remain unmatched. Do not pair by arrival order or nearest timestamp.
 
 ## Eye expression results (PSE1)
 
-Enable **Both eyes** under **LAN broadcast → Result sharing** in the companion. It defaults off independently of mouth results. To receive both eyes, send `EYES\n` on a new TCP connection to the advertised `eye_left` port. Turning the switch off disconnects the result subscriber without interrupting image or mouth streams. One eye-result subscriber is supported at a time.
+Enable **Both eyes** under **LAN broadcast → Result sharing** in the companion. It defaults off independently of mouth results. To receive both eyes, send `EYES\n` on a new TCP connection to the advertised `eye_left` port. Turning the switch off disconnects the result subscriber with EOF (no `END` frame) without interrupting image or mouth streams. One eye-result subscriber is supported at a time; refused or duplicate `EYES\n` connections close immediately with EOF.
 
 Each little-endian 320-byte record has Python layout `<4sHHII6Q64f`. Its 64-byte header contains magic `PSE1`, version `1`, header size `64`, record size `320`, flags, capture session, verified service generation, result sequence, left and right inference-input timestamps in ns, and production monotonic time in ns. Flags 0/1 mark a new left/right observation; bits 2/3 mark that observation valid. The timestamp is zero for a side not updated; ignore its values.
 

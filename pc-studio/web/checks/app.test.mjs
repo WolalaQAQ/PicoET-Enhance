@@ -1489,3 +1489,35 @@ test("expression diagnostics shows unselected native and model readouts side-by-
   assert.equal(app.state.exprCompare, true);
   assert.equal(jawCard.compare.wrap.hidden, false);
 });
+
+test("Windows socket errors, previewError reset, relay error isolation, and pollExpressions signal", async t => {
+  const f = setup(t);
+  await f.app.init();
+
+  assert.equal(errorMessage("zh-CN", "[WinError 10061] Connection refused"), messages["zh-CN"].connectionRefused);
+  assert.equal(errorMessage("zh-CN", "[WinError 10060] timed out"), messages["zh-CN"].connectionTimeout);
+  assert.equal(errorMessage("zh-CN", "[WinError 10054] Connection reset"), messages["zh-CN"].cameraStreamClosed);
+
+  await f.app.start("capture");
+  f.server.previewStatus = 500;
+  await f.app.refreshPreview();
+  assert.equal(f.app.state.previewError, true);
+  await f.app.stop();
+  assert.equal(f.app.state.previewError, false);
+
+  // Cymple relay errors do not duplicate into top #error.
+  f.server.before = (path) => {
+    if (path === "/api/cymple-relay") return Response.json({error: "No PICO camera service found"}, {status: 400});
+  };
+  await f.el("cymple-relay-start").emit("click");
+  assert.equal(f.el("cymple-relay-error").hidden, false);
+  assert.equal(f.el("error").hidden, true);
+  f.server.before = null;
+
+  // pollExpressions passes an AbortSignal so hung fetches time out cleanly.
+  await f.app.start();
+  f.app.navigate("diagnostics");
+  await f.app.pollExpressions();
+  const exprCall = f.server.calls.findLast(c => c.path === "/api/expressions");
+  assert.ok(exprCall?.signal instanceof AbortSignal);
+});

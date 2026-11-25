@@ -679,5 +679,44 @@ class FaceRuntimeTests(unittest.TestCase):
         self.assertEqual(self.runtime.stock_status['records'], 1)
         self.assertEqual(self.runtime.stock_status['associated'], 1)
 
+    def test_receive_survives_idle_stream_timeout_and_clears_running_on_disconnect(self):
+        from unittest.mock import MagicMock
+        from wire import IdleStreamTimeout
+
+        rt = Runtime(self.root / 'idle_rt.json')
+        self.addCleanup(lambda: (rt.close(), rt.udp.close()))
+        rt.configure(dict(headset_host='127.0.0.1'))
+        raw_jpeg = jpeg()
+        allow_frame = threading.Event()
+        close_stream = threading.Event()
+        sent = [False]
+
+        def fake_read(_sock):
+            if close_stream.is_set():
+                raise EOFError('PTJ1 stream closed between frames')
+            if not allow_frame.is_set() or sent[0]:
+                time.sleep(0.02)
+                raise IdleStreamTimeout('Waiting for next PTJ1 frame')
+            sent[0] = True
+            return replace(header(1), payload_bytes=len(raw_jpeg)), raw_jpeg
+
+        with patch('runtime.sync_clock', return_value={'offset_ns': 0.0, 'uncertainty_ms': 1.0, 'calibrated_pc_ns': time.perf_counter_ns()}), \
+             patch('stock.read_capture_context', return_value=CaptureContext(1, 99)), \
+             patch('runtime.socket.create_connection', return_value=MagicMock()), \
+             patch('runtime.read_frame', side_effect=fake_read):
+            rt.start('capture')
+            wait_for(lambda: rt.connected and rt.running)
+            time.sleep(0.06)
+            self.assertTrue(rt.running)
+            self.assertTrue(rt.connected)
+            self.assertIsNone(rt.last_error)
+            allow_frame.set()
+            wait_for(lambda: rt.counts.get('decoded', 0) >= 1)
+            close_stream.set()
+            wait_for(lambda: not rt.running)
+            self.assertFalse(rt.connected)
+            self.assertTrue(rt.stop_event.is_set())
+        rt.stop()
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

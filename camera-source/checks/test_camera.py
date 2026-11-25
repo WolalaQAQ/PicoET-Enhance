@@ -533,6 +533,24 @@ class TrackingDemandTests(unittest.TestCase):
         DLL.demandtest_stop(handle)
         self.assertEqual(events, [1, 1])
 
+    def test_failed_stop_retries_and_releases_lease(self):
+        events = []
+        stops = [0]
+        def operation(start):
+            events.append(start)
+            if not start:
+                stops[0] += 1
+                return -12 if stops[0] == 1 else 0
+            return 0
+        handle, state = self.controller(operation)
+        DLL.demandtest_want(handle, 1)
+        wait(lambda: state().active == 1)
+        DLL.demandtest_want(handle, 0)
+        wait(lambda: state().transitions == 2)
+        self.assertEqual((state().active, state().transport), (1, -12))
+        wait(lambda: state().active == 0 and state().transitions == 3, seconds=3.5)
+        self.assertEqual(events, [1, 0, 0])
+
     def test_shutdown_stops_own_active_lease_and_is_idempotent(self):
         events = []
         handle, state = self.controller(lambda start: events.append(start) or 0)

@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
 from pathlib import Path
+import sys
 import threading
 from urllib.parse import urlsplit, parse_qs
 
@@ -54,7 +55,10 @@ def make_guide_server(store, port=57102):
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                pass
 
         def do_GET(self):
             path = urlsplit(self.path).path
@@ -104,7 +108,9 @@ def make_guide_server(store, port=57102):
         def log_message(self, *args):
             pass
 
-    return ThreadingHTTPServer(('127.0.0.1', port), GuideHandler)
+    server = ThreadingHTTPServer(('127.0.0.1', port), GuideHandler)
+    server.daemon_threads = True
+    return server
 
 
 def _relay_config_path(runtime):
@@ -133,7 +139,10 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                pass
 
         def do_GET(self):
             request = urlsplit(self.path)
@@ -169,7 +178,9 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                 except OSError as error:
                     return self.respond(400, {'error': str(error)})
             if path == '/api/config':
-                return self.respond(200, dict(runtime.config))
+                with runtime.lock:
+                    cfg = dict(runtime.config)
+                return self.respond(200, cfg)
             if path == '/api/preview.jpg':
                 with runtime.lock:
                     preview = runtime.preview
@@ -189,9 +200,11 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                 return self.respond(415, {'error': 'Use application/json'})
             try:
                 size = int(self.headers.get('Content-Length', '0'))
-                if size > 65536:
+                if size < 0 or size > 65536:
                     raise ValueError('Configuration request too large')
                 body = json.loads(self.rfile.read(size) or b'{}')
+                if not isinstance(body, dict):
+                    raise ValueError('JSON object required')
                 path = urlsplit(self.path).path
                 if sealed_c and path not in ('/api/config', '/api/start', '/api/recording',
                                              '/api/recording/display', '/api/stop'):
@@ -281,7 +294,9 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                 return
             super().log_message(format, *args)
 
-    return ThreadingHTTPServer((host, port), Handler)
+    server = ThreadingHTTPServer((host, port), Handler)
+    server.daemon_threads = True
+    return server
 
 
 def main(argv=None):

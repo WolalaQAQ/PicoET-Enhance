@@ -26,16 +26,30 @@ from face_schema import (
 )
 from face_filter import FaceFilter
 from wire import (
-    END, JPEG, REPLAY, FrameHeader, SourceOrder,
+    END, JPEG, REPLAY, FrameHeader, IdleStreamTimeout, SourceOrder,
     connect_cancellable, enable_keepalive, read_frame, result_packet, face_result_packet, sync_clock,
 )
 
 
 def _write_json_atomic(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp = path.with_name(f'{path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
-    os.replace(tmp, path)
+    try:
+        for attempt in range(6):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError as exc:
+                if getattr(exc, 'winerror', None) not in (5, 32) or attempt == 5:
+                    raise
+                time.sleep(0.025)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT/'user-data'
@@ -125,6 +139,8 @@ class Runtime:
         self.run_root = Path(run_root or self.config_path.parent/'runs')
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
+        self._clock_cond = threading.Condition()
+        self._clock_resync_requested = False
         self.stop_event = threading.Event()
         self.running = self.connected = False
         self.mode = 'idle'
@@ -524,6 +540,8 @@ class Runtime:
             if generation != self.lifecycle:
                 raise RuntimeError('Startup was cancelled by stop/shutdown')
             self.stop_event.clear()
+            with self._clock_cond:
+                self._clock_resync_requested = False
             self.inference_ready.clear()
             self.running = True
             self.capture_only = capture_only
@@ -620,7 +638,7 @@ class Runtime:
         with self.lock:
             self._pending_sockets.discard(sock)
 
-    def _connect(self, host, port, timeout=3):
+    def _connect(self, host, port, timeout=3, *, keep_tracked=False):
         holder = [None]
         def on_socket(sock):
             if sock is not None:
@@ -629,7 +647,39 @@ class Runtime:
             elif holder[0] is not None:
                 self._untrack_pending_socket(holder[0])
                 holder[0] = None
-        return connect_cancellable(host, port, timeout=timeout, stop_event=self.stop_event, on_socket=on_socket)
+        return connect_cancellable(
+            host, port, timeout=timeout, stop_event=self.stop_event,
+            on_socket=on_socket, keep_tracked=keep_tracked,
+        )
+
+    def _request_clock_resync(self):
+        with self._clock_cond:
+            self._clock_resync_requested = True
+            self._clock_cond.notify_all()
+
+    def _wake_clock_thread(self):
+        with self._clock_cond:
+            self._clock_cond.notify_all()
+
+    def _interrupt_sockets(self):
+        with self.lock:
+            sock = self.socket
+            pending_socks = list(self._pending_sockets)
+            self._pending_sockets.clear()
+        for pending in pending_socks:
+            try:
+                pending.close()
+            except OSError:
+                pass
+        if sock:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def _record_enqueue(self, kind, value):
         with self.record_condition:
@@ -685,13 +735,22 @@ class Runtime:
             return any(src == 'stock' for src in sources.values())
 
     def _psl_worker(self):
-        while not self.stock_stop.is_set() and self._wants_psl():
+        backoff = 0.5
+        while not self.stock_stop.is_set() and not self.stop_event.is_set() and self._wants_psl():
             if not self.connected:
                 self.stock_stop.wait(.02)
                 continue
+            with self.lock:
+                before_records = self.stock_status.get('records', 0)
             self._stock_receive()
-            if not self.stock_stop.is_set() and self._wants_psl():
-                self.stock_stop.wait(.5)
+            with self.lock:
+                received_any = self.stock_status.get('records', 0) > before_records
+            if received_any:
+                backoff = 0.5
+            if not self.stock_stop.is_set() and not self.stop_event.is_set() and self._wants_psl():
+                self.stock_stop.wait(backoff)
+                if not received_any:
+                    backoff = min(backoff * 2.0, 5.0)
 
     def _sync_psl_worker(self):
         with self.psl_lock:
@@ -705,33 +764,39 @@ class Runtime:
             else:
                 self._stop_psl_worker_locked()
 
-    def _connect_stock(self, host, port, timeout=3):
+    def _connect_stock(self, host, port, timeout=3, *, keep_tracked=False):
         holder = [None]
         def on_socket(sock):
             if sock is not None:
                 holder[0] = sock
-                self._stock_pending_socket = sock
-                self._track_pending_socket(sock)
-                if self.stock_stop.is_set():
+                with self.lock:
+                    self._stock_pending_socket = sock
+                if self.stock_stop.is_set() and hasattr(sock, 'close'):
                     try:
                         sock.close()
                     except OSError:
                         pass
             elif holder[0] is not None:
-                if self._stock_pending_socket is holder[0]:
-                    self._stock_pending_socket = None
-                self._untrack_pending_socket(holder[0])
+                with self.lock:
+                    if self._stock_pending_socket is holder[0]:
+                        self._stock_pending_socket = None
                 holder[0] = None
-        return connect_cancellable(host, port, timeout=timeout, stop_event=self.stock_stop, on_socket=on_socket)
+        return connect_cancellable(
+            host, port, timeout=timeout, stop_event=self.stock_stop,
+            on_socket=on_socket, keep_tracked=keep_tracked,
+        )
 
     def _stop_psl_worker_locked(self):
         self.stock_stop.set()
-        for sock in (self.stock_socket, self._stock_pending_socket):
+        with self.lock:
+            socks = (self.stock_socket, self._stock_pending_socket)
+        for sock in socks:
             if sock:
-                try:
-                    sock.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
+                if hasattr(sock, 'shutdown'):
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
                 if hasattr(sock, 'close'):
                     try:
                         sock.close()
@@ -749,26 +814,33 @@ class Runtime:
 
     def _stock_receive(self):
         from stock import IdleStockTimeout, read_stock
+        sock = None
         try:
-            host = self.config['headset_host'].strip()
-            port = int(self.config['headset_port'])
-            sock = self._connect_stock(host, port, timeout=3)
-            if self.stock_stop.is_set():
-                if hasattr(sock, 'close'):
-                    sock.close()
-                return
-            enable_keepalive(sock)
-            try:
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            except (OSError, AttributeError):
-                pass
-            if hasattr(sock, 'settimeout'):
-                sock.settimeout(2.0)
-            self.stock_socket = sock
-            last_record_mono = time.monotonic()
             with self.lock:
-                self.stock_status['active'] = True
-                self.stock_status['error'] = None
+                host = self.config['headset_host'].strip()
+                port = int(self.config['headset_port'])
+            sock = self._connect_stock(host, port, timeout=3, keep_tracked=True)
+            try:
+                enable_keepalive(sock)
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except (OSError, AttributeError):
+                    pass
+                if hasattr(sock, 'settimeout'):
+                    sock.settimeout(2.0)
+                with self.lock:
+                    if self.stock_stop.is_set():
+                        if hasattr(sock, 'close'):
+                            sock.close()
+                        return
+                    self.stock_socket = sock
+                    self.stock_status['active'] = True
+                    self.stock_status['error'] = None
+            finally:
+                with self.lock:
+                    if self._stock_pending_socket is sock:
+                        self._stock_pending_socket = None
+            last_record_mono = time.monotonic()
             with sock:
                 sock.sendall(b'LABELS\n')
                 while not self.stock_stop.is_set():
@@ -798,7 +870,8 @@ class Runtime:
             with self.lock:
                 self.stock_status['active'] = False
                 self.latest_stock = None
-            self.stock_socket = None
+                if sock is None or self.stock_socket is sock:
+                    self.stock_socket = None
 
     def recording(self, action, *, person_id='', confirmed=False, guide=True, stage='raw_only',
                   role=None, evaluation_only=None, preset_id='complete', automatic=False, receive_results=True,
@@ -1030,29 +1103,51 @@ class Runtime:
             context = None
             if config['model_kind'] == 'face50':
                 from stock import read_capture_context
-                with self._connect(host, port, timeout=3) as control:
-                    context = read_capture_context(control)
+                control = self._connect(host, port, timeout=3, keep_tracked=True)
+                try:
+                    with control:
+                        context = read_capture_context(control)
+                finally:
+                    self._untrack_pending_socket(control)
                 self.bind_capture(context.capture_session_id, context.service_generation, evidence=context.evidence)
                 self.capture_context = context.evidence
             if self.stop_event.is_set():
                 return
-            sock = self._connect(host, port, timeout=3)
-            enable_keepalive(sock)
-            sock.settimeout(10)  # The first subscription may cold-start the native camera.
-            with self.lock:
-                self.socket = sock
-                self.connected = True
-            if self.stop_event.is_set():
-                sock.close()
-                return
+            sock = self._connect(host, port, timeout=3, keep_tracked=True)
+            try:
+                enable_keepalive(sock)
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except (OSError, AttributeError):
+                    pass
+                sock.settimeout(10)  # The first subscription may cold-start the native camera.
+                with self.lock:
+                    if self.stop_event.is_set():
+                        sock.close()
+                        return
+                    self.socket = sock
+                    self.connected = True
+            finally:
+                self._untrack_pending_socket(sock)
             sock.sendall(b'JPEG\n')
             with sock:
                 first_frame = True
+                was_idle = False
                 while not self.stop_event.is_set():
-                    header, payload = read_frame(sock)
+                    try:
+                        header, payload = read_frame(sock)
+                    except IdleStreamTimeout:
+                        was_idle = True
+                        if first_frame:
+                            sock.settimeout(1)
+                            first_frame = False
+                        continue
                     if first_frame:
                         sock.settimeout(1)
                         first_frame = False
+                    if was_idle:
+                        was_idle = False
+                        self._request_clock_resync()
                     received_ns = time.perf_counter_ns()
                     if context is not None:
                         context.require_session(header.session_id)
@@ -1070,8 +1165,19 @@ class Runtime:
                 with self.lock:
                     self.last_error = str(error)
         finally:
+            self.stop_event.set()
+            self._wake_clock_thread()
             with self.condition:
+                if self.input_stream:
+                    try:
+                        self.input_stream.close()
+                    except OSError:
+                        pass
+                    self.input_stream = None
+                self.running = False
                 self.connected = False
+                self.mode = 'idle'
+                self.config['enabled'] = False
                 self.source_closed = True
                 self.socket = None
                 self.model_version += 1
@@ -1084,25 +1190,51 @@ class Runtime:
             self._stop_recording()
 
     def _clock_refresh(self):
-        while not self.stop_event.wait(10):
-            try:
-                host = self.config['headset_host'].strip()
-                if not host:
-                    continue
-                holder = [None]
-                def on_sock(sock):
-                    if sock is not None:
-                        holder[0] = sock
-                        self._track_pending_socket(sock)
-                    elif holder[0] is not None:
-                        self._untrack_pending_socket(holder[0])
-                        holder[0] = None
-                calibrated = sync_clock(host, int(self.config['headset_port']), 3,
-                                        stop_event=self.stop_event, on_socket=on_sock)
-                self._set_clock(calibrated)
-            except (OSError, EOFError, ValueError) as error:
-                with self.lock:
-                    self.description['clock_error'] = str(error)
+        last_sync_mono = 0.0
+        try:
+            while not self.stop_event.is_set():
+                with self._clock_cond:
+                    self._clock_cond.wait_for(
+                        lambda: self.stop_event.is_set() or self._clock_resync_requested,
+                        timeout=10.0,
+                    )
+                    forced = self._clock_resync_requested
+                    self._clock_resync_requested = False
+                if self.stop_event.is_set():
+                    break
+                if forced:
+                    since = time.monotonic() - last_sync_mono
+                    if since < 0.5 and self.stop_event.wait(0.5 - since):
+                        break
+                last_sync_mono = time.monotonic()
+                try:
+                    with self.lock:
+                        host = self.config['headset_host'].strip()
+                        port = int(self.config['headset_port'])
+                    if not host:
+                        continue
+                    holder = [None]
+                    def on_sock(sock):
+                        if sock is not None:
+                            holder[0] = sock
+                            self._track_pending_socket(sock)
+                        elif holder[0] is not None:
+                            self._untrack_pending_socket(holder[0])
+                            holder[0] = None
+                    calibrated = sync_clock(host, port, 3,
+                                            stop_event=self.stop_event, on_socket=on_sock)
+                    self._set_clock(calibrated)
+                except (OSError, EOFError, ValueError) as error:
+                    with self.lock:
+                        self.description['clock_error'] = str(error)
+        finally:
+            with self.lock:
+                if self.clock_log and self.stop_event.is_set():
+                    try:
+                        self.clock_log.close()
+                    except OSError:
+                        pass
+                    self.clock_log = None
 
     def _replay(self, path):
         try:
@@ -1243,6 +1375,8 @@ class Runtime:
                 begin = time.perf_counter_ns()
                 age, upper = self._age(header, begin)
                 if upper > config['stale_ms']:
+                    if self.mode == 'live' and (begin - received) / 1e6 <= config['stale_ms']:
+                        self._request_clock_resync()
                     with self.lock:
                         self.counts['stale'] += 1
                     continue
@@ -1323,12 +1457,29 @@ class Runtime:
             with self.lock:
                 self.last_error = type(error).__name__+': '+str(error)
             self.stop_event.set()
+            self._wake_clock_thread()
+            self._interrupt_sockets()
             with self.lock:
                 self.prediction = self._invalid('error')
                 self.running = False
+                self.connected = False
+                self.mode = 'idle'
                 self.config['enabled'] = False
                 if self.last_header is not None:
                     self._send_result(self.last_header, self.prediction, 0.)
+            try:
+                self._sync_psl_worker()
+            except RuntimeError:
+                pass
+        finally:
+            with self.lock:
+                if self.log and self.stop_event.is_set():
+                    try:
+                        self.log.flush()
+                        self.log.close()
+                    except OSError:
+                        pass
+                    self.log = None
 
     def _preview_image(self, image, mask, prediction):
         picture = Image.fromarray(image).convert('RGB')
@@ -1347,6 +1498,7 @@ class Runtime:
 
     def stop(self, *, cancel_recording=False):
         self.stop_event.set()
+        self._wake_clock_thread()
         with self.condition:
             self.model_version += 1
             self.pending = None
@@ -1354,35 +1506,22 @@ class Runtime:
             self.preview = None
             if self.last_header is not None:
                 self._send_result(self.last_header, self.prediction, 0.)
-        self._stop_recording(cancel=cancel_recording)
-        self.personal.cancel()
-        training = self.personal.thread
-        if training is not None and training is not threading.current_thread():
-            training.join(timeout=5)
-            if training.is_alive():
-                raise RuntimeError('Owned personal training worker did not stop')
-        with self.condition:
             self.lifecycle += 1
             self.condition.notify_all()
-            sock = self.socket
-            pending_socks = list(self._pending_sockets)
-            self._pending_sockets.clear()
-        for pending in pending_socks:
-            try:
-                pending.close()
-            except OSError:
-                pass
-        if sock:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass  # Closing an already-disconnected owned connection.
-            try:
-                sock.close()
-            except OSError:
-                pass
         join_error = None
         try:
+            try:
+                self._stop_recording(cancel=cancel_recording)
+            except RuntimeError as error:
+                if join_error is None:
+                    join_error = error
+            self.personal.cancel()
+            training = self.personal.thread
+            if training is not None and training is not threading.current_thread():
+                training.join(timeout=5)
+                if training.is_alive() and join_error is None:
+                    join_error = RuntimeError('Owned personal training worker did not stop')
+            self._interrupt_sockets()
             for thread in self.threads:
                 if thread is not threading.current_thread():
                     thread.join(timeout=5)

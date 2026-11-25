@@ -371,6 +371,86 @@ class CympleRelayTests(unittest.TestCase):
                 runtime.stop()
                 runtime.udp.close()
 
+    def test_stop_cancels_hanging_connect_and_start_during_discovery_and_end_backs_off(self):
+        from unittest.mock import patch
+        import wire
+
+        entered = threading.Event()
+
+        def slow_connect(host, port, timeout=4, *, stop_event=None, on_socket=None, keep_tracked=False):
+            entered.set()
+            if stop_event is not None:
+                stop_event.wait(5)
+            raise OSError('Connection cancelled')
+
+        relay = CympleEyeRelay()
+        self.addCleanup(relay.close)
+        with patch.object(wire, 'connect_cancellable', side_effect=slow_connect):
+            relay.start({'headset_host': '198.51.100.9'})
+            self.assertTrue(entered.wait(2))
+            t0 = time.monotonic()
+            relay.stop()
+            self.assertLess(time.monotonic() - t0, 1.5)
+            self.assertFalse(relay.running)
+
+        disc_entered = threading.Event()
+        disc_release = threading.Event()
+
+        def slow_discover(timeout=1.5):
+            disc_entered.set()
+            disc_release.wait(3)
+            return {'devices': [{
+                'host': '127.0.0.1',
+                'streams': [
+                    {'id': 'mouth', 'port': 45681},
+                    {'id': 'eye_left', 'port': 45682},
+                    {'id': 'eye_right', 'port': 45683},
+                ],
+            }]}
+
+        race_relay = CympleEyeRelay(discover=slow_discover)
+        self.addCleanup(race_relay.close)
+        errors = []
+        starter = threading.Thread(target=lambda: _capture_error(lambda: race_relay.start({'headset_host': ''}), errors))
+        starter.start()
+        self.assertTrue(disc_entered.wait(2))
+        race_relay.stop()
+        disc_release.set()
+        starter.join(2)
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], RuntimeError)
+        self.assertFalse(race_relay.running)
+
+        connect_times = []
+
+        class _EndSock:
+            def settimeout(self, t): pass
+            def setsockopt(self, *a): pass
+            def sendall(self, d): pass
+            def close(self): pass
+
+        def fake_connect(*a, **kw):
+            connect_times.append(time.monotonic())
+            return _EndSock()
+
+        from dataclasses import replace
+        end_relay = CympleEyeRelay()
+        self.addCleanup(end_relay.close)
+        with patch.object(wire, 'connect_cancellable', side_effect=fake_connect), \
+             patch.object(wire, 'read_frame', return_value=(replace(header(1), flags=wire.END, payload_bytes=0), b'')):
+            end_relay.start({'headset_host': '127.0.0.1'})
+            wait_for(lambda: len(connect_times) >= 2, timeout=3.0)
+            time.sleep(0.2)
+            end_relay.stop()
+        self.assertLessEqual(len(connect_times), 6)
+
+
+def _capture_error(fn, errors):
+    try:
+        fn()
+    except Exception as exc:
+        errors.append(exc)
+
 
 if __name__ == '__main__':
     unittest.main()

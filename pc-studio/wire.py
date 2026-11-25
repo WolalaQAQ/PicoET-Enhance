@@ -68,7 +68,12 @@ class IdleStreamTimeout(TimeoutError):
     """No new PTJ1 frame started before the socket read timeout."""
 
 
-def enable_keepalive(sock, idle_ms=5000, interval_ms=1000):
+def _is_poll_timeout(exc):
+    """True only for Python socket.settimeout() expirations, never OS WSAETIMEDOUT/ETIMEDOUT."""
+    return exc.errno is None and getattr(exc, 'winerror', None) is None
+
+
+def enable_keepalive(sock, idle_ms=5000, interval_ms=1000, count=5):
     """Enable OS TCP keepalive so dropped wireless links still fail idle reads."""
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
@@ -80,6 +85,26 @@ def enable_keepalive(sock, idle_ms=5000, interval_ms=1000):
             sock.ioctl(sio_keepalive_vals, (1, int(idle_ms), int(interval_ms)))
         except (OSError, AttributeError, ValueError):
             pass
+    else:
+        idle_s = max(1, int(idle_ms) // 1000)
+        interval_s = max(1, int(interval_ms) // 1000)
+        for opt_name, val in (
+            ('TCP_KEEPIDLE', idle_s),
+            ('TCP_KEEPALIVE', idle_s),
+            ('TCP_KEEPINTVL', interval_s),
+        ):
+            opt = getattr(socket, opt_name, None)
+            if opt is not None:
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, opt, val)
+                except (OSError, AttributeError):
+                    pass
+    tcp_keepcnt = getattr(socket, 'TCP_KEEPCNT', None)
+    if tcp_keepcnt is not None:
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, tcp_keepcnt, max(1, int(count)))
+        except (OSError, AttributeError):
+            pass
 
 
 def read_exact(sock, size, *, part=None):
@@ -89,7 +114,7 @@ def read_exact(sock, size, *, part=None):
         try:
             count = sock.recv_into(view)
         except TimeoutError as exc:
-            if part == 'header' and len(view) == size:
+            if part == 'header' and len(view) == size and _is_poll_timeout(exc):
                 raise IdleStreamTimeout('Waiting for next PTJ1 frame') from exc
             raise
         if count == 0:
@@ -135,12 +160,15 @@ class SourceOrder:
 _ORIG_CREATE_CONNECTION = socket.create_connection
 
 
-def connect_cancellable(host, port, timeout=3, *, stop_event=None, on_socket=None):
+def connect_cancellable(host, port, timeout=3, *, stop_event=None, on_socket=None, keep_tracked=False):
     """Connect TCP socket while registering it so stop() can interrupt an unreachable-host wait."""
     if stop_event is not None and stop_event.is_set():
         raise OSError('Connection cancelled')
     if socket.create_connection is not _ORIG_CREATE_CONNECTION:
-        return socket.create_connection((host, port), timeout=timeout)
+        sock = socket.create_connection((host, port), timeout=timeout)
+        if on_socket is not None and keep_tracked:
+            on_socket(sock)
+        return sock
     last_error = None
     infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
     for family, socktype, proto, _, addr in infos:
@@ -150,16 +178,18 @@ def connect_cancellable(host, port, timeout=3, *, stop_event=None, on_socket=Non
         sock.settimeout(timeout)
         if on_socket is not None:
             on_socket(sock)
+        connected = False
         try:
             if stop_event is not None and stop_event.is_set():
                 raise OSError('Connection cancelled')
             sock.connect(addr)
+            connected = True
             return sock
         except OSError as error:
             last_error = error
             sock.close()
         finally:
-            if on_socket is not None:
+            if on_socket is not None and (not connected or not keep_tracked):
                 on_socket(None)
     raise last_error or OSError(f'Unable to connect to {host}:{port}')
 
@@ -169,11 +199,21 @@ def sync_clock(host, port, count=12, *, stop_event=None, on_socket=None):
     for _ in range(count):
         if stop_event is not None and stop_event.is_set():
             raise OSError('Clock sync cancelled')
-        with connect_cancellable(host, port, timeout=3, stop_event=stop_event, on_socket=on_socket) as sock:
-            start = time.perf_counter_ns()
-            sock.sendall(b'PING\n')
-            received, sent = struct.unpack('<QQ', read_exact(sock, 16))
-            end = time.perf_counter_ns()
+        try:
+            with connect_cancellable(
+                host, port, timeout=3, stop_event=stop_event, on_socket=on_socket, keep_tracked=True,
+            ) as sock:
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except (OSError, AttributeError):
+                    pass
+                start = time.perf_counter_ns()
+                sock.sendall(b'PING\n')
+                received, sent = struct.unpack('<QQ', read_exact(sock, 16))
+                end = time.perf_counter_ns()
+        finally:
+            if on_socket is not None:
+                on_socket(None)
         samples.append({'pc_send_ns': start, 'device_recv_ns': received,
                         'device_send_ns': sent, 'pc_recv_ns': end,
                         'low_ns': sent-end, 'high_ns': received-start,

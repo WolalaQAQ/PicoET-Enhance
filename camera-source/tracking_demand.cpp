@@ -23,7 +23,7 @@ struct NativeTracking {
     }
     TrackingResult apply(bool start) {
         TrackingResult result{STATUS_BAD_VALUE, STATUS_BAD_VALUE, STATUS_BAD_VALUE};
-        if (!binder && start) {
+        if (!binder) {
             // Same Android 10 service lookup and Binder ABI used by Facial Bridge.
             if (!library) library = dlopen("libbinder_ndk.so", RTLD_NOW | RTLD_LOCAL);
             using Check = AIBinder* (*)(const char*);
@@ -37,7 +37,6 @@ struct NativeTracking {
                 AIBinder_decStrong(binder); binder = nullptr; return result;
             }
         }
-        if (!binder) return result;
         AParcel* request = nullptr;
         AParcel* reply = nullptr;
         result.transport = AIBinder_prepareTransaction(binder, &request);
@@ -50,6 +49,10 @@ struct NativeTracking {
             result.transport = AParcel_readInt32(reply, &result.binder);
             if (!result.transport && !result.binder)
                 result.transport = AParcel_readInt32(reply, &result.service);
+        }
+        if (result.transport < 0 && binder) {
+            AIBinder_decStrong(binder);
+            binder = nullptr;
         }
         if (request) AParcel_delete(request);
         if (reply) AParcel_delete(reply);
@@ -79,7 +82,7 @@ void TrackingDemand::want(bool value) {
 void TrackingDemand::run() {
     std::unique_lock<std::mutex> lock(mutex);
     for (;;) {
-        if (!closing && desired && !state.active && revision == observed_revision)
+        if (!closing && (bool(state.active) != desired) && revision == observed_revision)
             changed.wait_for(lock, std::chrono::seconds(2), [&] { return closing || revision != observed_revision; });
         else
             changed.wait(lock, [&] { return closing || revision != observed_revision; });

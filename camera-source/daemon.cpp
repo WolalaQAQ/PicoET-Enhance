@@ -167,6 +167,7 @@ int main(int argc, char** argv) {
     for (auto& image : c.images) { image.producer.session_id = c.session; image.producer.running = 1; }
     PTJConfig config{}; config.struct_bytes = sizeof(config); config.session_id = c.session;
     config.port = argc >= 3 ? uint16_t(std::atoi(argv[2])) : 45681;
+    config.send_timeout_ms = 1200;
     PTJSource* cores[PTJ_STREAMS]{};
     if (!config.port || config.port > 65533) failure(c, CoreBind, EINVAL);
     for (uint32_t stream = 0; stream < PTJ_STREAMS && c.state != Failed; ++stream) {
@@ -192,9 +193,14 @@ int main(int argc, char** argv) {
     PTJSource* core = cores[PTJ_MOUTH]; // Labels and the legacy control endpoint remain on mouth.
     PTJSource* eye = cores[PTJ_EYE_LEFT];
     auto native_operation = tracking_operation();
-    TrackingDemand demand([&c, native_operation](bool start) {
-        if (start) c.capture_epoch.fetch_add(1, std::memory_order_release);
-        return native_operation(start);
+    std::atomic<bool> epoch_bumped_for_start{false};
+    TrackingDemand demand([&c, &epoch_bumped_for_start, native_operation](bool start) {
+        if (start && !epoch_bumped_for_start.exchange(true, std::memory_order_acq_rel)) {
+            c.capture_epoch.fetch_add(1, std::memory_order_release);
+        }
+        const auto result = native_operation(start);
+        if (result.ok()) epoch_bumped_for_start.store(false, std::memory_order_release);
+        return result;
     });
     tracking = &demand;
     std::signal(SIGINT, signal_stop); std::signal(SIGTERM, signal_stop);
@@ -210,6 +216,7 @@ int main(int argc, char** argv) {
                 (unsigned long long)c.daemon_birth, sizeof(Channel), unsigned(config.port));
     std::fflush(stdout); status(root, c);
     uint64_t last_status = 0, last_identity_check = 0;
+    uint32_t observed_capture_epoch[PTJ_STREAMS]{};
     Request request;
     bool registered = false, validated = false, prev_busy = true;
     int current[PTJ_STREAMS]{-1, -1, -1};
@@ -251,6 +258,10 @@ int main(int argc, char** argv) {
         for (const auto& image : c.images) wanted |= image.subscription.load() != 0;
 #if defined(__ANDROID__)
         demand.want(!stopping && wanted);
+        if (!wanted && epoch_bumped_for_start.load(std::memory_order_relaxed)) {
+            const auto ds = demand.snapshot();
+            if (!ds.busy && !ds.active) epoch_bumped_for_start.store(false, std::memory_order_release);
+        }
 #endif
         if (stopping) break;
         bool busy = !validated || wanted || change_results || change_eyes;
@@ -313,6 +324,10 @@ int main(int argc, char** argv) {
                     if (!subscription || subscription != slot.subscription) {
                         ++image.cancel_disconnect; release_slot(image, index);
                     } else {
+                        if (slot.reserved != observed_capture_epoch[stream]) {
+                            observed_capture_epoch[stream] = slot.reserved;
+                            core_ptj_reset_capture_epoch(cores[stream]);
+                        }
                         image.last_capture_copy_ns = slot.copy_mono_ns; image.last_dispatch_ns = mono_ns();
                         int result = core_ptj_submit_borrowed(cores[stream], slot.pixels, &slot.meta,
                                                               slot.copy_mono_ns, slot.subscription);
@@ -343,15 +358,10 @@ int main(int argc, char** argv) {
     c.stock_subscription.store(0, std::memory_order_release);
     c.eye_subscription.store(0, std::memory_order_release);
     demand.want(false);
-    for (;;) {
-        const auto state = demand.snapshot();
-        if (!state.busy && (!state.active || !state.result.ok())) break;
-        c.daemon_heartbeat = mono_ns(); pause_us(1000);
-    }
-    demand.stop(); // Only this daemon's lease; other Binder consumers retain theirs.
     const bool failed = c.state == Failed;
     c.state.store(Stopping, std::memory_order_release);
-    // Native join precedes freeing the IPC CURRENT slot and every stop ACK.
+    // Signal all cores concurrently with async Binder STOP, then join before releasing slots.
+    for (auto* source : cores) core_ptj_begin_stop(source);
     for (uint32_t stream = 0; stream < PTJ_STREAMS; ++stream) {
         core_ptj_stop(cores[stream]);
         PTJStats final{}; core_ptj_get_stats(cores[stream], &final); store_stats(c.images[stream].core, final);
@@ -361,6 +371,12 @@ int main(int argc, char** argv) {
             ++c.images[stream].completed; release_slot(c.images[stream], current[stream]);
         }
     }
+    for (;;) {
+        const auto state = demand.snapshot();
+        if (!state.busy && (!state.active || !state.result.ok())) break;
+        c.daemon_heartbeat = mono_ns(); pause_us(1000);
+    }
+    demand.stop(); // Only this daemon's lease; other Binder consumers retain theirs.
     const uint64_t drain_deadline = mono_ns() + 500000000ULL;
     auto producers_busy = [&] {
         for (const auto& image : c.images) if (image.producer_lock.load()) return true;

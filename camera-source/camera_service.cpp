@@ -213,13 +213,16 @@ void start_daemon() {
 }
 void sync_results(bool allowed, bool eyes=false) {
     Channel channel;auto* c=channel.get();
-    if(!c || c->state!=ipc::Ready || !fresh(*c) || !camera_service::attached(*c,instance.pid,instance.birth))return;
+    if(!c || c->state!=ipc::Ready || !camera_service::attached(*c,instance.pid,instance.birth))return;
+    if(!fresh(*c) && !wait_fresh(*c))return;
     auto& applied=eyes?c->eye_applied:c->results_applied;
     auto& request=eyes?c->eye_request:c->results_request;
-    if(!applied)throw std::runtime_error("results_unavailable");
+    const uint32_t current_applied=applied.load(std::memory_order_acquire);
+    if(!current_applied)throw std::runtime_error("results_unavailable");
     const uint32_t policy=allowed?2:1;
+    if(current_applied==policy)return;
     request.store(policy,std::memory_order_release);
-    wait([&]{return c->state==ipc::Ready && applied==policy && fresh(*c);},"results_timeout");
+    wait([&]{return c->state==ipc::Ready && applied.load(std::memory_order_acquire)==policy && fresh(*c);},"results_timeout");
 }
 void cleanup_stage_dir(const std::string& dir) {
     static const char* const files[]={
@@ -333,7 +336,7 @@ void stop() {
     camera_command("stop");
     {
         Channel channel;auto* c=channel.get();
-        if(c && ipc::valid_header(*c) && !c->client_ready && fresh(*c)) {
+        if(c && ipc::valid_header(*c) && !c->client_ready && daemon_alive(*c)) {
             if(kill(pid_t(c->daemon_pid),SIGTERM) && errno!=ESRCH)throw std::runtime_error("stop_pending");
         }
     }
@@ -373,7 +376,8 @@ int main(int argc,char** argv) {
            (action=="off" || action=="halt" || (action=="reconcile" && !enabled()))) {
             try { retire_dead_instance(); error.clear(); } catch(const std::exception& retired) {error=retired.what();}
         }
-        if(lock>=0 && !results_action && !error.empty() && error!="control_busy" && error!="tracking_busy" && error!="service_unavailable")
+        const bool transient_reconcile=action=="reconcile" && error=="results_timeout";
+        if(lock>=0 && !results_action && !transient_reconcile && !error.empty() && error!="control_busy" && error!="tracking_busy" && error!="service_unavailable")
             try{write(state_root+"/camera.failure",instance.key+"\n"+error);}catch(const std::exception&){}
     }
     std::printf("%s",status(error).c_str());
