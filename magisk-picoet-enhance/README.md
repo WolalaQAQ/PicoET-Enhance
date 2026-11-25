@@ -1,147 +1,99 @@
-# PicoET-Enhance 2.6.2
+# PicoET-Enhance Module Reference (`v2.6.2`)
 
-Eye-tracking enhancement for PICO 4 Pro running PICO OS 5.13.7 with Magisk.
-The installer checks the device's eye-tracking library hashes before installing.
+**English** | [简体中文](README_zh.md)
 
-## Installation and defaults
+Technical reference for the installed Magisk module at `/data/adb/modules/picoet-enhance/`. For user installation, companion app walkthroughs, and PC Studio setup, see the [main README](../README.md).
 
-Install the ZIP in Magisk and reboot. Fresh installs enable enhanced mode (`dual/on`)
-at 90/90 Hz. If you switched to normal mode before upgrading, it stays off.
+## Target & Verification Boundary
 
-Automatic injection waits for `sys.boot_completed=1` and a Binder response from the
-same eye-tracking service instance. Before starting Bridge or another tracking client
-in enhanced mode, check that `picoet.sh status` reports
-`phase=ready applied_mode=dual applied_gate=on`.
+- **Target**: PICO 4 Pro running PICO OS 5.13.7 (Android 10 / API 29, `arm64-v8a`) with Magisk under SELinux Enforcing.
+- **Zero PICO bytes**: The module ships only our own scripts, binaries, presets, and companion APK. `customize.sh` checks the SHA-256 of `/system/lib64/libpxreyetrackingservice.so` and `/system/lib64/libpxreyetracking.phoenix.so` and aborts on mismatch.
+- **Memory-only hooks**: Hooks live inside `pxreyetrackingservice` process memory via `ptrace` injection (`picoet-inject` + `libpicoet_hook.so`). No system library is modified on disk, and `ro.pxr.externalfunc` is never touched.
 
-Enhanced mode opens the service-local pupil gate and decouples the expression model:
-each eye's EyeLook, Blink, Wide and brow values are computed and filtered on their own,
-and the right inner brow plus the per-eye quality states are exported as the `EPI1`
-v2 extension. PicoFacialBridge forwards it as `X` v2 packets with separate left-eye,
-right-eye and mouth source identities. Use matching Bridge and UnifiedPicoModule
-builds with v2 support: PicoFacialBridge 0.5.0+ and UnifiedPicoModule 0.4.0+.
+## Module Layout
 
-Eye and mouth expressions each run on every eligible fresh camera input, with the two
-inferences for a frame in parallel. Smoothing, mouth baseline adaptation and quality
-windows follow each source's own timestamps. Dark-image admission, reference
-protection, quantization and combined native gaze remain stock. PC eye direction and
-eyelid openness use EyeLook and `1−Blink`; native eye data is used only for measured
-pupil diameter.
+| Path (under `/data/adb/modules/picoet-enhance/`) | Role |
+| --- | --- |
+| `module.prop`, `sepolicy.rule`, `hashes.sh` | Module metadata (`id=picoet-enhance`, `version=2.6.2`, `versionCode=30`), SELinux rules, and SHA-256 verification pins for `picoet-inject` and `libpicoet_hook.so` |
+| `customize.sh` | Install-time library hash check, permission setup, `/data/system/package_cache/*/PicoETEnhance-*` cleanup, and mode normalization |
+| `post-fs-data.sh` | Intentionally a no-op so boot is never blocked; transient properties reset on reboot |
+| `service.sh` | `late_start` supervisor: waits for `sys.boot_completed=1`, launches `picoet-panel`, runs `picoet.sh ensure` and `picoet-camera reconcile` in a loop |
+| `picoet.sh` | Root CLI controller and watchdog transaction script (`status`, `dual`/`on`, `off`, `toggle`, `reload-processing`, internal `boot`/`ensure`) |
+| `action.sh` | Magisk **Action** button handler (`picoet.sh toggle --force`, then prints `status`) |
+| `uninstall.sh` | Post-removal cleanup of state files, runtime directories, rate/post-processing configs, and transient properties |
+| `bin/picoet-inject` | ARM64 `ptrace` injector, file/lock helper (`--run-locked`, `--prepare-runtime`, `--save-mode`, `--normalize-mode`, `--read-file`, `--read-log`) |
+| `bin/picoet-config` | Root CLI for reading, validating, and atomically writing `/data/local/tmp/picoet-postprocessing.conf` |
+| `bin/picoet-panel` | Module-owned root mailbox worker serving fixed requests from the zero-permission `dev.pico.etenhance` APK |
+| `bin/picoet-camera` | Module-owned controller for the LAN camera adapter and IPC daemon (`on`, `off`, `status`, `reconcile`, `halt`, `results-on/off`, `eyes-on/off`) |
+| `bin/ptj_ipc_daemon` | Standalone root transport daemon (libjpeg-turbo encoding, UDP discovery, HTTP MJPEG, `PTJ1`, `PSL1`, `PSE1`) |
+| `lib/libpicoet_hook.so` | In-process hook payload (pupil gate, independent per-eye expressions, 90/90 Hz scheduling, `EPI1` v2 export, 44-parameter stock post-processing config) |
+| `lib/libpicoet_camera_jpeg.so`, `lib/libptj_source.so` | In-process LAN camera adapter and shared-memory shim (`PTJIPC5`), staged per service instance on demand |
+| `system/app/PicoETEnhance/PicoETEnhance.apk` | Systemlessly overlaid zero-permission companion app (**LAN broadcast** & **Post-processing** tabs) |
+| `postprocessing-{default,balanced,responsive,raw}.conf` | Preset configurations for PICO's 44 built-in post-processing parameters |
 
-## Mode controls
+## Runtime Properties, State Files & Logs
 
-The companion app has **LAN broadcast** and **Post-processing** tabs. Broadcasting defaults off and remembers explicit choices. The broadcast tab shows service status, addresses, and client counts for mouth, left-eye and right-eye streams. Closing the app leaves sharing available, and only subscribed cameras run. Turning the master switch off drains and closes all streams. The post-processing tab retains the original 44-parameter panel and its draft.
+### Transient Android Properties (Published by `picoet.sh`)
 
-Under **Result sharing**, the **Mouth** (PSL1) and **Both eyes** (PSE1) switches independently allow result subscriptions while broadcasting. Both default off and neither closes image streams.
+- `picoet.enhance.mode` (`off` | `dual`) and `picoet.enhance.gate` (`off` | `on`): Read by `PicoFacialBridge` (`0.5.0+`) to detect enhanced mode and advertise `EPI1`/`X` v2 to `UnifiedPicoModule` (`0.4.0+`). Properties are cleared whenever the service restarts or exits.
 
-Camera control remains in the module-owned worker, not the rootless APK. The controller uses the existing enhancement lock and verifies the camera owner plus IPC attach/stop acknowledgements. The first attachment waits for idle eye/face tracking without restarting it. Separately started development adapters must be retired before using this switch.
+### Persistent & Runtime Paths
 
-Run as root:
+| Path | Purpose |
+| --- | --- |
+| `/data/local/tmp/picoet-mode`, `/data/local/tmp/picoet-gate` | Saved mode (`dual`/`off`) and gate (`on`/`off`), written atomically with `u:object_r:shell_data_file:s0` |
+| `/data/local/tmp/picoet-eye-hz`, `/data/local/tmp/picoet-mouth-hz` | Optional startup-only rate overrides (positive integers `1..90`; defaults `90/90`, mouth clamped to eye; survive upgrades) |
+| `/data/local/tmp/picoet-postprocessing.conf` | Saved 44-parameter post-processing config (`version=1`, `key=value`, max 16 KiB; read once at payload startup; survives upgrades) |
+| `/data/local/tmp/picoet-hook.log` | Payload runtime log |
+| `/data/local/tmp/picoet-runtime/` | Private runtime directory holding per-PID payload state reports (`<pid>.state`) and async `unsafe` tokens |
+| `/data/local/tmp/picoet-camera/` | Per-instance `0700` stage directories for `video-channel.bin`, staged camera `.so` copies, `camera-status.json`, and `daemon.log` |
+| `/data/adb/picoet-enhance/` | Module control state (`control.lock`, `boot.id`, `recovery.used`, `injection.blocked`, `unsafe.instance`, `unsafe.handled`, `automatic.attempts`, `camera.enabled`, `camera.results`, `camera.eyes`, `camera.instance`, `camera.failure`) and control logs (`picoet.log`, `inject.log`, `service.log`, `panel.log`) |
 
-```sh
-sh /data/adb/modules/picoet-enhance/picoet.sh status
-sh /data/adb/modules/picoet-enhance/picoet.sh dual
-sh /data/adb/modules/picoet-enhance/picoet.sh off
-sh /data/adb/modules/picoet-enhance/picoet.sh toggle
-```
+## CLI Reference
 
-`dual` enables enhancement, `off` restores the stock service, and `toggle` switches
-between them. The Magisk Action button performs the same toggle and retries
-enabling if enhancement previously failed.
-
-Switching restarts the eye-tracking service and disconnects tracking clients.
-Command-line switching requires `--force` while clients are connected.
-
-## Eye and mouth rates
-
-The defaults are 90 Hz for eyes and 90 Hz for mouth, with no configuration needed.
-To lower either one, write a positive integer to `/data/local/tmp/picoet-eye-hz` or
-`/data/local/tmp/picoet-mouth-hz`. Values above 90 are capped, a missing or invalid
-file uses 90, and the mouth rate cannot exceed the eye rate. Frames outside the chosen
-rate are skipped. The files are read once when the service starts, so stop tracking
-clients and re-run `dual` to apply a change. For example, to run the mouth at 24 Hz:
-
-```sh
-echo 90 > /data/local/tmp/picoet-eye-hz
-echo 24 > /data/local/tmp/picoet-mouth-hz
-sh /data/adb/modules/picoet-enhance/picoet.sh dual
-sh /data/adb/modules/picoet-enhance/picoet.sh status
-```
-
-`status` shows `effective_eye_hz` and `effective_mouth_hz`, the rates in effect rather
-than measured output rates. To return to 90/90, delete both files and run `dual`
-again. Rates set in 2.4.0 or later survive reinstalls and upgrades. Only the first
-migration from a version before 2.4.0 clears old overrides to start at 90/90.
-Normal mode (`off`) is fully stock.
-
-## Headset postprocessing
-
-PICO's stock firmware postprocesses eye and mouth expressions with fixed parameters.
-This module exposes 44 of those parameters as settings; the defaults are the stock
-values and the algorithms remain PICO's.
-
-The module includes a separate **PicoET-Enhance** settings app in
-`system/app/PicoETEnhance/`. Install the module and reboot to make the panel available
-in the headset application library; uninstalling the module and rebooting removes it. Neither this panel nor Bridge requests root:
-the panel submits fixed requests from its Android sandbox to the module-owned worker.
-Choose a preset, then open the movement that looks wrong in the mirror; each movement
-page shows the settings that shape it. Drag sliders for larger changes or tap the ◀ / ▶
-buttons for fine steps. Tap a value for precise numeric input. All 44
-fields are available without editing configuration text. The bottom bar distinguishes unsaved changes, saved
-settings awaiting application and a successful application this session.
-Save writes `/data/local/tmp/picoet-postprocessing.conf` without restarting tracking.
-Stop tracking clients, then apply the saved file with the separate restart action.
-No Bridge update is required.
-
-The included `postprocessing-default.conf` lists all 44 settings.
-`postprocessing-balanced.conf` moderately reduces smoothing across eyes, brows, mouth and tongue,
-including small movements, while retaining more smoothing than Responsive. It weakens brow links and weak-shape compression, speeds up
-rest learning and keeps blink snapping and the lip closure boost. Some smoothing remains,
-with fine motion more visible than under stock settings. `postprocessing-responsive.conf`
-follows the model within about 0.1 s with half of the smoothing and no brow links.
-`postprocessing-raw.conf` skips the stock numerical postprocessing but keeps inference,
-quality/reference logic, source identity and final output bounds. Use `.strength=0` to bypass a stage, `1` for the existing amount.
-
-Root-shell alternative:
+Run as root on the headset:
 
 ```sh
 MOD=/data/adb/modules/picoet-enhance
-"$MOD/bin/picoet-config" write < "$MOD/postprocessing-balanced.conf"
-sh "$MOD/picoet.sh" reload-processing
+
+# Mode & status
+sh "$MOD/picoet.sh" status
+sh "$MOD/picoet.sh" dual              # alias: on (adds --force to drop connected clients)
+sh "$MOD/picoet.sh" off               # restore stock service without injection
+sh "$MOD/picoet.sh" toggle            # dual -> off when ready, otherwise enables dual
+sh "$MOD/picoet.sh" reload-processing # validate config & restart if enhanced and idle (no --force)
+
+# Post-processing config helper
+"$MOD/bin/picoet-config" read|check|write|defaults|balanced|responsive|raw
 ```
 
-The restart action refuses connected clients and never enables an off enhancement.
-The file loads at payload startup; a missing file keeps the existing defaults.
-Saved settings survive upgrades; select, save and apply a preset again to use its updated values.
-Invalid configurations are rejected. No processing settings are sent through UDP
-or the PC module. Headset native numerical tests, companion boot integration and
-rootless IPC save/apply/restore pass on PICO 4 Pro / PICO OS 5.13.7 with SELinux
-enforcing. Worn response and noise still need comparison.
+- Fresh installs initialize `dual/on` at 90/90 Hz; upgrades preserve an existing `off` state.
+- `status` reports `effective_eye_hz` and `effective_mouth_hz` (configured targets, not measured FPS), `phase`, `applied_mode`, `applied_gate`, active `dumpsys` clients, and the last 5 lines of `/data/local/tmp/picoet-hook.log`.
+- To apply rate overrides, stop tracking clients, write `/data/local/tmp/picoet-eye-hz` and/or `/data/local/tmp/picoet-mouth-hz`, and run `picoet.sh dual`. Delete the files and re-run `dual` to restore 90/90 Hz.
+- `picoet-config write` reads from `stdin` and rejects invalid, duplicate, or unknown keys. Malformed or improperly owned config files fail explicitly at payload startup rather than silently falling back.
 
-## Status and troubleshooting
+## Injection Lifecycle & Recovery Budgets
 
-Successful enhancement shows `phase=ready applied_mode=dual applied_gate=on` in
-`status`. This describes installed hooks and configured targets. Engines initialized
-before the hooks are not rebuilt or retroactively given profile 0 or startup ET
-settings; the enhancement's own state warms up again.
+All control actions (`picoet.sh` and `picoet-camera`) serialize on `/data/adb/picoet-enhance/control.lock`.
 
-No safe executor or a temporary signal stop during preparation returns injector exit
-`3`: the watchdog releases the control lock and cools down for 30 seconds without
-consuming either budget. Synchronous and asynchronous unsafe failures share one
-automatic recovery per boot or explicit mode command. A separate limit allows
-injection into at most three consecutive unstable instances, replenished only after
-the same instance stays continuously `ready` for 60 seconds. If automatic loading
-stops, read the reported reason and logs, resolve it, then run `dual` to retry.
+1. **Readiness gate**: `service.sh` waits for `sys.boot_completed=1`. Before any `ptrace` attach, `picoet.sh` verifies `init.svc.pxreyetrackingservice=running` and a bounded `dumpsys -t 1 pxreyetrackingservice` response containing all three stock algorithm lines (`ET`, `FT`, `IPD`) for the exact `pid:starttime` instance.
+2. **Runtime verification**: An executable mapping of `libpicoet_hook.so` is never treated as ready on its own. The payload must atomically publish a schema-2 report matching the live `pid:starttime` with `phase=ready`. Wait for `phase=ready applied_mode=dual applied_gate=on` before starting tracking clients. Engines already initialized prior to injection are kept running and warm up enhancement state without forcing an engine rebuild.
+3. **Injector exit codes & recovery rules**:
+   - `0` — Attached and `dlopen` succeeded (readiness still confirmed via payload state file).
+   - `2` — Safe/known failure; blocks further automatic injection until an explicit mode command or reboot.
+   - `3` — No safe user-instruction executor thread or temporary signal stop; **no bytes written**. `service.sh` releases the lock and cools down **30 seconds** without consuming either budget.
+   - `4` / `5` — Stale partial mapping (`4`) or unsafe remote/restoration state where target was terminated (`5`); consumes the shared recovery budget (**1** automatic restart-and-retry per boot or explicit mode command). Asynchronous rollback failures in the payload share this same 1-shot budget.
+   - `6` — `--run-locked` busy (another control command owns `control.lock`).
+4. **Consecutive instability limit**: Automatic injection attempts at most **3** consecutive unstable service instances (`automatic.attempts`). The counter resets only after the same instance stays continuously `ready` for **60 seconds**.
+5. **Manual reset**: Running an explicit mode command (`picoet.sh dual`, `off`, `toggle`, or Magisk **Action**) clears `injection.blocked`, `recovery.used`, and `automatic.attempts`.
 
-- Hook log: `/data/local/tmp/picoet-hook.log`
-- Control logs: `/data/adb/picoet-enhance/*.log`
-- Saved mode/gate: `/data/local/tmp/picoet-mode`, `/data/local/tmp/picoet-gate`
+## Companion App & Camera Control Boundary
 
-To remove the module, uninstall it in Magisk and reboot. The settings app and the
-postprocessing configuration file are removed too. Cleanup removes known leaf
-files without recursing into unexpected directories or nested mounts; those
-directories may remain.
+- The companion APK (`dev.pico.etenhance`) declares zero Android permissions and never runs shell commands or opens sockets.
+- `picoet-panel` validates the caller UID against `dev.pico.etenhance` and processes fixed mailbox requests using descriptor-relative `openat` + `O_NOFOLLOW`.
+- `picoet-camera` handles **LAN broadcast** (`on` / `off`), **Mouth** (`results-on` / `results-off`), and **Both eyes** (`eyes-on` / `eyes-off`) under `control.lock`. First camera attachment verifies idle tracking via `dumpsys` without restarting `pxreyetrackingservice`. If a separately started developer adapter (`camera-source/device.py`) is already resident, `picoet-camera` reports `foreign_adapter` and refuses until that session is stopped and the service restarted.
+- For wire protocols and `PTJIPC5` details, see [CAMERA-PROTOCOL.md](../CAMERA-PROTOCOL.md).
 
-See the [project README](https://github.com/WolalaQAQ/PicoET-Enhance#compatibility-and-verification)
-for compatibility and validation details. The package contains the module scripts,
-injector, hook payload, configuration tools, preset files and the settings app; device
-libraries are supplied by the headset firmware.
+## Uninstalling
+
+Uninstall **PicoET-Enhance** in Magisk and reboot. `uninstall.sh` removes known state files, runtime directories, rate/post-processing configs, and transient properties without recursing into unexpected directories or nested mounts.

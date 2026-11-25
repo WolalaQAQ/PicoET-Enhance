@@ -1,127 +1,212 @@
+<div align="center">
+
 # PicoET-Enhance
 
-[English](README.md) | 简体中文
+**为 PICO 4 Pro 解锁真实瞳孔直径、左右眼独立表情、90/90 Hz 高频眼嘴追踪、头显端后处理调节与局域网相机广播。**
 
-面向 PICO 4 Pro 的眼动增强 Magisk 模块：打开眼动服务的逐眼门控以输出真实瞳孔数据，解除面部表情模型的跨眼耦合让左右眼各自计算，并把眼部与嘴部表情目标频率从原厂约 24 Hz 提高到默认 90/90 Hz。配合 [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) 和 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) 使用。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/Version-v2.6.2-green.svg)](https://github.com/WolalaQAQ/PicoET-Enhance/releases)
+[![Platform](https://img.shields.io/badge/PICO%204%20Pro-PICO%20OS%205.13.7-orange.svg)](#环境要求)
+[![Releases](https://img.shields.io/github/v/release/WolalaQAQ/PicoET-Enhance)](https://github.com/WolalaQAQ/PicoET-Enhance/releases)
 
-> v2.6.2 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
+[English](README.md) | **简体中文**
 
-## 它做什么
+[主要改进](#它带来什么改进) · [快速安装](#快速安装) · [配套应用](#使用配套应用) · [PC Studio](#pc-studio) · [常见问题](#常见问题) · [进阶与开发](#命令行与进阶配置) · [社区](#反馈与社区)
 
-PICO 4 Pro 的固件会对左右眼分别追踪，但面部表情模型在输出前把两眼混合，一侧的 Blink、视线方向、Wide 和眉部会受另一侧输入影响。眼部相机以 90 Hz 运行，这些表情却每秒只更新约 24 次。本模块在运行期做三处改动：
+</div>
 
-- **真实瞳孔数据**：打开眼动服务内部的逐眼门控，使真实瞳孔直径数据写入共享内存。
-- **左右眼独立**：解除表情模型的跨眼耦合。EyeLook、Blink、Wide 和眉部通道逐眼独立计算与滤波，每眼维护自己的质量窗口、参考图和历史。滤波后的右内眉与逐眼质量状态通过 `EPI1` 扩展导出，由 PicoFacialBridge 以 `X` 包转发。
-- **默认眼嘴 90/90 Hz**：眼部与嘴部表情各自在每个符合接纳条件的新相机输入上执行，同一帧的两路推理并行。降低频率是可选项，见[眼部与嘴部频率](#眼部与嘴部频率)。要让高频输出一直传到 VRChat，见[关于 90 Hz OSC](#关于-90-hz-osc)。
+---
 
-平滑、嘴部基线适应和质量窗口都按各自来源的时间戳推进：长时间缺帧会让质量窗口暂停，重复或倒退的来源不推进任何状态。
+**PicoET-Enhance** 是面向 **PICO 4 Pro**（`PICO OS 5.13.7`，Magisk，SELinux Enforcing）的运行期眼动增强模块。它在内存中 hook `pxreyetrackingservice`，不修改任何系统文件，也不包含任何 PICO 二进制；同时附带免 Root 配套应用，用于头显端后处理调节与局域网相机广播。
 
-推理模型和融合视线保持原厂行为。Blink 端点、眼内眉部联动和眼嘴后处理默认保留，可通过[头显端后处理配置](#头显端后处理配置)分别关闭或调整。暗图接纳、参考保护和模型量化仍启用。PC 端眼球方向与眼睑开合使用 EyeLook 和 `1−Blink`，原生眼数据仅提供实测瞳孔直径。
+## 它带来什么改进
 
-增强通过运行期 hook 作用于眼动服务，随服务重启而卸载。
+PICO 4 Pro 的眼部相机以 90 Hz 采集双目画面，但原厂固件隐藏了真实瞳孔直径、在输出表情前把左右眼混合，并把表情更新频率限制在约 24 Hz。PicoET-Enhance 在运行期直接解决这三点：
 
-## 与其他组件的关系
+- **真实瞳孔直径**：打开 `pxreyetrackingservice` 内部的逐眼企业版门控，把真实瞳孔直径写入共享内存（不触碰整机属性 `ro.pxr.externalfunc`）。
+- **左右眼独立表情**：解除表情模型的跨眼耦合。`EyeLook`、`Blink`、`Wide` 与眉部通道逐眼独立计算和滤波，每眼维护各自的质量窗口、参考图与历史状态，并通过 `EPI1` v2 扩展导出右内眉及逐眼质量状态。
+- **默认 90/90 Hz 眼嘴追踪**：眼部与嘴部表情推理在同一帧上并行执行，对每个符合接纳条件的新相机输入实时计算。平滑滤波、嘴部放松基线学习与质量窗口均按实际源时间戳（`Δt`）自适应推进。
+- **头显端后处理调节与局域网相机广播**：附带免 Root 的 **PicoET-Enhance** 配套应用，可调节或旁路 PICO 原厂后处理的 44 个参数，也可将嘴部、左眼、右眼相机画面广播到局域网，接入 **PC Studio**、Cymple 或任意 MJPEG 客户端。
 
-```text
-PicoET-Enhance（头显，本模块）
-        ↓ 运行期生效，通告当前模式
-PicoFacialBridge（头显）
-        ↓ BridgeSplit，局域网 UDP 9030
-UnifiedPicoModule（PC）
-        ↓
-VRCFaceTracking → VRChat OSC
+原厂推理模型、融合视线、暗图接纳、参考图保护和模型量化保持不变。增强逻辑全部驻留在服务内存中，眼动服务重启即干净卸载。
+
+## 在追踪链路中的位置
+
+```mermaid
+flowchart LR
+    A["PicoET-Enhance<br/>（头显 Magisk 模块）"] -->|"EPI1 v2 + 模式属性"| B["PicoFacialBridge 0.5.0+<br/>（头显端应用）"]
+    B -->|"UDP 9030（X v2 数据包）"| C["UnifiedPicoModule 0.4.0+<br/>（PC 端 VRCFT 模块）"]
+    C --> D["VRCFaceTracking<br/>（或 VRCFT-Enhance）"]
+    D -->|"OSC"| E["VRChat"]
 ```
 
-PicoFacialBridge 读取本模块公布的临时模式属性，自动告知 PC 当前处于普通还是增强模式。
+[PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) 会自动读取 PicoET-Enhance 的运行期模式属性，通知 PC 端的 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) 切换至增强模式。PC 端眼球方向与眼睑开合来自 `EyeLook` 和 `1 − Blink`，原生眼数据仅用于提供实测瞳孔直径。
 
-高频路径使用 `EPI1`／`X` v2，需要 PicoFacialBridge 0.5.0 及以上与 UnifiedPicoModule 0.4.0 及以上。此前的 PicoET-Enhance 2.2.0 搭配 PicoFacialBridge 0.4.0、UnifiedPicoModule 0.3.0，通过 v1 提供原厂表情节奏下的逐眼独立。较旧的 Bridge（0.3 及以上）在普通模式下仍可使用，无需本模块。
-
-### 关于 90 Hz OSC
-
-眼部路径送到 PC 的频率约为 90 Hz，但官方 VRCFaceTracking 宿主再把它交给 OSC 时会降频：宿主以固定的 10 ms 等待读取模块输出并写出 OSC。我们在 PICO 4 Pro 经 Virtual Desktop 串流的环境下，按原始 90 Hz 节奏回放 2,700 帧录制的眼部数据，统计 OSC 输出端每秒的新眼部方向数：
-
-| VRCFT 宿主（5.4.5，Steam 版 `7add148`） | 每秒新眼部方向 |
-|---|---:|
-| 官方原版 | 约 61–78 Hz |
-| 打补丁，4 ms 等待 | 约 87–88 Hz |
-
-Windows 11 可能会忽略官方宿主申请的 1 ms 定时器精度，这时每次 10 ms 等待实际要 15 ms 左右，所以官方原版每次测量的结果都有起伏。
-
-以上数据来自 Ryzen 7 9700X、RTX 4070 Ti SUPER、64 GB 内存、Windows 11 专业工作站版，电源计划为卓越性能。其他电脑的结果可能不同。
-
-官方 VRCFaceTracking 搭配本模块可以正常使用。如果希望 OSC 接近 90 Hz，请使用 [VRCFT-Enhance](https://github.com/WolalaQAQ/VRCFT-Enhance)。它让宿主和模块进程不被 Windows 忽略定时器精度，把两处固定等待改为可设置项（默认 4 ms），并修正了宿主里几处没有同步的数据交换（等待缩短后它们更容易互相干扰）。它运行在一份独立的 VRCFaceTracking 副本里；Release 提供打好补丁的两个 DLL，仓库里同时保留源码补丁，想自己构建也可以。
+> [!TIP]
+> **想在 VRChat 里跑满接近 90 Hz 的 OSC？** 官方 VRCFaceTracking 以固定 10 ms 间隔轮询并发送 OSC，在 Windows 11 上实际输出常落到约 61–78 Hz。搭配 [VRCFT-Enhance](https://github.com/WolalaQAQ/VRCFT-Enhance)（默认 4 ms 间隔、定时器精度与并发修复）可将眼嘴 OSC 输出提升至约 87–88 Hz。
 
 ## 环境要求
 
 | 项目 | 要求 |
-|---|---|
-| 头显 | PICO 4 Pro |
-| 固件 | PICO OS 5.13.7（Android 10 / API 29，arm64-v8a） |
-| Root | 已安装 Magisk |
-| 配套组件 | PicoFacialBridge 与 UnifiedPicoModule，用于把数据接入 VRCFaceTracking |
+| --- | --- |
+| **头显** | PICO 4 Pro |
+| **固件** | PICO OS 5.13.7（Android 10 / API 29，`arm64-v8a`） |
+| **Root** | 已安装 Magisk（支持 SELinux Enforcing） |
+| **配套软件** | [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) `0.5.0+` 与 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) `0.4.0+`（支持 90 Hz `EPI1`/`X` v2） |
 
-安装脚本会校验设备眼动库的 SHA-256，固件版本不匹配时停止安装。
+安装脚本会在刷入前校验头显原厂眼动库的 SHA-256，固件不匹配时自动中止，避免误装。
 
-## 安装
+## 快速安装
 
-1. 从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载 `magisk-picoet-enhance-v<版本>.zip`。
-2. 在 Magisk App 中通过“从本地安装”刷入，或使用命令行：
+1. 从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载 `magisk-picoet-enhance-v2.6.2.zip`。
+2. 在头显的 **Magisk** 应用中选择 **模块 → 从本地安装** 刷入，或通过 ADB 安装：
 
    ```sh
-    adb push magisk-picoet-enhance-v2.6.2.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.2.zip'
+   adb push magisk-picoet-enhance-v2.6.2.zip /data/local/tmp/
+   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.2.zip'
    ```
 
-3. 重启头显。
+3. **重启头显。**
 
-首次安装默认启用增强模式 `dual/on`，重启后以 90/90 Hz 运行。如果升级前已切到普通模式，升级后仍保持关闭。
+首次安装后自动以 **90/90 Hz** 增强模式（`dual/on`）启动，并在头显应用库中出现 **PicoET-Enhance** 配套应用。若升级前已手动切到普通模式，升级后会保持关闭状态。
 
-## 使用
-
-从应用库打开 **PicoET-Enhance**。**局域网广播** 标签页显示总开关、服务状态和三路相机的地址及客户端数量。**后处理** 标签页直接显示完整参数面板，头显宽屏下仍从左侧选择要调的内容。
-
-**结果共享** 分别控制 **嘴部** 追踪数值和 **双眼** [表情数值](CAMERA-PROTOCOL.md#eye-expression-results-pse1)的订阅权限，两项默认关闭，不影响图像或 Facial Bridge。
-
-相机共享默认关闭并记住选择。开启后，局域网客户端可自动发现并独立订阅三路图像；有人订阅才启动相机，关闭会断开全部传输，退出GUI不影响后台。首次开启需先关闭其他眼追、面捕客户端一次，以便空闲附加适配器。图像为明文、无认证，仅在可信私网使用。开关不改变后处理参数，普通表情转发仍走Bridge。PC 端查看工具见[局域网广播与 PC Studio](#局域网广播与-pc-studio)。
-
-在头显上以 Root 运行：
+重启后可在 Root Shell 中核对状态（可选）：
 
 ```sh
 sh /data/adb/modules/picoet-enhance/picoet.sh status
-sh /data/adb/modules/picoet-enhance/picoet.sh dual
+```
+
+看到 `phase=ready applied_mode=dual applied_gate=on effective_eye_hz=90 effective_mouth_hz=90` 即已正常生效。
+
+## 使用配套应用
+
+从头显应用库打开 **PicoET-Enhance**。标题栏并排提供 **局域网广播** 与 **后处理** 两个标签页，以及一键中英文切换。配套应用与 PicoFacialBridge 均不需要 Root 或网络权限，应用仅在自身 Android 沙盒内向模块后台工作进程提交固定请求。
+
+### 后处理标签页
+
+PICO 原厂固件在表情神经网络输出之后内置了多层后处理（眉部曲线与联动、眨眼端点补齐、自适应 / 复合 / Kalman 滤波、嘴部放松残留扣除、弱嘴形 log 压缩、伸舌触发门槛与平滑）。**PicoET-Enhance 不会在原厂之外额外叠加一层后处理**，而是把 **PICO 自身内置后处理算法的 44 个参数** 开放出来供你调节或关闭；默认值与原厂完全一致。
+
+- **「开始」页提供 4 套预设**：
+  - **均衡（推荐）**：介于原厂与灵敏之间，适度减轻眼、眉、嘴和舌头的平滑，让轻微瞪眼、眨眼、眼神、眉毛与嘴形更跟手，同时保留较稳的防抖。减弱眉部联动与弱嘴形压缩，取消嘴部二次平滑，加快放松残留学习，将伸舌门槛降至 `0.35`；保留眨眼补齐、残留扣除与双唇合拢补偿。
+  - **灵敏**：仅保留约一半平滑并关闭眉部联动，动作约 0.1 秒内跟上模型（静止时能看到细小抖动）。
+  - **不处理**：跳过上述原厂数值后处理，直接输出限幅在 `[0, 1]` 的模型结果（逐眼质量、参考图与有效位仍生效；并非原始相机图像，也不跳过神经网络本身）。
+  - **原厂**：PICO 原值，适合对照或在此基础上逐项微调。
+- **15 个照镜子动作页**：左侧列出眨眼、转眼、抬眉、说话、伸舌等 15 个常见动作。每页绘制固定 90 Hz 算例曲线，直观对比 **模型给出**（灰线）与 **Avatar 收到**（绿线），拖动滑块时曲线立即重算。
+- **简单 / 专业说明切换**：顶部可在面向调参现象的「简单」说明与包含变量、公式和条件的「专业」说明之间切换，不影响任何参数。
+- **精细调节与全部设置**：拖动滑块粗调，点击两侧 `◀` / `▶` 单步微调，点击数值可精确输入或恢复单项默认。「全部设置」按执行顺序列出全部 44 个参数。
+- **保存与应用流程**：
+  1. 修改先存入草稿；点底栏 **保存** 写入 `/data/local/tmp/picoet-postprocessing.conf`（保存不会重启追踪）。
+  2. 先停止 **PicoFacialBridge** 及其他眼追 / 面捕客户端。
+  3. 点底栏 **应用** 重启 `pxreyetrackingservice` 使新参数生效（仅在无客户端连接且增强模式开启时重启）。
+
+已保存配置在模块升级后会保留。若想启用新版本中更新过的预设参数，重新选择该预设后再 **保存** 并 **应用** 即可。
+
+### 局域网广播标签页
+
+打开 **广播总开关** 后，头显通过局域网提供三路红外相机画面（`400×400` 灰度 JPEG，质量 95）：
+
+| 画面 | 默认端口 | MJPEG 地址 |
+| --- | ---: | --- |
+| **嘴相机** | `45681` | `http://<头显地址>:45681/stream.mjpg` |
+| **左眼相机** | `45682` | `http://<头显地址>:45682/stream.mjpg` |
+| **右眼相机** | `45683` | `http://<头显地址>:45683/stream.mjpg` |
+
+- **按需启动、后台常驻**：广播默认关闭并记住选择；关闭配套应用界面不影响后台服务。仅在有客户端订阅时才会拉起相机，关闭总开关会安全排空并断开所有连接。
+- **首次开启提示**：首次附加相机适配器需要眼追服务处于空闲状态，请先关闭其他眼追 / 面捕客户端一次，待界面显示 **已开启 · 等待客户端** 后即可恢复正常使用。
+- **结果共享（可选）**：**嘴部**（`PSL1`）与 **双眼**（`PSE1`）两个独立开关允许开发者工具订阅数值追踪结果。两项默认关闭，不影响相机画面或 PicoFacialBridge。
+
+> [!WARNING]
+> 局域网发现、相机图像与结果流均为明文且无身份认证，请仅在可信的私人局域网内开启 **局域网广播**。
+
+## PC Studio
+
+[`pc-studio`](pc-studio) 是配套的 Windows 桌面工具，用于局域网实时预览头显相机并将双眼画面转发给 **Cymple**。
+
+- **安装程序（推荐）**：从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载 `PicoET-PC-Studio-Setup-v2.6.2.exe`。默认装至 `%LOCALAPPDATA%\Programs\PicoET PC Studio`（无需管理员权限），创建开始菜单快捷方式并以 Edge / Chrome 独立应用窗口打开。
+- **绿色便携包**：解压 `picoet-pc-studio-v2.6.2.zip` 后直接运行 `PicoET-PC-Studio.exe`。
+- **源码运行**（需 Python 3 与 Pillow）：
+
+  ```powershell
+  pip install -r pc-studio/requirements.txt
+  pc-studio\start.cmd          # 自动打开 http://127.0.0.1:8787
+  ```
+
+主要功能：
+- 自动发现局域网内的头显（即使 PC 默认路由指向 VPN 也能发现），或手动输入地址。
+- 切换实时预览嘴部、左眼、右眼画面，并直接复制各路 MJPEG 地址供 VLC、FFmpeg、OBS 或自研脚本使用。
+- **Cymple 眼部转发**：将左右眼 `PTJ1` 画面转发至 Cymple 原生 UDP 入口（`127.0.0.1:23303`），支持自定义端口及每只眼睛独立的旋转与镜像。
+- 内置 GitHub Releases 更新检查（直达新版 PC Studio 与头显模块下载链接）以及一键停止后台服务的退出按钮。
+
+## 关闭与卸载
+
+- **临时切回原厂模式**：在 Magisk 中点击模块的 **操作（Action）** 按钮，或在 Root Shell 执行 `sh /data/adb/modules/picoet-enhance/picoet.sh off`。眼动服务会重启为未注入的原厂状态。
+- **完全卸载**：在 Magisk 中卸载 **PicoET-Enhance** 并重启头显。配套应用、运行期状态文件及 `/data/local/tmp/picoet-postprocessing.conf` 会随模块一并清理。
+
+## 常见问题
+
+<details>
+<summary><strong>点击「应用」失败，提示有追踪客户端正在连接</strong></summary>
+
+应用后处理参数或切换模式都需要重启 `pxreyetrackingservice`。请先关闭 **PicoFacialBridge** 与其他眼追 / 面捕客户端，再点击 **应用**。命令行下 `dual` / `off` / `toggle` 支持加 `--force` 强制重启，而 `reload-processing` 会主动拒绝在有客户端连接时执行。
+
+</details>
+
+<details>
+<summary><strong>开启「局域网广播」提示先关闭其他眼追、面捕客户端</strong></summary>
+
+相机适配器首次附加要求眼动服务处于空闲状态。短暂关闭 Bridge 等追踪应用，待界面显示 **已开启 · 等待客户端** 后，再重新连接 Bridge 即可同时使用。
+
+</details>
+
+<details>
+<summary><strong>重启后增强模式没有自动生效</strong></summary>
+
+运行 `sh /data/adb/modules/picoet-enhance/picoet.sh status`，并查看 `/data/local/tmp/picoet-hook.log` 与 `/data/adb/picoet-enhance/*.log`。如果自动注入因耗尽恢复预算而暂停，排查原因后执行 `picoet.sh dual`（或点击 Magisk 的 **操作** 按钮）即可重置预算并重新开启。
+
+</details>
+
+<details>
+<summary><strong>PicoET 已跑在 90 Hz，为什么 VRChat 里的眼追实际只有 60–75 Hz？</strong></summary>
+
+官方 VRCFaceTracking 使用固定 10 ms 休眠，在 Windows 11 下常被拉长到约 15 ms。改用 [VRCFT-Enhance](https://github.com/WolalaQAQ/VRCFT-Enhance) 可将 OSC 输出提升至约 87–88 Hz。
+
+</details>
+
+---
+
+## 命令行与进阶配置
+
+在头显 Root Shell（`adb shell su -c ...`）中可使用以下控制命令：
+
+```sh
+sh /data/adb/modules/picoet-enhance/picoet.sh status
+sh /data/adb/modules/picoet-enhance/picoet.sh dual      # 同义词：on
 sh /data/adb/modules/picoet-enhance/picoet.sh off
 sh /data/adb/modules/picoet-enhance/picoet.sh toggle
+sh /data/adb/modules/picoet-enhance/picoet.sh reload-processing
 ```
 
 | 命令 | 作用 |
-|---|---|
-| `status` | 显示保存与实际生效的模式、注入状态、服务 PID、眼／嘴有效目标频率及 `ro.pxr.externalfunc` 的当前值 |
-| `dual` | 增强模式：同时设置 `dual/on`，打开瞳孔门控并启用逐眼独立表情 |
-| `off` | 普通模式：同时设置 `off/off`，重启眼动服务且不注入，回到原版 |
-| `toggle` | 增强已就绪时切到普通模式，否则尝试开启增强 |
+| --- | --- |
+| `status` | 查看保存与实际生效的模式 / 门控、注入阶段、服务 PID、`effective_eye_hz` / `effective_mouth_hz`、`ro.pxr.externalfunc`、最近日志与连接客户端数 |
+| `dual`（`on`） | 启用增强模式（`dual/on`：瞳孔门控 + 逐眼独立表情）并重启 `pxreyetrackingservice` |
+| `off` | 切回原厂模式（`off/off`），重启服务且不注入 |
+| `toggle` | 增强已 `ready` 时切到 `off`，否则尝试启用 `dual` |
+| `reload-processing` | 校验 `/data/local/tmp/picoet-postprocessing.conf` 并在增强开启且无客户端连接时重启服务加载（不接受 `--force`） |
 
-切换模式会重启眼动服务并断开眼动、面捕客户端；有客户端连接时，命令行需要加 `--force`。Magisk App 的“操作”按钮直接切换增强与普通模式；增强加载失败后，再按会重试开启。
+有客户端连接时，`dual` / `off` / `toggle` 需显式加 `--force`。Magisk 的 **操作** 按钮等价于 `picoet.sh toggle --force`。
 
-`on` 可作为 `dual` 的同义词。状态文件为 `/data/local/tmp/picoet-mode` 与 `/data/local/tmp/picoet-gate`，日志为 `/data/local/tmp/picoet-hook.log`。
+<details>
+<summary><strong>自定义眼部与嘴部目标频率（可选）</strong></summary>
 
-### 自动加载与恢复
+眼部与嘴部默认均为 **90 Hz**。如需降低其中任一项，将 1–90 的正整数写入对应文件，停止追踪客户端后重新运行 `picoet.sh dual` 生效：
 
-自动注入会等待 `sys.boot_completed=1`，并确认同一个眼动服务实例的 Binder 已响应。使用增强模式时，建议先确认 `picoet.sh status` 显示 `phase=ready applied_mode=dual applied_gate=on`，再启动 Bridge 等追踪客户端。
+| 文件 | 默认值 | 说明 |
+| --- | ---: | --- |
+| `/data/local/tmp/picoet-eye-hz` | `90` | 眼部表情目标频率；`90` 表示处理每个符合接纳条件的新帧 |
+| `/data/local/tmp/picoet-mouth-hz` | `90` | 嘴部表情目标频率；上限受眼部频率约束（每个嘴帧同时计算眼部） |
 
-`ready` 表示 hook 已安装且目标频率已配置。如果引擎在 hook 前就已初始化，会保留该引擎，不追补 profile 0 或启动期 ET 配置；增强侧状态会重新热身，不强制重建引擎。
-
-暂时找不到安全执行线程，或准备期间遇到临时信号停止时，注入器返回 `3`。看护脚本会释放控制锁，在锁外等待 30 秒后重试，不消耗两类预算。同步与异步不安全失败共用一次自动恢复机会，每次开机或显式模式命令重新计数。另有独立上限：最多自动注入三个连续不稳定的服务实例，只有同一实例连续保持 `ready` 满 60 秒才补充次数。预算耗尽后，自动注入暂停，直到下次开机或显式执行模式命令。
-
-### 眼部与嘴部频率
-
-默认眼部 90 Hz、嘴部 90 Hz，无需任何配置。要降低其中一项，把正整数写入对应文件：
-
-| 文件 | 默认值 | 作用 |
-|---|---:|---|
-| `/data/local/tmp/picoet-eye-hz` | 90 | 眼部表情频率；90 表示处理每个符合接纳条件的新相机输入 |
-| `/data/local/tmp/picoet-mouth-hz` | 90 | 嘴部表情频率，不能超过眼部频率，因为每个嘴帧同时也会计算眼部 |
-
-大于 90 的值截为 90，文件缺失或内容无效时使用默认值。频率之外的帧会直接跳过而不计算。文件只在服务启动时读取，所以修改后需要先退出 Bridge 等追踪客户端，再运行 `dual` 重启服务来生效。例如眼部保持 90 Hz、嘴部降到原厂的 24 Hz：
+示例 — 保持眼部 90 Hz、嘴部降至原厂 24 Hz：
 
 ```sh
 echo 90 > /data/local/tmp/picoet-eye-hz
@@ -130,26 +215,22 @@ sh /data/adb/modules/picoet-enhance/picoet.sh dual
 sh /data/adb/modules/picoet-enhance/picoet.sh status
 ```
 
-`status` 中的 `effective_eye_hz` 和 `effective_mouth_hz` 是当前生效的配置目标，不是实测输出频率。要恢复 90/90，删除两个文件后再次运行 `dual`。
+删除两个文件并再次执行 `picoet.sh dual` 即可恢复 90/90 Hz。自定义频率在升级后保留，普通模式（`off`）不受其影响。
 
-在 2.4.0 及之后版本设置的频率会在重装或升级时保留。只有首次从 2.4.0 之前的版本迁入时，才清除旧覆盖并以 90/90 起步。普通模式 `off` 完全是原厂行为，不受这些文件影响。
+</details>
 
-### 头显端后处理配置
+<details>
+<summary><strong>通过命令行写入后处理配置</strong></summary>
 
-从应用首页进入 **参数调节**；以下的「开始」、动作清单及保存／应用均位于该独立面板。
+配置文件为 `/data/local/tmp/picoet-postprocessing.conf`（`key=value`，支持 `#` 注释，必填 `version=1`，最大 16 KiB）。所有 `.strength` 取值 `0`–`1`（`0` 关闭该环节，`1` 保留原厂强度，中间值线性混合）；`eye.enabled` 与 `mouth.enabled` 取值 `0` / `1`。
 
-PICO原厂会在表情模型输出之后做一系列后处理：眉部曲线与联动、Blink端点补齐、自适应／复合／Kalman滤波、嘴部基线扣除、log压缩、伸舌门槛与平滑等。这些处理原本参数固定。从2.5.0起，本模块把其中44个参数开放为配置项，默认值就是原厂值；处理算法本身仍是原厂的。
+内置预设位于 [`magisk-picoet-enhance/`](magisk-picoet-enhance/)：
+- [`postprocessing-balanced.conf`](magisk-picoet-enhance/postprocessing-balanced.conf)
+- [`postprocessing-responsive.conf`](magisk-picoet-enhance/postprocessing-responsive.conf)
+- [`postprocessing-raw.conf`](magisk-picoet-enhance/postprocessing-raw.conf)
+- [`postprocessing-default.conf`](magisk-picoet-enhance/postprocessing-default.conf)
 
-模块附带独立的 **PicoET-Enhance** 设置应用，安装模块并重启后从头显应用库打开，卸载模块并重启后随模块一起移除。「开始」页提供四个预设；左侧列出15个可以照镜子检查的动作，例如眨眼、抬眉、说话。每个动作页画出模型给出的值和Avatar收到的值，写明这个动作常见的问题和该拖哪个滑杆，旁边是影响它的设置，拖动时图会重新计算。图中动作按每秒90次更新的固定条件计算，用于比较设置。「全部设置」按处理顺序列出全部44项。顶部可在「简单」和「专业」两种说明之间切换，专业说明给出变量、公式和计算条件，切换不改变任何设置。拖动滑块粗调，点击两侧的◀／▶单步微调；点击数值可精确输入或恢复单项默认，不需要编辑配置文本。面板和PicoFacialBridge均免Root：面板从自己的Android私有目录提交固定请求，由模块后台执行。VRCFT模块只处理PC端数据。
-
-配置文件为 `/data/local/tmp/picoet-postprocessing.conf`，采用 `key=value`，支持 `#` 注释。`version=1` 必填，省略其他字段使用原有默认值。所有 `.strength` 均为 0–1：0 关闭该步骤，1 保留原有强度，中间值在当前输入与处理结果之间混合；`eye.enabled`、`mouth.enabled` 用 0／1 旁路／启用整个区域。
-
-- **均衡（推荐）**：[`postprocessing-balanced.conf`](magisk-picoet-enhance/postprocessing-balanced.conf) 在原厂和灵敏之间折中，适度减轻眼、眉、嘴和舌头的平滑，让轻微瞪眼、眨眼、转眼、眉毛和嘴形更跟手，同时比灵敏保留更多防抖。减弱眉部联动与弱嘴形压缩，取消嘴部二次平滑，加快放松残留的学习，伸舌门槛为0.35。保留眨眼补齐、残留扣除和双唇合拢补偿；细小动作仍比原厂更明显。未列出的项使用默认值。
-- **灵敏**：[`postprocessing-responsive.conf`](magisk-picoet-enhance/postprocessing-responsive.conf) 保留约一半平滑并关闭眉部联动，所有动作约0.1秒内跟上模型；停住时能看到细小抖动。眨眼补齐、残留扣除和MouthClose补偿保留。
-- **不处理**：使用 [`postprocessing-raw.conf`](magisk-picoet-enhance/postprocessing-raw.conf)，输出模型当前值的限幅结果，跳过上述原厂后处理。逐眼质量、参考图、源身份、有效位及 0–1 输出范围仍保留，不代表原始相机图像或停用模型内部处理。
-- **原厂／逐项调整**：[`postprocessing-default.conf`](magisk-picoet-enhance/postprocessing-default.conf) 列出全部 44 个参数的PICO原值。`adaptive.k` 越大越跟手；`current_weight` 越大越偏向当前样本；Kalman 的 process noise 增大或 measurement noise 减小，通常会减弱平滑。关闭后噪声和动作跳变会更明显；PC／VRCFT 自己的滤波仍独立生效。
-
-底栏区分未保存、已保存待应用和本次已应用；修改未保存时不能直接应用。重新读取保存值本身不代表运行配置已经核实。保存不重启追踪；先停止 Bridge 及其他眼追／面捕客户端，再点击「应用」，无客户端占用且增强已开启时才重启眼追服务。也可在头显 Root shell 中运行：
+在停止追踪客户端后，可通过 Root Shell 写入并应用：
 
 ```sh
 MOD=/data/adb/modules/picoet-enhance
@@ -157,80 +238,83 @@ MOD=/data/adb/modules/picoet-enhance
 sh "$MOD/picoet.sh" reload-processing
 ```
 
-修改在下一次载荷启动时读取，重装／升级保留配置。要采用更新后的预设，需重新选择该预设，再保存、应用。非法参数、重复或未知字段拒绝保存；启动时发现文件损坏或权限不符，会报告失败而非默默恢复滤波。无配置文件保持原有行为。头显原生数值、面板开机集成及免Root通信的保存／应用／恢复已在PICO 4 Pro／PICO OS 5.13.7／SELinux Enforcing下验证；佩戴响应与噪声仍待比较。
+`picoet-config` 支持 `read`、`write`、`check`、`defaults`、`balanced`、`responsive`、`raw`。非法值、重复键或未知字段会被拒绝保存；启动时若发现文件损坏或属主权限异常，会明确报错而非静默回退。
 
-## 局域网广播与 PC Studio
+</details>
 
-开启局域网广播后，头显把嘴部、左眼、右眼三路相机作为普通 MJPEG 流提供（默认端口 45681、45682、45683），并广播自己以便发现。传输格式、发现和结果消息见 [CAMERA-PROTOCOL.md](CAMERA-PROTOCOL.md)。
+<details>
+<summary><strong>自动注入与故障恢复机制</strong></summary>
 
-[pc-studio](pc-studio) 里的 PC Studio 是用来转发和预览这些流的 Windows 应用。可从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载安装程序 `PicoET-PC-Studio-Setup-v<版本>.exe`（默认安装到用户目录 `%LOCALAPPDATA%\Programs\PicoET PC Studio`，无需管理员权限，创建开始菜单快捷方式并以 Edge/Chrome 独立应用窗口启动），或解压绿色包 `picoet-pc-studio-v<版本>.zip` 直接运行 `PicoET-PC-Studio.exe`。也可以在装有 Python 3 和 Pillow 的环境中直接从源码启动：
+开机后 `service.sh` 等待 `sys.boot_completed=1`，并通过 Binder `dumpsys` 确认 `pxreyetrackingservice` 的三项原厂算法（`ET`、`FT`、`IPD`）状态行均已响应后才执行注入。建议确认 `picoet.sh status` 返回 `phase=ready applied_mode=dual applied_gate=on` 后再启动追踪客户端。
 
-```powershell
-pip install -r pc-studio/requirements.txt
-pc-studio\start.cmd          # 打开 http://127.0.0.1:8787
-```
+- **瞬时重试（退出码 `3`）**：暂时无安全执行线程或准备阶段遭遇临时信号中断时，看护循环会释放控制锁并冷却 30 秒后重试，不消耗恢复预算。
+- **恢复预算**：不安全失败（退出码 `4` / `5` 或异步回滚失败）在每次开机或显式模式命令周期内共享 **1** 次自动重启恢复机会。
+- **稳定性预算**：最多对 **3** 个连续不稳定的服务实例尝试自动注入；仅当同一实例连续保持 `ready` 满 60 秒后才会重置计数。
 
-功能：
+完整的模块目录、状态文件路径与生命周期说明见 [`magisk-picoet-enhance/README_zh.md`](magisk-picoet-enhance/README_zh.md)。
 
-- 在局域网内发现头显，或手动填写地址；
-- 切换实时预览嘴部、左眼或右眼相机画面，并显示当前流的 MJPEG 地址（`http://<头显地址>:<端口>/stream.mjpg`）供其他工具使用；
-- 眼部转发：把左右眼流的 PTJ1 数据送入 Cymple 的原生 UDP 输入（`127.0.0.1:23303`），支持独立端口与画面旋转／镜像；
-- 应用内版本更新检测（自动或手动查询 GitHub Releases，直接展示新版安装包与头显模块下载链接）以及一键退出后台服务按钮。
+</details>
 
-`python pc-studio/check.py` 运行它的测试，`python pc-studio/package_release.py` 构建独立可执行包、绿色 ZIP 和 Inno Setup 安装程序。
+## 技术细节
 
-## 关于企业版门控
+- **企业版门控**：固件通过 `PXR::EyeUtil::isBusinessDev()` 控制逐眼输出（含真实瞳孔直径）。本模块仅在 `pxreyetrackingservice` 进程内使其返回 `true`，不修改 `ro.pxr.externalfunc`。
+- **局域网相机与结果协议**：自动发现（`PICO_CAMERA_DISCOVER_V1`）、HTTP MJPEG（`/stream.mjpg`）、二进制 `PTJ1`、嘴部结果（`PSL1`）、眼部结果（`PSE1`）及 `PTJIPC5` 共享内存生命周期规范见 [CAMERA-PROTOCOL_zh.md](CAMERA-PROTOCOL_zh.md)。
+- **Magisk 模块参考**：脚本清单、状态 / 日志路径与注入保护机制见 [magisk-picoet-enhance/README_zh.md](magisk-picoet-enhance/README_zh.md)。
 
-固件通过 `PXR::EyeUtil::isBusinessDev()` 控制逐眼输出，包括真实瞳孔直径。本模块在眼动服务内将该函数的返回值设为真；整机企业模式属性 `ro.pxr.externalfunc` 保持原值。
+### 90 Hz 链路实测吞吐
 
-## 兼容性与验证情况
+在唤醒状态的 PICO 4 Pro（`PICO OS 5.13.7`）上回放 2,700 帧录制的 90 Hz 相机输入（约 30 秒），经 PicoET-Enhance 表情管线、PicoFacialBridge `0.5.0`、UnifiedPicoModule `0.4.0`、VRCFT-Enhance（4 ms 间隔）与桌面 VRChat 的各环节实测结果：
 
-启动安全改动使用 NDK 26.1.10909125 的本地构建，在 PICO 4 Pro / PICO OS 5.13.7 / SELinux permissive 上完成验收，正常开机、升级、模式切换、重复控制命令及定点失败分支均通过。一次 45 秒真人佩戴验证确认了持续眼嘴更新、眨眼与张闭嘴响应、profile 0 初始化无重试，以及正常停止追踪，期间服务未重启。原厂库未修改。2.5.0的设置应用、配置工具和预设文件也已在 SELinux Enforcing 下通过开机与面板通信检查。发布工作流显式选用 NDK 26.1.10909125 与 CMake 3.22.1。
+| 链路环节 | 实测频率 |
+| --- | ---: |
+| 头显端眼部与嘴部计算 | **89.80 Hz**（2,694 / 2,700 帧；6 帧触发原厂满队列丢弃，零推理失败） |
+| Bridge → PC（`X` v2 数据包） | **89.84 Hz** |
+| VRCFT-Enhance → VRChat OSC（同源眼 + 嘴） | **87.80 Hz**（2,633 个来源，占输入 97.5%） |
 
-以下 90/90 数据来自此前的 2.4.0 验证，并非之后版本重新测得的吞吐。设备为 PICO 4 Pro（PICO OS 5.13.7），保持唤醒、追踪就绪，未佩戴。测试用一套测试驱动程序复用模块的表情处理算法，回放 2,700 组录制的相机输入（约 30 秒），搭配 PicoFacialBridge 0.5.0、UnifiedPicoModule 0.4.0、VRCFT-Enhance 和桌面 VRChat：
-
-| 环节 | 频率 |
-|---|---:|
-| 头显上的眼部与嘴部计算 | 89.80 Hz（2,700 组输入中完成 2,694 组；另 6 组遇到原厂的队列已满丢弃规则，推理无失败） |
-| Bridge → PC（`X` 包） | 89.84 Hz |
-| VRCFT → OSC，同一来源的眼部与嘴部 | 87.80 Hz（2,633 个来源，占输入的 97.5%） |
-
-到达 OSC 的每个来源，VRChat 都回送了至少一项眼部值和一项嘴部值，与写入值相同。各环节的数值都与来源一致，覆盖范围是测试 Avatar 实际发送的受支持字段。loopback 抓包存在丢弃，因此 PC 侧的计数是可验证下界。从 `X` 到达 PC 到 OSC 输出，中位数为 9.1 ms，第 95 百分位为 12.5 ms。回放不是经已安装的 Magisk 包运行的，也不包含实时相机复制和 Virtual Desktop 的解码与渲染。
-
-在 2.3.0 版本（嘴部约 24 Hz）上，另用官方 VRCFT 5.4.5 完成过一次 84 秒的真人佩戴 Virtual Desktop 运行，使用 Cymple 嘴部加 PICO 眼部：每秒约 89.7 个 `X` 包到达 PC，每包带新的眼部来源。
-
-尚未覆盖：单眼质量失效、分时参考重建、嘴部输出的真机对照，以及长时间实机相机使用。融合视线保持原样；当前 Avatar 使用的宿主侧眉部参数仍对两侧取平均，尽管扩展会同时携带两侧数值。
-
-## 关闭与卸载
-
-运行 `picoet.sh off` 可关闭增强并恢复原厂眼动服务。要移除模块，在 Magisk 中卸载后重启头显；设置应用随模块一起移除，后处理配置文件也会删除。清理只删除已知状态文件，不递归进入意外目录或子挂载，因此这些目录可能保留。
+从 `X` 包抵达 PC 到 OSC 发出的中位延迟为 **9.1 ms**（P95 为 **12.5 ms**）。融合视线维持原厂行为；尽管 `EPI1` 携带左右双侧眉部数值，当前 VRCFT 宿主侧 Avatar 眉部参数仍对左右取平均。
 
 ## 从源码构建
 
-构建需要Python 3、JDK 17及以上（`JAVA_HOME`）、Android platform 35与build-tools 35.0.0（`ANDROID_HOME`），以及NDK 26.1.10909125、CMake 3.22.1/Ninja。原生脚本支持`-Ndk` / `-CmakeBin`参数、`PICOET_NDK` / `PICOET_CMAKE_BIN`环境变量，或`ANDROID_HOME`下的标准目录。
+构建依赖：**Python 3**、**JDK 17+**（`JAVA_HOME`）、**Android SDK Platform 35** 与 **Build-Tools 35.0.0**（`ANDROID_HOME`）、**NDK 26.1.10909125** 以及 **CMake 3.22.1 / Ninja**。
 
 ```powershell
-pwsh -File hook\build-hook.ps1                 # 构建 injector 与 payload
-python camera-source/build.py android --ndk "$env:ANDROID_HOME/ndk/26.1.10909125" --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe" --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
-pwsh -File build-picoet-enhance.ps1 -Python python # 构建面板并打包 Magisk zip
+# 1. 构建注入器、hook 载荷、配置工具与面板后台
+pwsh -File hook\build-hook.ps1
+
+# 2. 构建 Android 局域网相机适配器、垫片、控制器与 IPC 守护进程
+python camera-source/build.py android `
+  --ndk "$env:ANDROID_HOME/ndk/26.1.10909125" `
+  --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe" `
+  --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
+
+# 3. 构建配套 APK 并打包 artifacts/magisk-picoet-enhance-v<版本>.zip
+pwsh -File build-picoet-enhance.ps1 -Python python
 ```
 
-产物为`artifacts/magisk-picoet-enhance-v<版本>.zip`，包含模块脚本、原生工具、hook载荷及`system/app/PicoETEnhance/PicoETEnhance.apk`。打包检查ELF文件清单和原厂库哈希；面板直接用SDK构建，不需要Gradle或额外Android依赖库。
+配套 APK 直接调用 Android SDK 工具编译，不依赖 Gradle 或外部 Android 库。打包阶段会执行 ELF 白名单校验并确认包内不含任何 PICO 二进制。
 
-未提供签名时，本地构建会生成并复用开发专用签名。正式分发应通过`-PanelKeystore`（或`PICOET_PANEL_KEYSTORE`）提供持久签名，可选`-PanelKeyAlias`，密码放在`PICOET_PANEL_PASSWORD`环境变量中；升级必须沿用相同面板签名。标签构建需要仓库Secrets `PICOET_PANEL_KEYSTORE_BASE64`和`PICOET_PANEL_PASSWORD`，可选的`PICOET_PANEL_KEY_ALIAS`缺省为`panel`。
+- **签名**：本地构建默认自动生成并复用开发签名；正式分发请通过 `-PanelKeystore`（或 `PICOET_PANEL_KEYSTORE`）、可选 `-PanelKeyAlias`（默认 `panel`）与 `PICOET_PANEL_PASSWORD` 提供持久签名，升级必须沿用同一签名。推送 `v<版本>` 标签触发 GitHub Actions 发布时，需配置仓库 Secrets `PICOET_PANEL_KEYSTORE_BASE64` 与 `PICOET_PANEL_PASSWORD`。
+- **PC Studio 测试与打包**：执行 `python pc-studio/check.py` 运行单元测试与前端校验；执行 `python pc-studio/package_release.py` 构建独立可执行程序、绿色 ZIP 与 Inno Setup 安装包。
 
-推送 `v<版本>` 标签后，GitHub Actions 会在 Windows 运行器上构建并发布带校验和的 zip。
+## 后续计划
 
-## 待做
+- [ ] **舌头方向增强** — 原厂仅输出标量 `TongueOut`，而 VRCFaceTracking 支持 `TongueLeft/Right/Up/Down` 等方向通道。计划基于局域网相机采集下脸原始帧，结合视觉分割基模自动标注并训练轻量模型，同时支持用户本地采集微调。
 
-- [ ] **舌头方向增强**：PICO 目前只对外提供伸舌量 `TongueOut` 一个标量，而 VRCFaceTracking 已定义了 `TongueLeft/Right/Up/Down` 等方向通道。计划先取下脸相机的原始帧，用视觉分割基模自动打标，再训练一个小模型，并允许用户采集自己的数据在本地做在线微调。
-- [ ] **后处理佩戴比较**：比较均衡、灵敏与不处理三个预设的实际响应、静止噪声及Avatar表现。
+## Pico-Enhance 生态
 
-## 反馈
+| 项目 | 作用 |
+| --- | --- |
+| [**PicoET-Enhance**](https://github.com/WolalaQAQ/PicoET-Enhance) | 本仓库 — 真实瞳孔、左右眼独立、90/90 Hz、头显端后处理调节与局域网相机广播 |
+| [**PicoFacialBridge**](https://github.com/WolalaQAQ/PicoFacialBridge) | 头显端桥接应用，通过局域网 UDP 转发 PICO 眼追与面捕数据 |
+| [**UnifiedPicoModule**](https://github.com/WolalaQAQ/UnifiedPicoModule) | PC 端 VRCFaceTracking 接收模块（支持 `X` v2 协议） |
+| [**VRCFT-Enhance**](https://github.com/WolalaQAQ/VRCFT-Enhance) | 优化 Windows 下 VRCFaceTracking 调度间隔，实现约 88 Hz OSC 输出 |
+| [**VD-PicoEnhance**](https://github.com/WolalaQAQ/VD-PicoEnhance) | Virtual Desktop 增强模块（手追透视、码率 / 分辨率解锁、体验优化与指虎热切换） |
+| [**PicoRegionSwitch**](https://github.com/WolalaQAQ/PicoRegionSwitch) | PICO 4 Pro 国区与全球应用集热切换工具 |
+| [**PicoUSB-Quiet**](https://github.com/WolalaQAQ/PicoUSB-Quiet) | 抑制 PICO 反复弹出的 USB 设备授权弹窗 |
 
-欢迎提交 Issue。请提供头显型号、PICO OS 版本、模块版本、当前模式，以及 `picoet.sh status` 的输出与相关日志片段。
+## 反馈与社区
 
-## 社区
+欢迎在 [Issues](https://github.com/WolalaQAQ/PicoET-Enhance/issues) 提交问题或建议，请附上头显型号、PICO OS 版本、模块版本、`picoet.sh status` 输出以及相关日志片段。
 
 使用求助、交流和版本更新通知，欢迎加入 Pico-Enhance 社区。
 
@@ -242,4 +326,4 @@ pwsh -File build-picoet-enhance.ps1 -Python python # 构建面板并打包 Magis
 
 ## 许可证
 
-本项目原创代码与脚本采用 [MIT](LICENSE)。内置的 ShadowHook 2.0.1 源码包含 MIT／BSD 许可的依赖，Magisk ZIP 内附相应声明与项目许可。本项目不包含也不分发任何 PICO 二进制，仅在运行期按数字偏移引用设备自身的库。详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本项目原创代码与脚本采用 [MIT 许可证](LICENSE)。内置的 **ShadowHook 2.0.1** 包含 MIT / BSD 许可依赖，相机传输模块内置 **libjpeg-turbo**，所有第三方声明随 Magisk ZIP 分发并汇总于 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目不包含也不分发任何 PICO 二进制。
