@@ -23,9 +23,23 @@ from wire import (
 
 def _write_json_atomic(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp = path.with_name(f'{path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
-    os.replace(tmp, path)
+    try:
+        for attempt in range(6):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError as exc:
+                if getattr(exc, 'winerror', None) not in (5, 32) or attempt == 5:
+                    raise
+                time.sleep(0.025)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def _resolve_paths():
@@ -90,6 +104,8 @@ class Runtime:
         self.record_input = bool(record_input)
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
+        self._clock_cond = threading.Condition()
+        self._clock_resync_requested = False
         self.stop_event = threading.Event()
         self.running = self.connected = False
         self.mode = 'idle'
@@ -184,10 +200,11 @@ class Runtime:
         with self.lock:
             if self.running:
                 raise ValueError('Runtime is already running')
+            selected_camera = self.config['preview_camera']
             if camera is not None:
                 if camera not in CAMERAS:
                     raise ValueError('Unknown preview camera: ' + str(camera))
-                self.config['preview_camera'] = camera
+                selected_camera = camera
             host = (
                 str(headset_host).strip()
                 if headset_host is not None
@@ -200,15 +217,19 @@ class Runtime:
                 headset_port=_valid_port(headset_port, 'headset_port') if headset_port is not None else int(self.config['headset_port']),
                 eye_left_port=_valid_port(eye_left_port, 'eye_left_port') if eye_left_port is not None else int(self.config['eye_left_port']),
                 eye_right_port=_valid_port(eye_right_port, 'eye_right_port') if eye_right_port is not None else int(self.config['eye_right_port']),
-                preview_camera=self.config['preview_camera'],
+                preview_camera=selected_camera,
             )
+            self.config['preview_camera'] = selected_camera
         self.stop()
-        generation = self.lifecycle
+        with self.condition:
+            generation = self.lifecycle
         with self.condition:
             if generation != self.lifecycle:
                 raise RuntimeError('Startup was cancelled by stop/shutdown')
             self._session_target = target
             self.stop_event.clear()
+            with self._clock_cond:
+                self._clock_resync_requested = False
             self.inference_ready.clear()
             self.running = True
             self.connected = False
@@ -289,7 +310,7 @@ class Runtime:
         with self.lock:
             self._pending_sockets.discard(sock)
 
-    def _connect(self, host, port, timeout=3):
+    def _connect(self, host, port, timeout=3, *, keep_tracked=False):
         holder = [None]
         def on_socket(sock):
             if sock is not None:
@@ -298,7 +319,39 @@ class Runtime:
             elif holder[0] is not None:
                 self._untrack_pending_socket(holder[0])
                 holder[0] = None
-        return connect_cancellable(host, port, timeout=timeout, stop_event=self.stop_event, on_socket=on_socket)
+        return connect_cancellable(
+            host, port, timeout=timeout, stop_event=self.stop_event,
+            on_socket=on_socket, keep_tracked=keep_tracked,
+        )
+
+    def _request_clock_resync(self):
+        with self._clock_cond:
+            self._clock_resync_requested = True
+            self._clock_cond.notify_all()
+
+    def _wake_clock_thread(self):
+        with self._clock_cond:
+            self._clock_cond.notify_all()
+
+    def _interrupt_sockets(self):
+        with self.lock:
+            sock = self.socket
+            pending_socks = list(self._pending_sockets)
+            self._pending_sockets.clear()
+        for pending in pending_socks:
+            try:
+                pending.close()
+            except OSError:
+                pass
+        if sock:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def _receive(self):
         with self.lock:
@@ -326,30 +379,43 @@ class Runtime:
                 return
             context = None
             try:
-                with self._connect(host, port, timeout=3) as control:
-                    context = read_capture_context(control)
+                control = self._connect(host, port, timeout=3, keep_tracked=True)
+                try:
+                    with control:
+                        context = read_capture_context(control)
+                finally:
+                    self._untrack_pending_socket(control)
                 with self.lock:
                     self.capture_context = context.evidence
             except (CaptureContextUnavailable, OSError, EOFError, ValueError):
                 context = None
             if self.stop_event.is_set():
                 return
-            sock = self._connect(host, port, timeout=3)
-            enable_keepalive(sock)
-            sock.settimeout(10)  # The first subscription may cold-start the native camera.
-            with self.lock:
-                self.socket = sock
-                self.connected = True
-            if self.stop_event.is_set():
-                sock.close()
-                return
+            sock = self._connect(host, port, timeout=3, keep_tracked=True)
+            try:
+                enable_keepalive(sock)
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except (OSError, AttributeError):
+                    pass
+                sock.settimeout(10)  # The first subscription may cold-start the native camera.
+                with self.lock:
+                    if self.stop_event.is_set():
+                        sock.close()
+                        return
+                    self.socket = sock
+                    self.connected = True
+            finally:
+                self._untrack_pending_socket(sock)
             sock.sendall(b'JPEG\n')
             with sock:
                 first_frame = True
+                was_idle = False
                 while not self.stop_event.is_set():
                     try:
                         header, payload = read_frame(sock)
                     except IdleStreamTimeout:
+                        was_idle = True
                         if first_frame:
                             sock.settimeout(1)
                             first_frame = False
@@ -357,6 +423,11 @@ class Runtime:
                     if first_frame:
                         sock.settimeout(1)
                         first_frame = False
+                    if was_idle:
+                        was_idle = False
+                        with self.lock:
+                            self.clock = None
+                        self._request_clock_resync()
                     received_ns = time.perf_counter_ns()
                     if context is not None:
                         context.require_session(header.session_id)
@@ -373,7 +444,14 @@ class Runtime:
                     self.last_error = str(error)
         finally:
             self.stop_event.set()
+            self._wake_clock_thread()
             with self.condition:
+                if self.input_stream:
+                    try:
+                        self.input_stream.close()
+                    except OSError:
+                        pass
+                    self.input_stream = None
                 self.running = False
                 self.connected = False
                 self.mode = 'idle'
@@ -386,25 +464,49 @@ class Runtime:
                 self.condition.notify_all()
 
     def _clock_refresh(self):
-        while not self.stop_event.wait(10):
-            try:
-                with self.lock:
-                    target = dict(self._session_target or self.config)
-                host = target['headset_host'].strip()
-                if not host:
-                    continue
-                holder = [None]
-                def on_sock(sock):
-                    if sock is not None:
-                        holder[0] = sock
-                        self._track_pending_socket(sock)
-                    elif holder[0] is not None:
-                        self._untrack_pending_socket(holder[0])
-                        holder[0] = None
-                calibrated = sync_clock(host, self._active_port(target), 3, stop_event=self.stop_event, on_socket=on_sock)
-                self._set_clock(calibrated)
-            except (OSError, EOFError, ValueError):
-                pass
+        last_sync_mono = 0.0
+        try:
+            while not self.stop_event.is_set():
+                with self._clock_cond:
+                    self._clock_cond.wait_for(
+                        lambda: self.stop_event.is_set() or self._clock_resync_requested,
+                        timeout=10.0,
+                    )
+                    forced = self._clock_resync_requested
+                    self._clock_resync_requested = False
+                if self.stop_event.is_set():
+                    break
+                if forced:
+                    since = time.monotonic() - last_sync_mono
+                    if since < 0.5 and self.stop_event.wait(0.5 - since):
+                        break
+                last_sync_mono = time.monotonic()
+                try:
+                    with self.lock:
+                        target = dict(self._session_target or self.config)
+                    host = target['headset_host'].strip()
+                    if not host:
+                        continue
+                    holder = [None]
+                    def on_sock(sock):
+                        if sock is not None:
+                            holder[0] = sock
+                            self._track_pending_socket(sock)
+                        elif holder[0] is not None:
+                            self._untrack_pending_socket(holder[0])
+                            holder[0] = None
+                    calibrated = sync_clock(host, self._active_port(target), 3, stop_event=self.stop_event, on_socket=on_sock)
+                    self._set_clock(calibrated)
+                except (OSError, EOFError, ValueError):
+                    pass
+        finally:
+            with self.lock:
+                if self.clock_log and self.stop_event.is_set():
+                    try:
+                        self.clock_log.close()
+                    except OSError:
+                        pass
+                    self.clock_log = None
 
     def _set_clock(self, calibrated):
         with self.lock:
@@ -444,11 +546,20 @@ class Runtime:
                 begin = time.perf_counter_ns()
                 with self.lock:
                     has_clock = self.clock is not None
-                age, upper = self._age(header, begin) if has_clock else ((begin - received) / 1e6, (begin - received) / 1e6)
+                local_age_ms = (begin - received) / 1e6
+                age, upper = self._age(header, begin) if has_clock else (local_age_ms, local_age_ms)
                 if math.isfinite(upper) and upper > config['stale_ms']:
-                    with self.lock:
-                        self.counts['stale'] += 1
-                    continue
+                    if has_clock and local_age_ms <= config['stale_ms']:
+                        self._request_clock_resync()
+                        if upper > max(config['stale_ms'] * 2.0, 2000.0):
+                            with self.lock:
+                                self.clock = None
+                            has_clock = False
+                            age = upper = local_age_ms
+                    if math.isfinite(upper) and upper > config['stale_ms']:
+                        with self.lock:
+                            self.counts['stale'] += 1
+                        continue
                 try:
                     if header.flags & RAW:
                         if len(payload) != 400 * 400:
@@ -500,9 +611,22 @@ class Runtime:
             with self.lock:
                 self.last_error = type(error).__name__ + ': ' + str(error)
             self.stop_event.set()
+            self._wake_clock_thread()
+            self._interrupt_sockets()
             with self.lock:
                 self.running = False
+                self.connected = False
+                self.mode = 'idle'
                 self.config['enabled'] = False
+        finally:
+            with self.lock:
+                if self.log and self.stop_event.is_set():
+                    try:
+                        self.log.flush()
+                        self.log.close()
+                    except OSError:
+                        pass
+                    self.log = None
 
     def _preview_image(self, image):
         output = io.BytesIO()
@@ -511,29 +635,14 @@ class Runtime:
 
     def stop(self):
         self.stop_event.set()
+        self._wake_clock_thread()
         with self.condition:
             self.model_version += 1
             self.pending = None
             self.preview = None
             self.lifecycle += 1
             self.condition.notify_all()
-            sock = self.socket
-            pending_socks = list(self._pending_sockets)
-            self._pending_sockets.clear()
-        for pending in pending_socks:
-            try:
-                pending.close()
-            except OSError:
-                pass
-        if sock:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                sock.close()
-            except OSError:
-                pass
+        self._interrupt_sockets()
         join_error = None
         try:
             for thread in self.threads:

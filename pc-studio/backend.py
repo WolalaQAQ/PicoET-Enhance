@@ -114,9 +114,14 @@ def stop_running_instance(host, port, timeout=2.5):
         },
     )
     try:
-        with urlopen(req, timeout=1.0) as resp:
+        with urlopen(req, timeout=min(2.5, max(1.0, float(timeout)))) as resp:
             resp.read()
-    except (URLError, OSError):
+    except URLError as exc:
+        if not isinstance(getattr(exc, 'reason', None), TimeoutError):
+            return 0
+    except TimeoutError:
+        pass
+    except OSError:
         return 0
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -155,7 +160,10 @@ def make_server(
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                pass
 
         def do_GET(self):
             parsed = urlsplit(self.path)
@@ -164,7 +172,9 @@ def make_server(
             if path == '/api/status':
                 return self.respond(200, combined_status())
             if path == '/api/config':
-                return self.respond(200, dict(runtime.config))
+                with runtime.lock:
+                    cfg = dict(runtime.config)
+                return self.respond(200, cfg)
             if path == '/api/update-check':
                 force = (query.get('force', [''])[0] or '').strip().lower() in ('1', 'true', 'yes')
                 return self.respond(200, checker.check(force=force))
@@ -255,6 +265,7 @@ def make_server(
             super().log_message(format, *args)
 
     server = ThreadingHTTPServer((host, port), Handler)
+    server.daemon_threads = True
     server.relay = relay
     server.runtime = runtime
     server.update_checker = checker
@@ -264,9 +275,9 @@ def make_server(
 def main(argv=None):
     headless = sys.stdout is None or sys.stderr is None
     if sys.stdout is None:
-        sys.stdout = io.StringIO()
+        sys.stdout = open(os.devnull, 'w', encoding='utf-8')
     if sys.stderr is None:
-        sys.stderr = io.StringIO()
+        sys.stderr = open(os.devnull, 'w', encoding='utf-8')
     parser = argparse.ArgumentParser(description='PicoET-Enhance PC Studio LAN camera forwarding and preview')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8787)

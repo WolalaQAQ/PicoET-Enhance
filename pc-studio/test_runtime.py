@@ -174,6 +174,17 @@ class WireAndTimeoutTests(unittest.TestCase):
             read_exact(right, 128, part='header')
         self.assertNotIsInstance(ctx.exception, IdleStreamTimeout)
 
+        # OS-level keepalive TimeoutError (errno/winerror=10060) must NOT become IdleStreamTimeout.
+        class _DeadKeepaliveSock:
+            def recv_into(self, view):
+                err = TimeoutError(10060, 'connection timed out')
+                err.winerror = 10060
+                raise err
+
+        with self.assertRaises(TimeoutError) as dead_ctx:
+            read_exact(_DeadKeepaliveSock(), 128, part='header')
+        self.assertNotIsInstance(dead_ctx.exception, IdleStreamTimeout)
+
         work = ROOT / 'tests-work'
         work.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=work) as folder:
@@ -510,6 +521,47 @@ class RuntimeAndHttpTests(unittest.TestCase):
                 rt.stop()
                 self.assertLess(time.monotonic() - t0, 2.0)
                 self.assertFalse(rt.running)
+
+    def test_post_wake_clock_drift_triggers_immediate_resync_without_dropping_preview(self):
+        work = ROOT / 'tests-work'
+        work.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=work) as folder:
+            rt = Runtime(Path(folder) / 'config.json')
+            self.addCleanup(rt.close)
+            rt.configure({'headset_host': '127.0.0.1', 'stale_ms': 500.0})
+            raw_jpeg = jpeg(110)
+            sync_calls = []
+            resynced = threading.Event()
+            stage = [0]
+
+            def fake_sync(host, port, count=12, *, stop_event=None, on_socket=None):
+                sync_calls.append(count)
+                if len(sync_calls) == 1:
+                    # Simulate stale clock offset as if headset suspended for 15s (CLOCK_MONOTONIC froze).
+                    return {'offset_ns': 15_000_000_000.0, 'uncertainty_ms': 1.0, 'calibrated_pc_ns': time.perf_counter_ns()}
+                resynced.set()
+                return {'offset_ns': 0.0, 'uncertainty_ms': 1.0, 'calibrated_pc_ns': time.perf_counter_ns()}
+
+            def fake_read(_sock):
+                stage[0] += 1
+                if stage[0] == 1:
+                    raise IdleStreamTimeout('headset asleep')
+                if stage[0] == 2:
+                    return replace(header(1), payload_bytes=len(raw_jpeg)), raw_jpeg
+                if stage[0] <= 4 or not resynced.is_set():
+                    time.sleep(0.02)
+                    return replace(header(stage[0]), payload_bytes=len(raw_jpeg)), raw_jpeg
+                raise EOFError('done')
+
+            with patch('runtime.sync_clock', side_effect=fake_sync), \
+                 patch('runtime.read_capture_context', side_effect=OSError('skip')), \
+                 patch('runtime.socket.create_connection', return_value=MagicMock()), \
+                 patch('runtime.read_frame', side_effect=fake_read):
+                rt.start('capture')
+                self.assertTrue(resynced.wait(2.5), 'Expected immediate clock resync after wake')
+                wait_for(lambda: rt.counts.get('decoded', 0) >= 1 and not rt.running)
+            self.assertGreaterEqual(len(sync_calls), 2)
+            self.assertEqual(rt.counts.get('stale', 0), 0)
 
 
 if __name__ == '__main__':

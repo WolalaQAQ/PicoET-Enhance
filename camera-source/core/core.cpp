@@ -105,6 +105,9 @@ struct PTJSource {
     uint32_t timeout_ms;
     Socket listener = bad_socket;
     Socket discovery = bad_socket;
+#if !defined(_WIN32)
+    int wakeup[2]{-1, -1};
+#endif
     std::atomic<bool> running{true};
     mutable std::mutex mutex;
     std::mutex stop_mutex;
@@ -178,7 +181,11 @@ static IOResult write_all(PTJSource& s, Socket fd, const void* bytes, size_t cou
         if (n == 0 || !would_block(socket_error())) return IOResult::Error;
         PollFD pollfd{fd, POLLOUT, 0};
         int ms = int(std::min<uint64_t>(10, (deadline - now + 999999) / 1000000));
-        if (poll_sockets(&pollfd, 1, ms) < 0) return IOResult::Error;
+        int rc = poll_sockets(&pollfd, 1, ms);
+        if (rc < 0) {
+            if (would_block(socket_error())) continue;
+            return IOResult::Error;
+        }
         if (pollfd.revents & (POLLERR | POLLHUP | POLLNVAL)) return IOResult::Error;
     }
     return IOResult::Ok;
@@ -392,8 +399,14 @@ static void encode_loop(PTJSource& s) {
                 std::vector<std::shared_ptr<Client>> clients;
                 { std::lock_guard<std::mutex> lock(s.mutex); clients = s.jpeg_clients; }
                 for (const auto& receiver : clients) {
-                    if (receiver->closed || (receiver->has_after_seq && f.meta.source_seq <= receiver->after_seq)) continue;
-                    { std::lock_guard<std::mutex> lock(receiver->mutex); receiver->pending = packet; }
+                    if (receiver->closed) continue;
+                    {
+                        std::lock_guard<std::mutex> lock(receiver->mutex);
+                        if (receiver->closed ||
+                            (receiver->has_after_seq && f.meta.source_seq <= receiver->after_seq))
+                            continue;
+                        receiver->pending = packet;
+                    }
                     receiver->changed.notify_one();
                 }
             } else {
@@ -429,28 +442,18 @@ static void encode_loop(PTJSource& s) {
     }
 }
 
-static bool read_command(PTJSource& s, Socket fd, char (&command)[256], uint64_t& received) {
-    const uint64_t deadline = mono_ns() + 1000000000ULL;
-    size_t used = 0;
-    while (s.running && mono_ns() < deadline && used < sizeof(command) - 1) {
-        char c;
-        int n = recv(fd, &c, 1, 0);
-        if (n == 1) {
-            if (c == '\n') { received = mono_ns(); command[used] = 0; return true; }
-            command[used++] = c; continue;
-        }
-        if (n == 0 || !would_block(socket_error())) return false;
-        PollFD p{fd, POLLIN, 0}; poll_sockets(&p, 1, 10);
-    }
-    return false;
-}
 static void drop_stock_client(PTJSource& s, const std::shared_ptr<Client>& client) {
     std::lock_guard<std::mutex> lock(s.mutex);
     if (s.stock_client != client) return;
     s.stock_client.reset(); s.stock_size = 0;
 }
 static void send_stock(PTJSource& s) {
+    const uint64_t budget_ns = uint64_t(std::min<uint32_t>(s.timeout_ms, 100)) * 1000000ULL;
+    const uint64_t min_slice_ns = std::min<uint64_t>(budget_ns / 2, 20000000ULL);
+    const uint64_t batch_deadline = mono_ns() + budget_ns;
     for (size_t sent = 0; sent < s.stock_records.size(); ++sent) {
+        const uint64_t now = mono_ns();
+        if (sent && now + min_slice_ns >= batch_deadline) return;
         std::shared_ptr<Client> client;
         ResultPacket record;
         bool present = false;
@@ -468,8 +471,8 @@ static void send_stock(PTJSource& s) {
         const int n = recv(client->fd, &byte, 1, MSG_PEEK);
         if (n == 0 || n > 0 || (n < 0 && !would_block(socket_error()))) { drop_stock_client(s, client); return; }
         if (!present) return;
-        if (write_all(s, client->fd, record.bytes.data(), record.size,
-                      mono_ns() + uint64_t(s.timeout_ms) * 1000000ULL) != IOResult::Ok) {
+        const uint64_t deadline = sent ? batch_deadline : (now + budget_ns);
+        if (write_all(s, client->fd, record.bytes.data(), record.size, deadline) != IOResult::Ok) {
             drop_stock_client(s, client);
             return;
         }
@@ -495,20 +498,6 @@ static std::string camera_catalog(PTJSource& s) {
     json << "]}";
     return json.str();
 }
-static bool http_headers(PTJSource& s, Socket fd) {
-    const uint64_t deadline = mono_ns() + 1000000000ULL;
-    unsigned bytes = 0, newlines = 1;
-    while (s.running && mono_ns() < deadline && bytes++ < 4096) {
-        char c;
-        const int n = recv(fd, &c, 1, 0);
-        if (n == 1) {
-            if (c == '\n') { if (++newlines == 2) return true; }
-            else if (c != '\r') newlines = 0;
-        } else if (!n || !would_block(socket_error())) return false;
-        else { PollFD p{fd, POLLIN, 0}; poll_sockets(&p, 1, 10); }
-    }
-    return false;
-}
 static bool http_response(PTJSource& s, Socket fd, const char* code, const char* type, const std::string& body) {
     std::ostringstream text;
     text << "HTTP/1.1 " << code << "\r\nContent-Type: " << type
@@ -516,7 +505,45 @@ static bool http_response(PTJSource& s, Socket fd, const char* code, const char*
     const std::string response = text.str();
     return write_all(s, fd, response.data(), response.size(), mono_ns() + 100000000ULL) == IOResult::Ok;
 }
+static void probe_and_reap_image_clients(PTJSource& s) {
+    std::shared_ptr<Client> current;
+    bool check_jpeg = false;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        current = s.client;
+        check_jpeg = !s.jpeg_clients.empty();
+    }
+    if (current) {
+        char c;
+        const int n = recv(current->fd, &c, 1, MSG_PEEK);
+        if (n == 0 || n > 0 || (n < 0 && !would_block(socket_error()))) drop_client(s, current);
+    }
+    if (!check_jpeg) return;
+    reap_jpeg_clients(s);
+    // If any JPEG client was just marked closed by MSG_PEEK above, give its writer a few ms to exit before rejecting.
+    const uint64_t deadline = mono_ns() + 10000000ULL;
+    for (;;) {
+        bool any_closing = false;
+        {
+            std::lock_guard<std::mutex> lock(s.mutex);
+            for (const auto& client : s.jpeg_clients) {
+                if (client->closed) { any_closing = true; break; }
+            }
+        }
+        if (!any_closing || mono_ns() >= deadline) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        reap_jpeg_clients(s);
+    }
+}
 static void subscribe_jpeg(PTJSource& s, Socket fd, bool http) {
+    {
+        bool need_reap = false;
+        {
+            std::lock_guard<std::mutex> lock(s.mutex);
+            need_reap = s.client != nullptr || s.jpeg_clients.size() >= 8;
+        }
+        if (need_reap) probe_and_reap_image_clients(s);
+    }
     auto client = std::make_shared<Client>(fd, false, http);
     if (http) {
         bool available;
@@ -571,7 +598,144 @@ static void answer_discovery(PTJSource& s) {
     sendto(s.discovery, reinterpret_cast<const char*>(&context), sizeof(context), 0,
            reinterpret_cast<const sockaddr*>(&peer), peer_bytes);
 }
+struct PendingClient {
+    Socket fd = bad_socket;
+    uint64_t deadline = 0;
+    uint64_t command_received = 0;
+    char command[256]{};
+    size_t command_used = 0;
+    bool reading_headers = false;
+    unsigned header_bytes = 0;
+    unsigned header_newlines = 1;
+};
+enum class PendingState { Keep, Drop, Dispatched };
+static void dispatch_http_command(PTJSource& s, Socket fd, const char* command) {
+    if (!std::strncmp(command, "GET /stream.mjpg HTTP/1.", sizeof("GET /stream.mjpg HTTP/1.")-1)) {
+        subscribe_jpeg(s, fd, true);
+    } else if (!std::strncmp(command, "GET /cameras HTTP/1.", 20) ||
+               !std::strncmp(command, "GET / HTTP/1.", 13)) {
+        const std::string catalog = camera_catalog(s);
+        http_response(s, fd, catalog.empty() ? "503 Service Unavailable" : "200 OK",
+                      "application/json", catalog.empty() ? "{\"error\":\"camera source not attached\"}" : catalog);
+        close_socket(fd);
+    } else {
+        http_response(s, fd, "404 Not Found", "text/plain", "Not found\n");
+        close_socket(fd);
+    }
+}
+static void dispatch_command(PTJSource& s, Socket fd, const char* command, uint64_t received) {
+    if (std::strcmp(command, "PING") == 0) {
+        uint64_t response[2]{received, mono_ns()};
+        if (write_all(s, fd, response, sizeof(response), mono_ns() + 100000000ULL) == IOResult::Ok)
+            ++s.stats.pings;
+        close_socket(fd);
+    } else if (!std::strcmp(command, "CONTEXT")) {
+        PTJCaptureContext context;
+        {
+            std::lock_guard<std::mutex> lock(s.mutex);
+            if (s.running && s.service_generation) {
+                context.capture_session_id = s.session;
+                context.service_generation = s.service_generation;
+            }
+        }
+        // No attach/unknown owner: close without a response. Zero is not a generation.
+        if (context.capture_session_id && context.service_generation)
+            write_all(s, fd, &context, sizeof(context), mono_ns() + 100000000ULL);
+        close_socket(fd);
+    } else if (!std::strcmp(command, "JPEG")) {
+        subscribe_jpeg(s, fd, false);
+    } else if (!std::strcmp(command, "PAIR")) {
+        probe_and_reap_image_clients(s);
+        auto client = std::make_shared<Client>(fd, true);
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (s.running && !s.client && s.jpeg_clients.empty()) {
+            s.client = std::move(client); ++s.stats.connections; ++s.image_generation; s.has_seq = false;
+        }
+    } else if ((!s.stream_id && !std::strcmp(command, "LABELS")) ||
+               (s.stream_id == PTJ_EYE_LEFT && !std::strcmp(command, "EYES"))) {
+        auto client = std::make_shared<Client>(fd, false);
+        std::shared_ptr<Client> existing;
+        {
+            std::lock_guard<std::mutex> lock(s.mutex);
+            existing = s.stock_client;
+        }
+        if (existing) {
+            char byte;
+            const int n = recv(existing->fd, &byte, 1, MSG_PEEK);
+            if (n == 0 || n > 0 || (n < 0 && !would_block(socket_error()))) drop_stock_client(s, existing);
+        }
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (s.running && s.results_allowed && !s.stock_client) {
+            s.stock_client = std::move(client); ++s.stock_connection;
+        }
+    } else close_socket(fd);
+}
+static PendingState advance_pending(PTJSource& s, PendingClient& p) {
+    while (!p.reading_headers) {
+        char c;
+        const int n = recv(p.fd, &c, 1, 0);
+        if (n == 1) {
+            if (c == '\n') {
+                p.command[p.command_used] = 0;
+                p.command_received = mono_ns();
+                if (!std::strncmp(p.command, "GET ", 4)) {
+                    p.reading_headers = true;
+                    p.deadline = p.command_received + 1000000000ULL;
+                    break;
+                }
+                dispatch_command(s, p.fd, p.command, p.command_received);
+                p.fd = bad_socket;
+                return PendingState::Dispatched;
+            }
+            if (p.command_used >= sizeof(p.command) - 1) return PendingState::Drop;
+            p.command[p.command_used++] = c;
+            continue;
+        }
+        if (n == 0 || !would_block(socket_error())) return PendingState::Drop;
+        return mono_ns() >= p.deadline ? PendingState::Drop : PendingState::Keep;
+    }
+    while (p.reading_headers) {
+        char c;
+        const int n = recv(p.fd, &c, 1, 0);
+        if (n == 1) {
+            if (++p.header_bytes > 4096) return PendingState::Drop;
+            if (c == '\n') {
+                if (++p.header_newlines == 2) {
+                    dispatch_http_command(s, p.fd, p.command);
+                    p.fd = bad_socket;
+                    return PendingState::Dispatched;
+                }
+            } else if (c != '\r') {
+                p.header_newlines = 0;
+            }
+            continue;
+        }
+        if (n == 0 || !would_block(socket_error())) return PendingState::Drop;
+        return mono_ns() >= p.deadline ? PendingState::Drop : PendingState::Keep;
+    }
+    return mono_ns() >= p.deadline ? PendingState::Drop : PendingState::Keep;
+}
+static void configure_client_socket(const PTJSource& s, Socket fd) {
+    nonblocking(fd);
+    int one = 1, buffer = s.timeout_ms > 200 ? 131072 : 32768;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&one), sizeof(one));
+    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char*>(&one), sizeof(one));
+#if defined(__linux__)
+    int idle = 10, interval = 3, count = 3;
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+    setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
+#if defined(TCP_USER_TIMEOUT)
+    unsigned int user_timeout_ms = 15000;
+    setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &user_timeout_ms, sizeof(user_timeout_ms));
+#endif
+#endif
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buffer), sizeof(buffer));
+}
 static void server_loop(PTJSource& s) {
+    static constexpr size_t max_pending_clients = 16;
+    std::vector<PendingClient> pending_clients;
+    std::vector<PollFD> polls;
     while (s.running) {
         send_stock(s);
         reap_jpeg_clients(s);
@@ -590,83 +754,71 @@ static void server_loop(PTJSource& s) {
             // Stream connections are receive-only after their command.
             else if (n > 0) drop_client(s, current);
         }
-        const int wait_ms = has_stock ? 1 : ((current || has_jpeg) ? 20 : 200);
-        PollFD polls[2]{{s.listener, POLLIN, 0}, {s.discovery, POLLIN, 0}};
-        if (poll_sockets(polls, 2, wait_ms) <= 0) continue;
-        if (polls[1].revents & POLLIN) answer_discovery(s);
-        if (!(polls[0].revents & POLLIN)) continue;
-        Socket fd = accept(s.listener, nullptr, nullptr);
-        if (fd == bad_socket) continue;
-        nonblocking(fd);
-        int one = 1, buffer = 32768;
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&one), sizeof(one));
-        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char*>(&one), sizeof(one));
-#if defined(__linux__)
-        int idle = 10, interval = 3, count = 3;
-        setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
-        setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
-        setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, sizeof(count));
+        int wait_ms = has_stock ? 1 : ((current || has_jpeg) ? 20 : 200);
+        if (!pending_clients.empty()) wait_ms = std::min(wait_ms, 20);
+#if defined(_WIN32)
+        // Windows has no self-pipe in WSAPoll; cap idle wait so shutdown stays fast.
+        if (wait_ms > 50) wait_ms = 50;
 #endif
-        setsockopt(fd, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buffer), sizeof(buffer));
-        char command[256]{}; uint64_t received = 0;
-        if (!read_command(s, fd, command, received)) { close_socket(fd); continue; }
-        if (!std::strncmp(command, "GET ", 4)) {
-            if (!http_headers(s, fd)) { close_socket(fd); continue; }
-            if (!std::strncmp(command, "GET /stream.mjpg HTTP/1.", sizeof("GET /stream.mjpg HTTP/1.")-1)) {
-                subscribe_jpeg(s, fd, true);
-            } else if (!std::strncmp(command, "GET /cameras HTTP/1.", 20) ||
-                       !std::strncmp(command, "GET / HTTP/1.", 13)) {
-                const std::string catalog = camera_catalog(s);
-                http_response(s, fd, catalog.empty() ? "503 Service Unavailable" : "200 OK",
-                              "application/json", catalog.empty() ? "{\"error\":\"camera source not attached\"}" : catalog);
-                close_socket(fd);
-            } else {
-                http_response(s, fd, "404 Not Found", "text/plain", "Not found\n"); close_socket(fd);
-            }
-        } else if (std::strcmp(command, "PING") == 0) {
-            uint64_t response[2]{received, mono_ns()};
-            if (write_all(s, fd, response, sizeof(response), mono_ns() + 100000000ULL) == IOResult::Ok)
-                ++s.stats.pings;
-            close_socket(fd);
-        } else if (!std::strcmp(command, "CONTEXT")) {
-            PTJCaptureContext context;
-            {
-                std::lock_guard<std::mutex> lock(s.mutex);
-                if (s.running && s.service_generation) {
-                    context.capture_session_id = s.session;
-                    context.service_generation = s.service_generation;
+        polls.clear();
+        polls.push_back(PollFD{s.listener, POLLIN, 0});
+        polls.push_back(PollFD{s.discovery, POLLIN, 0});
+#if !defined(_WIN32)
+        const size_t pending_offset = s.wakeup[0] >= 0 ? 3 : 2;
+        if (s.wakeup[0] >= 0) polls.push_back(PollFD{s.wakeup[0], POLLIN, 0});
+#else
+        const size_t pending_offset = 2;
+#endif
+        for (const auto& p : pending_clients) polls.push_back(PollFD{p.fd, POLLIN, 0});
+        const int ready = poll_sockets(polls.data(), unsigned(polls.size()), wait_ms);
+        const uint64_t now = mono_ns();
+#if !defined(_WIN32)
+        if (ready > 0 && s.wakeup[0] >= 0 && (polls[2].revents & POLLIN)) {
+            char drain[16];
+            while (read(s.wakeup[0], drain, sizeof(drain)) > 0) {}
+        }
+#endif
+        if (!pending_clients.empty()) {
+            size_t write_idx = 0;
+            for (size_t i = 0; i < pending_clients.size(); ++i) {
+                auto& p = pending_clients[i];
+                const bool has_event = ready > 0 && (polls[pending_offset + i].revents & (POLLIN | POLLERR | POLLHUP | POLLNVAL));
+                if (!has_event && now < p.deadline) {
+                    if (write_idx != i) pending_clients[write_idx] = p;
+                    ++write_idx;
+                    continue;
+                }
+                const PendingState st = has_event ? advance_pending(s, p) : PendingState::Drop;
+                if (st == PendingState::Keep) {
+                    if (write_idx != i) pending_clients[write_idx] = p;
+                    ++write_idx;
+                } else if (st == PendingState::Drop && p.fd != bad_socket) {
+                    close_socket(p.fd);
                 }
             }
-            // No attach/unknown owner: close without a response. Zero is not a generation.
-            if (context.capture_session_id && context.service_generation)
-                write_all(s, fd, &context, sizeof(context), mono_ns() + 100000000ULL);
-            close_socket(fd);
-        } else if (!std::strcmp(command, "JPEG")) {
-            subscribe_jpeg(s, fd, false);
-        } else if (!std::strcmp(command, "PAIR")) {
-            auto client = std::make_shared<Client>(fd, true);
-            std::lock_guard<std::mutex> lock(s.mutex);
-            if (s.running && !s.client && s.jpeg_clients.empty()) {
-                s.client = std::move(client); ++s.stats.connections; ++s.image_generation; s.has_seq = false;
+            pending_clients.resize(write_idx);
+        }
+        if (ready <= 0) continue;
+        if (polls[1].revents & POLLIN) answer_discovery(s);
+        if (!(polls[0].revents & POLLIN)) continue;
+        for (unsigned accepted = 0; accepted < 8 && s.running; ++accepted) {
+            Socket fd = accept(s.listener, nullptr, nullptr);
+            if (fd == bad_socket) break;
+            configure_client_socket(s, fd);
+            if (pending_clients.size() >= max_pending_clients) {
+                close_socket(fd);
+                continue;
             }
-        } else if ((!s.stream_id && !std::strcmp(command, "LABELS")) ||
-                   (s.stream_id == PTJ_EYE_LEFT && !std::strcmp(command, "EYES"))) {
-            auto client = std::make_shared<Client>(fd, false);
-            std::shared_ptr<Client> existing;
-            {
-                std::lock_guard<std::mutex> lock(s.mutex);
-                existing = s.stock_client;
-            }
-            if (existing) {
-                char byte;
-                const int n = recv(existing->fd, &byte, 1, MSG_PEEK);
-                if (n == 0 || n > 0 || (n < 0 && !would_block(socket_error()))) drop_stock_client(s, existing);
-            }
-            std::lock_guard<std::mutex> lock(s.mutex);
-            if (s.running && s.results_allowed && !s.stock_client) {
-                s.stock_client = std::move(client); ++s.stock_connection;
-            }
-        } else close_socket(fd);
+            PendingClient p{};
+            p.fd = fd;
+            p.deadline = mono_ns() + 1000000000ULL;
+            const PendingState st = advance_pending(s, p);
+            if (st == PendingState::Keep) pending_clients.push_back(p);
+            else if (st == PendingState::Drop && p.fd != bad_socket) close_socket(p.fd);
+        }
+    }
+    for (auto& p : pending_clients) {
+        if (p.fd != bad_socket) close_socket(p.fd);
     }
 }
 
@@ -718,6 +870,16 @@ extern "C" int core_ptj_start_with_results(const PTJConfig* config, PTJSource** 
     if (bind(s->discovery, reinterpret_cast<sockaddr*>(&address), sizeof(address)))
         return start_fail("discovery_bind");
     nonblocking(s->discovery);
+#if !defined(_WIN32)
+    if (pipe(s->wakeup) == 0) {
+        for (int fd : s->wakeup) {
+            fcntl(fd, F_SETFD, FD_CLOEXEC);
+            fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+        }
+    } else {
+        s->wakeup[0] = s->wakeup[1] = -1;
+    }
+#endif
     try {
         s->worker = std::thread(encode_loop, std::ref(*s));
         s->server = std::thread(server_loop, std::ref(*s));
@@ -792,13 +954,13 @@ static int submit_frame(PTJSource* s, const uint8_t* pixels, uint32_t stride, co
     if (!lock.owns_lock()) { ++s->stats.drop_busy; return PTJ_BUSY; }
     if (!s->running) { ++s->stats.drop_stopped; return PTJ_STOPPED; }
     if (meta->session_id != s->session) { ++s->stats.drop_session; return PTJ_WRONG_SESSION; }
+    if ((!s->client && s->jpeg_clients.empty()) || (borrowed && s->image_generation != subscription)) {
+        ++s->stats.drop_no_subscriber; return PTJ_NO_SUBSCRIBER;
+    }
     if (s->has_seq && meta->source_seq <= s->last_seen_seq) {
         ++s->stats.drop_duplicate; return PTJ_DUPLICATE;
     }
     s->has_seq = true; s->last_seen_seq = meta->source_seq;
-    if ((!s->client && s->jpeg_clients.empty()) || (borrowed && s->image_generation != subscription)) {
-        ++s->stats.drop_no_subscriber; return PTJ_NO_SUBSCRIBER;
-    }
     if (s->pending >= 0) { ++s->stats.drop_full; return PTJ_FULL; }
     const int slot = s->processing == 0 ? 1 : 0;
     Frame& f = s->frames[size_t(slot)];
@@ -851,6 +1013,40 @@ extern "C" int core_ptj_bind_camera_catalog(PTJSource* s, uint16_t mouth, uint16
     return setsockopt(s->discovery, IPPROTO_IP, IP_ADD_MEMBERSHIP,
                reinterpret_cast<const char*>(&group), sizeof(group)) ? socket_error() : 0;
 }
+extern "C" void core_ptj_reset_capture_epoch(PTJSource* s) {
+    if (!s) return;
+    std::lock_guard<std::mutex> lock(s->mutex);
+    s->has_seq = false;
+    s->last_seen_seq = 0;
+    for (const auto& client : s->jpeg_clients) {
+        std::lock_guard<std::mutex> client_lock(client->mutex);
+        client->has_after_seq = false;
+        client->after_seq = 0;
+    }
+}
+static void signal_stop_locked(PTJSource& s) {
+    s.running = false;
+    clear_pending(s, true);
+    for (const auto& client : s.jpeg_clients) {
+        std::lock_guard<std::mutex> client_lock(client->mutex);
+        client->changed.notify_all();
+    }
+#if !defined(_WIN32)
+    if (s.wakeup[1] >= 0) {
+        const char wake = 1;
+        const ssize_t written = write(s.wakeup[1], &wake, 1);
+        (void)written;
+    }
+#endif
+}
+extern "C" void core_ptj_begin_stop(PTJSource* s) {
+    if (!s) return;
+    {
+        std::lock_guard<std::mutex> lock(s->mutex);
+        signal_stop_locked(*s);
+    }
+    s->changed.notify_all();
+}
 extern "C" int ptj_get_stats(const PTJSource* s, PTJStats* stats) {
     if (!s || !stats) return -1;
     *stats = {}; stats->struct_bytes = sizeof(*stats); stats->session_id = s->session;
@@ -868,16 +1064,7 @@ extern "C" int ptj_get_stats(const PTJSource* s, PTJStats* stats) {
 extern "C" void ptj_stop(PTJSource* s) {
     if (!s) return;
     std::lock_guard<std::mutex> stop_lock(s->stop_mutex);
-    {
-        std::lock_guard<std::mutex> lock(s->mutex);
-        s->running = false; clear_pending(*s, true);
-    }
-    s->changed.notify_all();
-    { std::lock_guard<std::mutex> lock(s->mutex);
-      for (const auto& client : s->jpeg_clients) {
-          std::lock_guard<std::mutex> client_lock(client->mutex);
-          client->changed.notify_all();
-      } }
+    core_ptj_begin_stop(s);
     if (s->server.joinable()) s->server.join();
     if (s->worker.joinable()) s->worker.join();
     std::vector<std::shared_ptr<Client>> clients;
@@ -902,6 +1089,11 @@ extern "C" void ptj_stop(PTJSource* s) {
     }
     if (s->listener != bad_socket) { close_socket(s->listener); s->listener = bad_socket; }
     if (s->discovery != bad_socket) { close_socket(s->discovery); s->discovery = bad_socket; }
+#if !defined(_WIN32)
+    for (int& fd : s->wakeup) {
+        if (fd >= 0) { close(fd); fd = -1; }
+    }
+#endif
 #if defined(_WIN32)
     if (s->winsock) { WSACleanup(); s->winsock = false; }
 #endif

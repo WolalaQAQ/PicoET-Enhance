@@ -140,6 +140,30 @@ class StockTests(unittest.TestCase):
             read_eye(TimeoutSocket(b'PSE1'))
         self.assertNotIsInstance(eye_ctx.exception, IdleStockTimeout)
 
+        # OS keepalive death (WSAETIMEDOUT 10060 / ETIMEDOUT) must NOT be wrapped into IdleStockTimeout.
+        class OsTimeoutSocket:
+            def recv(self, n):
+                err = TimeoutError(10060, 'keepalive dead')
+                err.winerror = 10060
+                raise err
+
+            def sendall(self, data):
+                pass
+
+        for fn in (read_stock, read_eye):
+            with self.assertRaises(TimeoutError) as os_ctx:
+                fn(OsTimeoutSocket())
+            self.assertNotIsInstance(os_ctx.exception, IdleStockTimeout)
+
+        # One-shot CONTEXT handshake must NOT raise IdleStockTimeout on poll timeout.
+        class PollTimeoutCtxSocket(TimeoutSocket):
+            def sendall(self, data):
+                pass
+
+        with self.assertRaises(TimeoutError) as ctx_to:
+            read_capture_context(PollTimeoutCtxSocket())
+        self.assertNotIsInstance(ctx_to.exception, IdleStockTimeout)
+
     def test_bad_header_and_stage_are_rejected(self):
         for offset in (0, 4, 6, 8, 92):
             data = bytearray(sample().pack())

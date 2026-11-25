@@ -266,6 +266,7 @@ extern "C" int ptj_submit_stream(PTJSource* source, uint32_t stream, const uint8
     else for (size_t row = 0; row < PTJ_HEIGHT; ++row)
         std::memcpy(slot.pixels + row * PTJ_WIDTH, pixels + row * stride, PTJ_WIDTH);
     slot.meta = *meta; slot.subscription = subscription;
+    slot.reserved = uint32_t(epoch);
     slot.copy_mono_ns = mono_ns(); // CAMERA-domain completed ownership-protected copy, before IPC publish.
     uint64_t elapsed = slot.copy_mono_ns - begin;
     ++local.copy_count; ++image.producer.copy_count;

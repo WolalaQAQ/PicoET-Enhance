@@ -205,6 +205,29 @@ class StockNativeTests(ipc.IPCTests):
         seqs = [read_stock(second).label_seq for _ in range(4)]
         self.assertEqual(seqs, [1, 2, 3, 4])
 
+    def test_stock_eyes_fast_reconnect_and_stalled_handshake_isolation(self):
+        rt = self.runtime(daemon=False)
+        rt.launch('results-on', 'eyes-on')
+        source = rt.source()
+        labels = self.labels(rt)
+        stalled = rt.connect(b'', wait_subscription=False)
+        self.assertIsNotNone(stalled)
+        for seq in range(1, 5):
+            self.assertEqual(self.submit(source, stock(seq=seq, session=source.session)), 0)
+        self.assertEqual([read_stock(labels).label_seq for _ in range(4)], [1, 2, 3, 4])
+        submit_eye = source.module.lib.ptj_submit_eye
+        submit_eye.argtypes = [C.c_void_p, C.c_void_p]
+        eye1 = rt.connect(b'EYES\n', wait_subscription=False, stream=1)
+        raw = EYE_WIRE.pack(b'PSE1', 1, 64, EYE_WIRE.size, 7, 0, 0, 1, 100, 101, 1000, *([.25] * 64))
+        ipc.wait(lambda: submit_eye(source.handle, C.create_string_buffer(raw)) == 0)
+        self.assertEqual(read_eye(eye1).sequence, 1)
+        eye1.close()
+        eye2 = rt.connect(b'EYES\n', wait_subscription=False, stream=1)
+        for seq in range(2, 6):
+            pkt = EYE_WIRE.pack(b'PSE1', 1, 64, EYE_WIRE.size, 7, 0, 0, seq, 100 + seq, 101 + seq, 1000 + seq, *([.25] * 64))
+            ipc.wait(lambda pkt=pkt: submit_eye(source.handle, C.create_string_buffer(pkt)) == 0)
+        self.assertEqual([read_eye(eye2).sequence for _ in range(4)], [2, 3, 4, 5])
+
     def test_stock_session_replacement_does_not_accept_old_record(self):
         old_rt = self.runtime(); old = old_rt.source(); self.labels(old_rt)
         old_session = old.session; old.stop()

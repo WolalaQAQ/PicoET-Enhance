@@ -97,7 +97,7 @@ export async function requestJson(fetcher, path, body, timeoutMs = 3500) {
 }
 
 export function deriveView(status, online, ageMs = 0) {
-  const running = status?.running === true, current = online && ageMs < 1500;
+  const running = status?.running === true, current = online && ageMs < 4000;
   const connection = status?.connected === true;
   const video = current && running && connection && status?.metrics?.video_fresh === true;
   return {
@@ -139,6 +139,8 @@ export function createApp(doc, options = {}) {
     discoveryDone: false,
     discoveryKey: "",
     selectedHeadset: "",
+    headsetCleared: false,
+    cameraPicked: false,
     page: routePage(navigation?.location.hash),
     relayDirty: false,
     relayPortsManual: false,
@@ -183,7 +185,7 @@ export function createApp(doc, options = {}) {
       const device = state.discovered.find(d => `${d.host}:${d.port}` === selected);
       if (device) return {kind: "discovered", host: device.host, ...discoveredPorts(device)};
     }
-    if (manualHost && (selected === "manual" || !selected)) {
+    if (manualHost && !state.headsetCleared && (selected === "manual" || !selected)) {
       const matched = state.discovered.some(d => d.host === manualHost && d.port === formMouth);
       return {kind: matched ? "discovered" : "manual", host: manualHost, mouthPort: formMouth, leftPort: formLeft, rightPort: formRight};
     }
@@ -286,7 +288,7 @@ export function createApp(doc, options = {}) {
     let selected = "";
     if (discoveredValues.includes(state.selectedHeadset)) {
       selected = state.selectedHeadset;
-    } else if (manualHost && (state.selectedHeadset === "manual" || !state.selectedHeadset)) {
+    } else if (manualHost && !state.headsetCleared && (state.selectedHeadset === "manual" || !state.selectedHeadset)) {
       const match = state.discovered.find(d => d.host === manualHost && d.port === formMouth);
       selected = match ? `${match.host}:${match.port}` : "manual";
     }
@@ -318,8 +320,8 @@ export function createApp(doc, options = {}) {
     state.config = config;
     if (!state.dirty) {
       for (const key of [...TEXT_FIELDS, ...NUMBER_FIELDS]) get(key).value = config[key] == null ? "" : String(config[key]);
-      get("preview-camera").value = config.preview_camera ?? "mouth";
-      if (config.headset_host && !state.selectedHeadset) state.selectedHeadset = "manual";
+      if (!state.cameraPicked) get("preview-camera").value = config.preview_camera ?? "mouth";
+      if (config.headset_host && !state.selectedHeadset && !state.headsetCleared) state.selectedHeadset = "manual";
     }
   }
 
@@ -440,12 +442,13 @@ export function createApp(doc, options = {}) {
     const relayEyeErrors = ["eye_left", "eye_right"].map(k => state.status?.cymple_relay?.eyes?.[k]?.error).filter(Boolean);
     const technicalParts = [...new Set([error, state.discoveryError, state.relayError, state.status?.cymple_relay?.error, ...relayEyeErrors].filter(Boolean))];
     get("technical-error").textContent = technicalParts.join("\n\n") || "—";
+    const owner = `${state.status?.source?.session_id}/${state.status?.output_session_id}`;
+    if (owner !== state.previewOwner) { state.previewError = false; clearPreview(); state.previewOwner = owner; }
+    if (!current.running) state.previewError = false;
+    if (!current.video || state.busy || !get("preview-enabled").checked || state.stoppedByUser) clearPreview();
     const waitingIdle = Boolean(current.running && state.status?.connected && !current.video && get("preview-enabled").checked && !state.previewError);
     get("placeholder").textContent = t(!get("preview-enabled").checked ? "previewOff" : state.previewError ? "previewError" : waitingIdle ? "waitingHeadsetWake" : "noVideo");
     get("camera-empty-help").textContent = t(waitingIdle ? "cameraWakeHelp" : "cameraEmptyHelp");
-    const owner = `${state.status?.source?.session_id}/${state.status?.output_session_id}`;
-    if (owner !== state.previewOwner) { clearPreview(); state.previewOwner = owner; }
-    if (!current.video || state.busy || !get("preview-enabled").checked || state.stoppedByUser) clearPreview();
     const identity = value => typeof value === "number" && !Number.isSafeInteger(value) ? t("unsafeInteger") : display(value);
     const source = state.status?.source ?? {}, m = current.current ? state.status?.metrics ?? {} : {};
     get("source-info").textContent = `${identity(source.session_id)} / ${identity(source.source_seq)}`;
@@ -489,6 +492,7 @@ export function createApp(doc, options = {}) {
     if (state.polling || state.busy || state.destroyed) return;
     state.polling = true;
     const generation = state.generation;
+    const wasOnline = state.online;
     try {
       const status = await requestJson(fetcher, "/api/status");
       if (generation !== state.generation || state.destroyed) return;
@@ -498,6 +502,7 @@ export function createApp(doc, options = {}) {
       state.online = true;
       state.at = now();
       state.pollError = "";
+      if (!wasOnline || (status.running && status.connected && !status.last_error)) state.error = "";
     } catch (error) {
       if (generation === state.generation && !state.destroyed) { state.online = false; state.pollError = error.message; }
     } finally {
@@ -512,12 +517,14 @@ export function createApp(doc, options = {}) {
     return {...config, preview_camera: get("preview-camera").value || "mouth"};
   }
 
-  async function control(key, action) {
+  async function control(key, action, {reportError = true} = {}) {
     if (state.busy || state.destroyed) return;
     state.busy = key;
     state.generation++;
-    state.error = "";
-    state.errorKey = "";
+    if (reportError) {
+      state.error = "";
+      state.errorKey = "";
+    }
     render();
     try {
       await action();
@@ -528,7 +535,18 @@ export function createApp(doc, options = {}) {
       state.at = now();
       state.pollError = "";
     } catch (error) {
-      state.error = error.message;
+      if (reportError) state.error = error.message;
+      try {
+        const status = await requestJson(fetcher, "/api/status", undefined, 2000);
+        if (!state.destroyed) {
+          state.status = status;
+          applyConfig(status.config ?? state.config);
+          applyCympleRelay(status.cymple_relay);
+          state.online = true;
+          state.at = now();
+          state.pollError = "";
+        }
+      } catch {}
     } finally {
       state.busy = "";
       if (!state.destroyed) render();
@@ -538,6 +556,7 @@ export function createApp(doc, options = {}) {
   async function persistConfig() {
     const saved = await requestJson(fetcher, "/api/config", readForm(), 20000);
     state.dirty = false;
+    state.cameraPicked = false;
     applyConfig(saved);
   }
 
@@ -554,6 +573,7 @@ export function createApp(doc, options = {}) {
     if (get("capture").disabled || !validate("live")) return;
     const target = activeTarget();
     const camera = get("preview-camera").value || "mouth";
+    state.previewError = false;
     await control("starting", async () => {
       if (state.dirty) await persistConfig();
       await requestJson(fetcher, "/api/start", {
@@ -564,13 +584,20 @@ export function createApp(doc, options = {}) {
         eye_left_port: target.leftPort,
         eye_right_port: target.rightPort,
       }, 60000);
+      state.cameraPicked = false;
     });
   }
-  async function stop() { if (!get("stop").disabled) await control("stopping", () => requestJson(fetcher, "/api/stop", {}, 20000)); }
+  async function stop() {
+    if (get("stop").disabled) return;
+    state.previewError = false;
+    await control("stopping", () => requestJson(fetcher, "/api/stop", {}, 20000));
+  }
 
   async function switchCamera() {
     if (state.busy || state.destroyed) return;
+    state.previewError = false;
     if (!view().running) {
+      state.cameraPicked = true;
       state.errorKey = "";
       render();
       return;
@@ -589,6 +616,7 @@ export function createApp(doc, options = {}) {
         eye_left_port: target.leftPort,
         eye_right_port: target.rightPort,
       }, 60000);
+      state.cameraPicked = false;
     });
   }
 
@@ -613,7 +641,7 @@ export function createApp(doc, options = {}) {
         state.relayError = error.message;
         throw error;
       }
-    });
+    }, {reportError: false});
   }
 
   async function checkUpdates(manual = false) {
@@ -638,6 +666,7 @@ export function createApp(doc, options = {}) {
   async function quitService() {
     if (get("quit-service").disabled || state.destroyed) return;
     state.busy = "quittingService";
+    state.generation++;
     state.error = "";
     state.errorKey = "";
     render();
@@ -703,6 +732,7 @@ export function createApp(doc, options = {}) {
       state.errorKey = "";
       if (!target || target.id === "headset_host") {
         const manualHost = get("headset_host").value.trim();
+        state.headsetCleared = false;
         state.selectedHeadset = manualHost ? "manual" : (
           state.discovered.length === 1 ? `${state.discovered[0].host}:${state.discovered[0].port}` : ""
         );
@@ -716,6 +746,7 @@ export function createApp(doc, options = {}) {
   get("headset-select").addEventListener("change", () => {
     const val = get("headset-select").value;
     state.selectedHeadset = val;
+    state.headsetCleared = val === "";
     const device = state.discovered.find(item => `${item.host}:${item.port}` === val);
     if (device) applyDiscoveredEyePorts(device);
     state.errorKey = "";

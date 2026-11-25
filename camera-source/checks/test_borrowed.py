@@ -42,6 +42,7 @@ LIB.core_ptj_image_subscription.argtypes = [C.c_void_p]
 LIB.core_ptj_image_subscription.restype = C.c_uint64
 LIB.core_ptj_bind_camera_catalog.argtypes = [C.c_void_p, C.c_uint16, C.c_uint16, C.c_uint16]
 LIB.core_ptj_bind_capture_context.argtypes = [C.c_void_p, C.c_uint64, C.c_uint64]
+LIB.core_ptj_reset_capture_epoch.argtypes = [C.c_void_p]
 KERNEL = C.WinDLL('kernel32', use_last_error=True)
 KERNEL.VirtualAlloc.argtypes = [C.c_void_p, C.c_size_t, C.c_uint32, C.c_uint32]
 KERNEL.VirtualAlloc.restype = C.c_void_p
@@ -402,6 +403,77 @@ class CameraServiceTests(unittest.TestCase):
         self.assertEqual(core.borrow(pages, 1, subscription=1), 1)
         self.assertEqual(core.borrow(pages, 2, subscription=2), 0)
         self.assertEqual(T.packet(fresh)[0]['source_seq'], 2)
+
+    def test_stale_subscription_does_not_poison_sequence_for_fresh_subscriber(self):
+        core = Core(self)
+        first = core.connect(pair=False)
+        pages = core.pages_for(bytes([31]) * 160000)
+        self.assertEqual(core.borrow(pages, 100), 0)
+        self.assertEqual(T.packet(first)[0]['source_seq'], 100)
+        first.close()
+        T.wait(lambda: core.stats()['connected'] == 0)
+        fresh = core.connect(pair=False)
+        self.assertEqual(LIB.core_ptj_image_subscription(core.handle), 2)
+        self.assertEqual(core.borrow(pages, 101, subscription=1), 1)
+        self.assertEqual(core.borrow(pages, 1, subscription=2), 0)
+        self.assertEqual(T.packet(fresh)[0]['source_seq'], 1)
+
+    def test_capture_epoch_reset_clears_core_and_client_after_seq(self):
+        core = Core(self)
+        first = core.connect(pair=False)
+        pages = core.pages_for(bytes([55]) * 160000)
+        self.assertEqual(core.borrow(pages, 100), 0)
+        self.assertEqual(T.packet(first)[0]['source_seq'], 100)
+        second = core.connect(pair=False)
+        LIB.core_ptj_reset_capture_epoch(core.handle)
+        self.assertEqual(core.borrow(pages, 1), 0)
+        self.assertEqual(T.packet(first)[0]['source_seq'], 1)
+        self.assertEqual(T.packet(second)[0]['source_seq'], 1)
+
+    def test_stalled_handshakes_do_not_block_ping_discovery_or_subscribers(self):
+        core = Core(self)
+        self.assertEqual(LIB.core_ptj_bind_capture_context(core.handle, core.session, 12345), 0)
+        LIB.core_ptj_bind_camera_catalog(core.handle, core.port, core.port + 1, core.port + 2)
+        stalled_cmd = socket.create_connection(('127.0.0.1', core.port), timeout=2)
+        stalled_http = socket.create_connection(('127.0.0.1', core.port), timeout=2)
+        stalled_http.sendall(b'GET /stream.mjpg HTTP/1.1\r\nHost: localhost\r\n')
+        core.sockets.extend([stalled_cmd, stalled_http])
+        time.sleep(.03)
+        started = time.perf_counter()
+        with socket.create_connection(('127.0.0.1', core.port), timeout=1) as ping:
+            ping.sendall(b'PING\n')
+            received, emitted = struct.unpack('<QQ', T.exact(ping, 16))
+            self.assertLessEqual(received, emitted)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+            udp.settimeout(1)
+            udp.sendto(b'PICO_CAMERA_DISCOVER_V1\n', ('127.0.0.1', core.port))
+            self.assertEqual(json.loads(udp.recv(4096))['session_id'], str(core.session))
+        live = core.connect(pair=False)
+        self.assertLess(time.perf_counter() - started, .4)
+        pages = core.pages_for(bytes([66]) * 160000)
+        self.assertEqual(core.borrow(pages, 1), 0)
+        self.assertEqual(T.packet(live)[0]['source_seq'], 1)
+
+    def test_fast_reconnect_reaps_closed_jpeg_at_cap_and_pair_slot(self):
+        core = Core(self)
+        receivers = [core.connect(pair=False) for _ in range(8)]
+        receivers[0].close()
+        replacement = core.connect(http=True)
+        stream = replacement.makefile('rb')
+        self.addCleanup(stream.close)
+        self.assertEqual(stream.readline(), b'HTTP/1.1 200 OK\r\n')
+        for sock in receivers[1:]:
+            sock.close()
+        stream.close()
+        replacement.close()
+        T.wait(lambda: core.stats()['connected'] == 0)
+        pair1 = core.connect(pair=True)
+        pair1.close()
+        pair2 = core.connect(pair=True)
+        pages = core.pages_for(bytes([77]) * 160000)
+        self.assertEqual(core.borrow(pages, 1), 0)
+        self.assertEqual(T.packet(pair2)[0]['source_seq'], 1)
+        T.packet(pair2)
 
 
 class BridgeBorrowTests(unittest.TestCase):

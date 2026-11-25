@@ -153,12 +153,14 @@ class CympleEyeRelay:
         self.stop_event = threading.Event()
         self.running = False
         self._starting = False
+        self._generation = 0
         self.error = ''
         self.source_host = ''
         self._active_left_port = None
         self._active_right_port = None
         self._threads = []
         self._sockets = {}
+        self._pending_sockets = set()
         self._eyes = self._make_eyes(self.config['left_port'], self.config['right_port'])
 
     @staticmethod
@@ -181,9 +183,23 @@ class CympleEyeRelay:
         if self.config_path is None:
             return
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.config_path.with_suffix(self.config_path.suffix + '.tmp')
+        tmp = self.config_path.with_name(f'{self.config_path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
         tmp.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
-        os.replace(tmp, self.config_path)
+        try:
+            for attempt in range(6):
+                try:
+                    os.replace(tmp, self.config_path)
+                    return
+                except PermissionError as exc:
+                    if getattr(exc, 'winerror', None) not in (5, 32) or attempt == 5:
+                        raise
+                    time.sleep(0.025)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     def configure(self, changes: dict) -> dict:
         """Persist validated relay settings while stopped."""
@@ -225,6 +241,7 @@ class CympleEyeRelay:
                 self._eyes['eye_right']['port'] = updated_cfg['right_port']
             self._save_config()
             self._starting = True
+            generation = self._generation
 
         if 'headset_host' in opts:
             explicit_host = str(opts['headset_host'] or '').strip()
@@ -234,6 +251,8 @@ class CympleEyeRelay:
         try:
             src_host, left_port, right_port = self._resolve_endpoint(explicit_host, updated_cfg)
             with self.lock:
+                if generation != self._generation:
+                    raise RuntimeError('Cymple eye relay startup was cancelled')
                 if self.running:
                     raise ValueError('Cymple eye relay is already running')
                 self.stop_event.clear()
@@ -243,6 +262,7 @@ class CympleEyeRelay:
                 self._active_left_port = left_port
                 self._active_right_port = right_port
                 self._sockets.clear()
+                self._pending_sockets.clear()
                 self._eyes = self._make_eyes(left_port, right_port, initial_state='connecting')
                 dst_addr = (updated_cfg['cymple_host'], updated_cfg['cymple_port'])
                 self._threads = [
@@ -272,6 +292,39 @@ class CympleEyeRelay:
             with self.lock:
                 self._starting = False
 
+    def _track_pending_socket(self, sock):
+        if sock is None:
+            return
+        with self.lock:
+            self._pending_sockets.add(sock)
+            if self.stop_event.is_set():
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
+    def _untrack_pending_socket(self, sock):
+        if sock is None:
+            return
+        with self.lock:
+            self._pending_sockets.discard(sock)
+
+    def _connect(self, host: str, port: int, timeout: float = 4):
+        holder = [None]
+
+        def on_socket(sock):
+            if sock is not None:
+                holder[0] = sock
+                self._track_pending_socket(sock)
+            elif holder[0] is not None:
+                self._untrack_pending_socket(holder[0])
+                holder[0] = None
+
+        return wire.connect_cancellable(
+            host, port, timeout=timeout, stop_event=self.stop_event,
+            on_socket=on_socket, keep_tracked=True,
+        )
+
     def _worker(
         self,
         name: str,
@@ -285,24 +338,33 @@ class CympleEyeRelay:
     ):
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         seq = 0
+        backoff = 0.5
         try:
             while not self.stop_event.is_set():
                 tcp_sock = None
+                wait_after = False
                 with self.lock:
                     eye = self._eyes[name]
-                    eye['state'] = 'connecting' if eye['frames'] == 0 and not eye['error'] else eye['state']
+                    if eye['frames'] == 0 and not eye['error']:
+                        eye['state'] = 'connecting'
                 try:
-                    tcp_sock = socket.create_connection((src_host, src_port), timeout=4)
+                    tcp_sock = self._connect(src_host, src_port, timeout=4)
                     tcp_sock.settimeout(4)
-                    tcp_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    try:
+                        tcp_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    except (OSError, AttributeError):
+                        pass
                     wire.enable_keepalive(tcp_sock)
                     with self.lock:
                         if self.stop_event.is_set():
                             break
                         self._sockets[name] = tcp_sock
+                        self._pending_sockets.discard(tcp_sock)
                         eye = self._eyes[name]
                         eye['connected'] = True
                         eye['error'] = None
+                        if eye['state'] == 'reconnecting':
+                            eye['state'] = 'connecting'
                     tcp_sock.sendall(b'JPEG\n')
 
                     while not self.stop_event.is_set():
@@ -315,11 +377,15 @@ class CympleEyeRelay:
                                 if not self.stop_event.is_set():
                                     eye['connected'] = False
                                     eye['state'] = 'reconnecting'
+                            wait_after = True
                             break
+                        if not (header.flags & wire.JPEG):
+                            raise ValueError('Cymple relay received a non-JPEG frame')
                         jpeg = prepare_jpeg(payload, rotate_cw, hflip, vflip)
                         for pkt in encode_cymple_packets(jpeg, channel, seq):
                             udp_sock.sendto(pkt, dst_addr)
                         seq = (seq + 1) & 0xFF
+                        backoff = 0.5
                         now_ns = time.perf_counter_ns()
                         with self.lock:
                             eye['state'] = 'streaming'
@@ -336,15 +402,21 @@ class CympleEyeRelay:
                         eye['connected'] = False
                         eye['state'] = 'reconnecting'
                         eye['error'] = f'{type(exc).__name__}: {exc}'
-                    self.stop_event.wait(1.0)
+                    wait_after = True
                 finally:
                     with self.lock:
-                        self._sockets.pop(name, None)
+                        if tcp_sock is not None and self._sockets.get(name) is tcp_sock:
+                            self._sockets.pop(name, None)
+                        if tcp_sock is not None:
+                            self._pending_sockets.discard(tcp_sock)
                     if tcp_sock is not None:
                         try:
                             tcp_sock.close()
                         except OSError:
                             pass
+                if wait_after and not self.stop_event.is_set():
+                    self.stop_event.wait(backoff)
+                    backoff = min(backoff * 2.0, 5.0)
         finally:
             udp_sock.close()
 
@@ -352,8 +424,10 @@ class CympleEyeRelay:
         """Signal workers to stop, interrupt active sockets, and wait for clean exit."""
         self.stop_event.set()
         with self.lock:
+            self._generation += 1
             threads = list(self._threads)
-            sockets = list(self._sockets.values())
+            sockets = list(self._sockets.values()) + list(self._pending_sockets)
+            self._pending_sockets.clear()
         for sock in sockets:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
@@ -369,6 +443,7 @@ class CympleEyeRelay:
         with self.lock:
             self._threads = []
             self._sockets.clear()
+            self._pending_sockets.clear()
             self.running = False
             self.error = ''
             self.source_host = ''

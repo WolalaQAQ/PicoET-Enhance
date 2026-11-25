@@ -394,5 +394,46 @@ test("connected-idle headset shows wake hint and timeout/refused errors map clea
   f.app.setLanguage("zh-CN");
   assert.equal(errorMessage("zh-CN", "timed out"), messages["zh-CN"].connectionTimeout);
   assert.equal(errorMessage("zh-CN", "[WinError 10061] Connection refused"), messages["zh-CN"].connectionRefused);
+  assert.equal(errorMessage("zh-CN", "[WinError 10053] Connection aborted"), messages["zh-CN"].cameraStreamClosed);
+  assert.equal(errorMessage("zh-CN", "[WinError 10065] No route to host"), messages["zh-CN"].connectionTimeout);
   assert.equal(errorMessage("zh-CN", "POST /api/start: request timed out (3500 ms)"), messages["zh-CN"].requestTimeout);
+});
+
+test("preview-camera selection survives 500ms pollStatus when stopped and previewError resets cleanly", async t => {
+  const f = setup(t);
+  await f.app.init();
+
+  // Picking eye_left while stopped must NOT snap back to mouth on pollStatus().
+  f.el("preview-camera").value = "eye_left";
+  await f.app.switchCamera();
+  await f.app.pollStatus();
+  assert.equal(f.el("preview-camera").value, "eye_left");
+
+  // Starting uses eye_left, then preview error resets when stopped or restarted.
+  await f.app.start("capture");
+  f.server.previewStatus = 500;
+  await f.app.refreshPreview();
+  assert.equal(f.app.state.previewError, true);
+  assert.equal(f.el("placeholder").textContent, messages.en.previewError);
+  await f.app.stop();
+  assert.equal(f.app.state.previewError, false);
+  assert.equal(f.el("placeholder").textContent, messages.en.noVideo);
+
+  // Cymple relay errors stay inside #cymple-relay-error without duplicating into top #error.
+  f.server.before = (path) => {
+    if (path === "/api/cymple-relay") return Response.json({error: "No PICO camera service found"}, {status: 400});
+  };
+  await f.el("cymple-relay-start").emit("click");
+  assert.equal(f.el("cymple-relay-error").hidden, false);
+  assert.equal(f.el("error").hidden, true);
+  f.server.before = null;
+
+  // Selecting "" in #headset-select clears manual fallback without snapping back to "manual".
+  f.el("headset-select").value = "";
+  f.el("headset-select").emit("change");
+  assert.equal(f.el("headset-select").value, "");
+
+  // deriveView tolerates up to 3999ms status age (matching 3500ms /api/status timeout).
+  assert.equal(deriveView(f.server.status, true, 2000).current, true);
+  assert.equal(deriveView(f.server.status, true, 4000).current, false);
 });

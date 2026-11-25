@@ -17,7 +17,7 @@ using TrackingOperation = std::function<TrackingResult(bool)>;
 TrackingOperation tracking_operation();
 
 // One service lease for the union of camera consumers. Binder cold starts never
-// block the IPC heartbeat. A failed transition is retried only after demand changes.
+// block the IPC heartbeat. Failed START or STOP transitions retry every 2 seconds.
 class TrackingDemand {
     mutable std::mutex mutex;
     std::condition_variable changed;

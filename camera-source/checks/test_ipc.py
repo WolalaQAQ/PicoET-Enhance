@@ -341,6 +341,20 @@ class IPCTests(unittest.TestCase):
         self.assertEqual(packet(new)[0]['source_seq'], 1)
         self.assertEqual(source.submit(meta=source.meta(1), address=1), 2)
 
+    def test_capture_epoch_advancing_while_subscribed_resets_core_dedup(self):
+        rt = self.runtime()
+        source = rt.source()
+        first = rt.connect()
+        self.assertEqual(source.submit(meta=source.meta(100)), 0)
+        self.assertEqual(packet(first)[0]['source_seq'], 100)
+        second = rt.connect()
+        wait(lambda: source.stats()['connected'] == 2)
+        rt.module.fixture(25)
+        self.assertEqual(source.submit(meta=source.meta(1)), 0)
+        self.assertEqual(packet(first)[0]['source_seq'], 1)
+        self.assertEqual(packet(second)[0]['source_seq'], 1)
+        self.assertEqual(source.submit(meta=source.meta(1), address=1), 2)
+
     def test_04_pair_strided_lane_copy_meta_and_capture_timestamp(self):
         rt = self.runtime()
         s = rt.source()
@@ -819,6 +833,16 @@ class IPCTests(unittest.TestCase):
         self.assertEqual(s.submit(), 0)
         h, _ = packet(sock)
         self.assertEqual(h['session_id'], s.session)
+
+    def test_28_idle_stop_completes_quickly_within_stop_ack_budget(self):
+        rt = self.runtime()
+        s = rt.source()
+        started = time.perf_counter()
+        s.stop()
+        elapsed = time.perf_counter() - started
+        self.assertLess(elapsed, 0.8)
+        self.assertEqual(rt.module.shim_status()['state'], 'stopped_acknowledged')
+        self.assertEqual(rt.module.probe()['stop_ack'], 1)
 
 
 if __name__ == '__main__':

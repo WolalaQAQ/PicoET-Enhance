@@ -147,13 +147,18 @@ class StockRecord:
         return result
 
 
-def _read_exact(sock, count, name):
+def _is_poll_timeout(error):
+    """True only for Python socket.settimeout() expirations, never OS WSAETIMEDOUT/ETIMEDOUT."""
+    return error.errno is None and getattr(error, 'winerror', None) is None
+
+
+def _read_exact(sock, count, name, *, allow_idle=False):
     data = bytearray()
     while len(data) < count:
         try:
             part = sock.recv(count - len(data))
         except TimeoutError as error:
-            if not data:
+            if allow_idle and not data and _is_poll_timeout(error):
                 raise IdleStockTimeout(f'Waiting for next {name}') from error
             raise
         if not part:
@@ -163,7 +168,7 @@ def _read_exact(sock, count, name):
 
 
 def read_stock(sock):
-    return StockRecord.unpack(_read_exact(sock, STOCK_BYTES, 'PSL1 record'))
+    return StockRecord.unpack(_read_exact(sock, STOCK_BYTES, 'PSL1 record', allow_idle=True))
 
 
 @dataclass(frozen=True)
@@ -194,4 +199,4 @@ class EyeRecord:
 
 def read_eye(sock):
     """Read one PSE1 observation after sending EYES on the left-camera endpoint."""
-    return EyeRecord.unpack(_read_exact(sock, EYE_WIRE.size, 'PSE1 record'))
+    return EyeRecord.unpack(_read_exact(sock, EYE_WIRE.size, 'PSE1 record', allow_idle=True))

@@ -39,23 +39,22 @@ def _catalog(data):
 
 
 def discover_sources(timeout=1.2, targets=None):
-    interfaces = _interfaces() if targets is None else ['']
+    if targets is None:
+        interfaces = _interfaces()
+        if '' not in interfaces:
+            interfaces = [*interfaces, '']
+    else:
+        interfaces = ['']
     targets = targets if targets is not None else [('255.255.255.255', PORT), (MULTICAST, PORT)]
     candidates = {}
     catalogs = {}
     with ExitStack() as stack:
         sockets = []
-        sio_connreset = getattr(socket, 'SIO_UDP_CONNRESET', 0x9800000C)
         for interface in interfaces:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
                 sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
-                if hasattr(sock, 'ioctl'):
-                    try:
-                        sock.ioctl(sio_connreset, False)
-                    except (OSError, AttributeError, ValueError):
-                        pass
                 sock.bind((interface, 0))
                 if interface:
                     try:
@@ -98,7 +97,7 @@ def discover_sources(timeout=1.2, targets=None):
                     continue
     verified_catalogs = {}
     for (host, port), advertised in catalogs.items():
-        connection = http.client.HTTPConnection(host, port, timeout=.4)
+        connection = http.client.HTTPConnection(host, port, timeout=1.0)
         try:
             connection.request('GET', '/cameras')
             response = connection.getresponse()
@@ -115,7 +114,7 @@ def discover_sources(timeout=1.2, targets=None):
     devices = []
     for (host, port), advertised in sorted(candidates.items()):
         try:
-            with socket.create_connection((host, port), timeout=.4) as sock:
+            with socket.create_connection((host, port), timeout=1.0) as sock:
                 verified = read_capture_context(sock)
             if verified != advertised:
                 continue
