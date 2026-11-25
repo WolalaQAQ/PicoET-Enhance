@@ -4,7 +4,7 @@
 
 面向 PICO 4 Pro 的眼动增强 Magisk 模块：打开眼动服务的逐眼门控以输出真实瞳孔数据，解除面部表情模型的跨眼耦合让左右眼各自计算，并把眼部与嘴部表情目标频率从原厂约 24 Hz 提高到默认 90/90 Hz。配合 [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) 和 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) 使用。
 
-> v2.6.1 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
+> v2.6.2 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
 
 ## 它做什么
 
@@ -68,8 +68,8 @@ Windows 11 可能会忽略官方宿主申请的 1 ms 定时器精度，这时每
 2. 在 Magisk App 中通过“从本地安装”刷入，或使用命令行：
 
    ```sh
-    adb push magisk-picoet-enhance-v2.6.1.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.1.zip'
+    adb push magisk-picoet-enhance-v2.6.2.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.2.zip'
    ```
 
 3. 重启头显。

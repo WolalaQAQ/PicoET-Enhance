@@ -2,6 +2,19 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## [2.6.2] - 2026-11-26
+
+### 修复
+- **头显相机重开与快速重连防黑屏**：由相机 shim 将每帧的 `capture_epoch` 透传给 `ptj_ipc_daemon`，仅在新 epoch 帧到达时重置 `core.cpp` 的序列状态，并改为先校验订阅者与 generation 再更新 `last_seen_seq`，消除旧尾帧污染导致快速重连后长时间黑屏的问题。
+- **头显 Wi-Fi 抖动、半开死连接与单槽回收**：将 `ptj_ipc_daemon` 的默认图像发送超时放宽至 1200 ms（发送缓冲 128 KB），同时将 `LABELS`/`EYES` 结果写入单批限制在 100 ms 内并先检查剩余预算再出队，避免丢包或拖慢主循环；在 Linux 端补齐 `TCP_USER_TIMEOUT`（15 秒），避免 PC 异常断网后半开连接占死单槽或租约；在 `LABELS`/`EYES`/`PAIR` 及 8 路图像满额接入前先探活回收已断连接；将阻塞的命令与 HTTP 握手改为有界非阻塞队列，防止单个卡住的连接拖垮 `server_loop`；补齐 `write_all` 的 `poll()` `EINTR` 重试，并并发停止三路核心与追踪租约，确保停机远快于 2 秒安全窗口。
+- **头显晚注入补绑、追踪租约与控制面自愈**：主 hook（`libpicoet_hook.so`）晚于相机模块注入时，控制循环自动重试绑定嘴部与眼部结果回调；`TrackingDemand` 对失败的 Binder `STOP` 同样每 2 秒重试并在连接失效时重建句柄；`camera_service` 的结果开关同步改为幂等早退，不再因唤醒瞬间超时写死 `camera.failure`，停机时按进程存活判断未附着守护进程。
+- **PC Studio keepalive 断连识别、唤醒即时对时与 Cymple 眼动转发**：在 `wire.py` 与 `stock.py`（`IdleStreamTimeout`/`IdleStockTimeout`）中严格区分本地读超时与系统 TCP keepalive 断连（`WSAETIMEDOUT 10060`/`ETIMEDOUT`），消除死连接下 100% CPU 空转；头显休眠唤醒导致单调时钟漂移时立即触发重对时，不再把唤醒后的前 10 秒画面当成过期帧丢弃；`CympleEyeRelay` 全面改用可取消建连、对 `END` 与异常统一做 0.5–5 秒指数退避、修复自动发现期间 `start()`/`stop()` 竞态并校验 `JPEG` 标志。
+- **PC Studio 本地服务、自动发现与网页界面**：固定前端静态资源（`.mjs`/`.js`/`.html`/`.css` 等）MIME 类型以防被 Windows 注册表覆盖；启用 `daemon_threads`、屏蔽预览写入断管报错并改用 `os.devnull` 消除无头模式日志内存增长；局域网发现验证超时放宽至 1.0 秒；修复停止状态下切换预览摄像头 500 ms 内弹回嘴部、「预览不可用」卡死、转发报错串扰顶栏、离线阈值误闪以及部分 Windows socket 错误码缺少中文说明的问题。
+
+### 注意事项
+- `versionCode` 为 30。`PTJIPC5` 布局、眼嘴追踪、后处理参数、预设及局域网相机协议保持兼容（`CAMERA-PROTOCOL.md` 补充了 `PSL1` 报文结构与连接规则）。升级保留已有模块与配套应用配置。
+- 本版本同时更新了头显端 Magisk 模块与 PC Studio，建议两端一并升级以获得成对的断流与重连修复。
+
 ## [2.6.1] - 2026-11-21
 
 ### Fixed

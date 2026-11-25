@@ -2,6 +2,19 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
+## [2.6.2] - 2026-11-26
+
+### Fixed
+- **Headset stream reconnects & blackout prevention**: pass per-frame `capture_epoch` from the camera shim to `ptj_ipc_daemon` so `core.cpp` resets sequence state right when a reopened camera starts a new epoch, and check subscriber/generation before updating `last_seen_seq` so stale tail frames no longer cause blackouts on fast reconnects.
+- **Headset Wi-Fi jitter, half-open sockets & single-slot recovery**: raise the daemon's default JPEG/MJPEG write deadline to 1200 ms with a 128 KB send buffer (keeping `LABELS`/`EYES` writes bounded to 100 ms per batch and checking remaining budget before popping records); add Linux `TCP_USER_TIMEOUT` (15 s) alongside TCP keepalive so dead half-open sockets clear promptly; probe and reap closed sockets before rejecting reconnects on `LABELS`, `EYES`, `PAIR`, and full 8-client image slots; replace blocking command/HTTP handshakes with a bounded non-blocking pending list so stalled clients cannot stall `server_loop`; retry `poll()` `EINTR` in `write_all`; and stop all three cores concurrently with tracking release to stay well within the 2 s stop acknowledgement window.
+- **Headset late hook binding, tracking lease & service control**: auto-bind `libpicoet_hook.so` stock/eye result sinks on the camera control loop if the main hook attaches after camera startup; retry failed Binder STOP calls every 2 s and refresh dead Binder handles in `TrackingDemand`; make `camera_service` result synchronization idempotent without latching permanent failure on transient wake timeouts; and detect live unattached daemons by PID/start time on stop.
+- **PC Studio keepalive detection, post-sleep clock resync & Cymple eye relay**: distinguish local read timeouts from OS TCP keepalive death (`WSAETIMEDOUT` 10060 / `ETIMEDOUT`) in `wire.py` and `stock.py` (`IdleStreamTimeout` / `IdleStockTimeout`) so dead sockets never spin at 100% CPU; immediately re-sync clocks after headset suspend/wake instead of dropping frames as stale for up to 10 s; make `CympleEyeRelay` connections cancellable via `connect_cancellable`, add 0.5–5 s exponential backoff on both `END` and errors, guard `start()`/`stop()` races during discovery, and validate JPEG frames.
+- **PC Studio HTTP server, discovery & web UI**: pin static web asset MIME types against Windows registry overrides, enable `daemon_threads`, suppress broken-pipe preview write errors, avoid unbounded headless log buffers, raise discovery verification timeout to 1.0 s, and fix `#preview-camera` snapping back to mouth when stopped, sticky `previewError` placeholders, duplicate relay/top-bar error banners, offline-threshold flicker, and missing Windows socket error messages.
+
+### Notes & Caveats
+- `versionCode` is 30. The `PTJIPC5` IPC layout, eye/mouth tracking, post-processing settings, presets, and LAN camera wire protocols are unchanged (`CAMERA-PROTOCOL.md` now documents the `PSL1` wire layout and connection lifecycle rules). Upgrading preserves existing module and companion-app preferences.
+- Both the headset Magisk module and PC Studio are updated in `v2.6.2`; updating both is recommended to pick up the paired headset and PC Studio stream-stability fixes.
+
 ## [2.6.1] - 2026-11-21
 
 ### Fixed
