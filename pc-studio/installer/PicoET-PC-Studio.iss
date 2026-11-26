@@ -55,6 +55,11 @@ Name: "{autodesktop}\PicoET PC Studio"; Filename: "{app}\PicoET-PC-Studio.exe"; 
 Filename: "{app}\PicoET-PC-Studio.exe"; Description: "{cm:LaunchProgram,PicoET PC Studio}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+const
+  WV2KeyWow64 = 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  WV2KeyNative = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  WV2KeyUser = 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+
 function HasValidWebView2Version(const RootKey: Integer; const SubKey: String): Boolean;
 var
   Ver: String;
@@ -64,10 +69,6 @@ begin
 end;
 
 function IsWebView2Installed(): Boolean;
-const
-  WV2KeyWow64 = 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
-  WV2KeyNative = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
-  WV2KeyUser = 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
 begin
   Result := HasValidWebView2Version(HKLM, WV2KeyWow64) or
             HasValidWebView2Version(HKLM, WV2KeyNative) or
