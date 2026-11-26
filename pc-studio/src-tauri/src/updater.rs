@@ -51,6 +51,38 @@ pub fn parse_version(text: &str) -> Option<ParsedVersion> {
     })
 }
 
+fn parse_numeric_ident(part: &str) -> Option<u64> {
+    if !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()) {
+        part.parse::<u64>().ok()
+    } else {
+        None
+    }
+}
+
+fn compare_prerelease(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let mut a_parts = a.split('.');
+    let mut b_parts = b.split('.');
+    loop {
+        match (a_parts.next(), b_parts.next()) {
+            (Some(ap), Some(bp)) => {
+                let ord = match (parse_numeric_ident(ap), parse_numeric_ident(bp)) {
+                    (Some(an), Some(bn)) => an.cmp(&bn),
+                    (Some(_), None) => Ordering::Less,
+                    (None, Some(_)) => Ordering::Greater,
+                    (None, None) => ap.cmp(bp),
+                };
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            (Some(_), None) => return Ordering::Greater,
+            (None, Some(_)) => return Ordering::Less,
+            (None, None) => return Ordering::Equal,
+        }
+    }
+}
+
 pub fn is_newer_version(candidate: &str, current: &str) -> bool {
     let (Some(cand), Some(curr)) = (parse_version(candidate), parse_version(current)) else {
         return false;
@@ -61,7 +93,7 @@ pub fn is_newer_version(candidate: &str, current: &str) -> bool {
     if cand.is_stable != curr.is_stable {
         return cand.is_stable && !curr.is_stable;
     }
-    cand.suffix > curr.suffix
+    compare_prerelease(&cand.suffix, &curr.suffix) == std::cmp::Ordering::Greater
 }
 
 pub fn summarize_notes(body: &str, max_lines: usize) -> Vec<String> {
@@ -340,6 +372,14 @@ mod tests {
         assert!(!is_newer_version("2.6.2-dev.1", "2.6.2"));
         assert!(!is_newer_version("2.6.2", "2.6.2"));
         assert!(!is_newer_version("invalid", "2.6.2"));
+        // Numeric prerelease identifiers compare numerically, not lexicographically.
+        assert!(is_newer_version("2.6.2-rc.10", "2.6.2-rc.2"));
+        assert!(!is_newer_version("2.6.2-rc.2", "2.6.2-rc.10"));
+        assert!(is_newer_version("2.6.2-dev.10", "2.6.2-dev.2"));
+        assert!(!is_newer_version("2.6.2-rc.10", "2.6.2-rc.10"));
+        assert!(is_newer_version("2.6.2-rc.1", "2.6.2-beta.9"));
+        assert!(is_newer_version("2.6.2-alpha.1", "2.6.2-alpha"));
+        assert!(is_newer_version("2.6.2-alpha.beta", "2.6.2-alpha.1"));
     }
 
     #[test]

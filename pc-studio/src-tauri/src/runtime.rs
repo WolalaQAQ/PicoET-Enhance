@@ -127,6 +127,7 @@ struct RuntimeState {
     last_header: Option<FrameHeader>,
     last_preview_ns: i64,
     lifecycle: u64,
+    stop_flag: Arc<AtomicBool>,
     output_session_id: u128,
     model_version: u64,
     capture_context: Option<CaptureContextEvidence>,
@@ -142,7 +143,6 @@ struct RuntimeInner {
     frame_cond: Condvar,
     clock_state: Mutex<bool>,
     clock_cond: Condvar,
-    stop_flag: AtomicBool,
     threads: Mutex<Vec<wire::BoundedThread>>,
 }
 
@@ -167,7 +167,7 @@ fn is_valid_camera(camera: &str) -> bool {
     CAMERAS.contains(&camera)
 }
 
-fn parse_port_value(value: &Value, name: &str) -> Result<u16, String> {
+pub(crate) fn parse_port_value(value: &Value, name: &str) -> Result<u16, String> {
     let err = || format!("{name} must be an integer in 1..65535");
     match value {
         Value::Bool(_) => Err(err()),
@@ -297,13 +297,25 @@ impl RuntimeInner {
         self.clock_cond.notify_all();
     }
 
-    fn set_clock(&self, calibrated: ClockCalibration) {
+    fn set_clock(&self, lifecycle: u64, stop_flag: &AtomicBool, calibrated: ClockCalibration) {
         let mut state = self.state.lock().unwrap();
-        state.clock = Some(calibrated);
+        if state.lifecycle == lifecycle && !stop_flag.load(Ordering::Acquire) {
+            state.clock = Some(calibrated);
+        }
     }
 
-    fn publish(&self, header: FrameHeader, payload: Vec<u8>, received_ns: i64) -> bool {
+    fn publish(
+        &self,
+        lifecycle: u64,
+        stop_flag: &AtomicBool,
+        header: FrameHeader,
+        payload: Vec<u8>,
+        received_ns: i64,
+    ) -> bool {
         let mut state = self.state.lock().unwrap();
+        if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
+            return false;
+        }
         let (accepted, outcome, gaps) = state.order.accept(&header);
         if !accepted {
             match outcome {
@@ -339,9 +351,12 @@ impl RuntimeInner {
         true
     }
 
-    fn interrupt_active_socket(&self) {
+    fn interrupt_active_socket_for_session(&self, lifecycle: u64) {
         let sock = {
             let mut state = self.state.lock().unwrap();
+            if state.lifecycle != lifecycle {
+                return;
+            }
             state.active_socket.take()
         };
         if let Some(s) = sock {
@@ -349,74 +364,120 @@ impl RuntimeInner {
         }
     }
 
-    fn receive_loop(self: Arc<Self>) {
-        let target = {
+    fn commit_configured_fields(
+        &self,
+        map: &Map<String, Value>,
+        updated: &RuntimeConfig,
+        was_running: bool,
+    ) -> RuntimeConfig {
+        let mut state = self.state.lock().unwrap();
+        for key in map.keys() {
+            match key.as_str() {
+                "headset_host" => state.config.headset_host = updated.headset_host.clone(),
+                "headset_port" => state.config.headset_port = updated.headset_port,
+                "eye_left_port" => state.config.eye_left_port = updated.eye_left_port,
+                "eye_right_port" => state.config.eye_right_port = updated.eye_right_port,
+                "preview_camera" => state.config.preview_camera = updated.preview_camera.clone(),
+                "stale_ms" => state.config.stale_ms = updated.stale_ms,
+                "preview_fps" => state.config.preview_fps = updated.preview_fps,
+                _ => {}
+            }
+        }
+        state.config.enabled = state.running;
+        if !(was_running && !state.running) {
+            state.last_error = None;
+        }
+        state.config.clone()
+    }
+
+    fn receive_loop(self: Arc<Self>, lifecycle: u64, stop_flag: Arc<AtomicBool>) {
+        let Some(target) = ({
             let state = self.state.lock().unwrap();
-            state
-                .session_target
-                .clone()
-                .unwrap_or_else(|| SessionTarget {
-                    headset_host: state.config.headset_host.clone(),
-                    headset_port: state.config.headset_port,
-                    eye_left_port: state.config.eye_left_port,
-                    eye_right_port: state.config.eye_right_port,
-                    preview_camera: state.config.preview_camera.clone(),
-                })
+            if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
+                None
+            } else {
+                Some(
+                    state
+                        .session_target
+                        .clone()
+                        .unwrap_or_else(|| SessionTarget {
+                            headset_host: state.config.headset_host.clone(),
+                            headset_port: state.config.headset_port,
+                            eye_left_port: state.config.eye_left_port,
+                            eye_right_port: state.config.eye_right_port,
+                            preview_camera: state.config.preview_camera.clone(),
+                        }),
+                )
+            }
+        }) else {
+            return;
         };
 
-        let run_result = self.run_receive(&target);
+        let run_result = self.run_receive(lifecycle, &stop_flag, &target);
         if let Err(err) = run_result {
-            if !self.stop_flag.load(Ordering::Relaxed) {
+            if !stop_flag.load(Ordering::Acquire) {
                 let mut state = self.state.lock().unwrap();
-                state.last_error = Some(err);
+                if state.lifecycle == lifecycle && !stop_flag.load(Ordering::Acquire) {
+                    state.last_error = Some(err);
+                }
             }
         }
 
-        self.stop_flag.store(true, Ordering::SeqCst);
+        stop_flag.store(true, Ordering::SeqCst);
         self.wake_clock_thread();
         let mut state = self.state.lock().unwrap();
-        state.running = false;
-        state.connected = false;
-        state.mode = "idle".to_string();
-        state.config.enabled = false;
-        state.active_socket = None;
-        state.session_target = None;
-        state.model_version += 1;
-        state.pending = None;
-        state.preview = None;
-        self.frame_cond.notify_all();
+        if state.lifecycle == lifecycle {
+            state.running = false;
+            state.connected = false;
+            state.mode = "idle".to_string();
+            state.config.enabled = false;
+            state.active_socket = None;
+            state.session_target = None;
+            state.model_version += 1;
+            state.pending = None;
+            state.preview = None;
+            self.frame_cond.notify_all();
+        }
     }
 
-    fn run_receive(&self, target: &SessionTarget) -> Result<(), String> {
+    fn run_receive(
+        &self,
+        lifecycle: u64,
+        stop_flag: &AtomicBool,
+        target: &SessionTarget,
+    ) -> Result<(), String> {
         let host = target.headset_host.trim();
         let port = target.active_port();
-        if self.stop_flag.load(Ordering::Relaxed) {
+        if stop_flag.load(Ordering::Acquire) {
             return Ok(());
         }
 
-        if let Ok(calibrated) = wire::sync_clock(host, port, 12, Some(&self.stop_flag)) {
-            self.set_clock(calibrated);
+        if let Ok(calibrated) = wire::sync_clock(host, port, 12, Some(stop_flag)) {
+            self.set_clock(lifecycle, stop_flag, calibrated);
         }
-        if self.stop_flag.load(Ordering::Relaxed) {
+        if stop_flag.load(Ordering::Acquire) {
             return Ok(());
         }
 
         let mut context: Option<CaptureContext> = None;
         if let Ok(mut control) =
-            wire::connect_cancellable(host, port, Duration::from_secs(3), Some(&self.stop_flag))
+            wire::connect_cancellable(host, port, Duration::from_secs(3), Some(stop_flag))
         {
             if let Ok(ctx) =
-                read_capture_context(&mut control, Duration::from_secs(3), Some(&self.stop_flag))
+                read_capture_context(&mut control, Duration::from_secs(3), Some(stop_flag))
             {
                 let evidence = ctx.evidence();
                 {
                     let mut state = self.state.lock().unwrap();
+                    if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
                     state.capture_context = Some(evidence);
                 }
                 context = Some(ctx);
             }
         }
-        if self.stop_flag.load(Ordering::Relaxed) {
+        if stop_flag.load(Ordering::Acquire) {
             return Ok(());
         }
 
@@ -424,7 +485,7 @@ impl RuntimeInner {
             host,
             port,
             Duration::from_secs(3),
-            Some(&self.stop_flag),
+            Some(stop_flag),
         ) {
             Ok(s) => s,
             Err(WireError::Cancelled) => return Ok(()),
@@ -437,7 +498,7 @@ impl RuntimeInner {
 
         {
             let mut state = self.state.lock().unwrap();
-            if self.stop_flag.load(Ordering::Relaxed) {
+            if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
                 return Ok(());
             }
             state.active_socket = sock.try_clone().ok();
@@ -449,14 +510,13 @@ impl RuntimeInner {
         // Cold-start may take up to 10s for the first frame; subsequent idle timeouts use 1s.
         let mut first_frame = true;
         let mut was_idle = false;
-        while !self.stop_flag.load(Ordering::Relaxed) {
+        while !stop_flag.load(Ordering::Acquire) {
             let timeout = if first_frame {
                 Duration::from_secs(10)
             } else {
                 Duration::from_secs(1)
             };
-            let (header, payload) = match wire::read_frame(&mut sock, timeout, Some(&self.stop_flag))
-            {
+            let (header, payload) = match wire::read_frame(&mut sock, timeout, Some(stop_flag)) {
                 Ok(frame) => frame,
                 Err(WireError::IdleTimeout(_)) => {
                     was_idle = true;
@@ -473,6 +533,9 @@ impl RuntimeInner {
                 was_idle = false;
                 {
                     let mut state = self.state.lock().unwrap();
+                    if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
+                        break;
+                    }
                     state.clock = None;
                 }
                 self.request_clock_resync();
@@ -488,27 +551,30 @@ impl RuntimeInner {
             if (header.flags & (JPEG | RAW)) == 0 {
                 return Err("Subscription returned a non-image frame".to_string());
             }
-            self.publish(header, payload, received_ns);
+            self.publish(lifecycle, stop_flag, header, payload, received_ns);
         }
         Ok(())
     }
 
-    fn clock_refresh_loop(self: Arc<Self>) {
+    fn clock_refresh_loop(self: Arc<Self>, lifecycle: u64, stop_flag: Arc<AtomicBool>) {
         let mut last_sync_mono: Option<Instant> = None;
-        while !self.stop_flag.load(Ordering::Relaxed) {
+        while !stop_flag.load(Ordering::Acquire) {
             let forced = {
                 let guard = self.clock_state.lock().unwrap();
                 let (mut guard, _) = self
                     .clock_cond
                     .wait_timeout_while(guard, Duration::from_secs(10), |requested| {
-                        !*requested && !self.stop_flag.load(Ordering::Relaxed)
+                        !*requested && !stop_flag.load(Ordering::Acquire)
                     })
                     .unwrap();
+                if stop_flag.load(Ordering::Acquire) {
+                    break;
+                }
                 let was_forced = *guard;
                 *guard = false;
                 was_forced
             };
-            if self.stop_flag.load(Ordering::Relaxed) {
+            if stop_flag.load(Ordering::Acquire) {
                 break;
             }
             if forced {
@@ -520,10 +586,10 @@ impl RuntimeInner {
                         let _ = self
                             .clock_cond
                             .wait_timeout_while(guard, wait, |_| {
-                                !self.stop_flag.load(Ordering::Relaxed)
+                                !stop_flag.load(Ordering::Acquire)
                             })
                             .unwrap();
-                        if self.stop_flag.load(Ordering::Relaxed) {
+                        if stop_flag.load(Ordering::Acquire) {
                             break;
                         }
                     }
@@ -533,6 +599,9 @@ impl RuntimeInner {
 
             let (host, port) = {
                 let state = self.state.lock().unwrap();
+                if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
+                    break;
+                }
                 if let Some(ref target) = state.session_target {
                     (target.headset_host.trim().to_string(), target.active_port())
                 } else {
@@ -547,23 +616,25 @@ impl RuntimeInner {
             if host.is_empty() {
                 continue;
             }
-            if let Ok(calibrated) = wire::sync_clock(&host, port, 3, Some(&self.stop_flag)) {
-                self.set_clock(calibrated);
+            if let Ok(calibrated) = wire::sync_clock(&host, port, 3, Some(&stop_flag)) {
+                self.set_clock(lifecycle, &stop_flag, calibrated);
             }
         }
     }
 
-    fn decode_worker_loop(self: Arc<Self>) {
-        while !self.stop_flag.load(Ordering::Relaxed) {
+    fn decode_worker_loop(self: Arc<Self>, lifecycle: u64, stop_flag: Arc<AtomicBool>) {
+        while !stop_flag.load(Ordering::Acquire) {
             let (pending, stale_ms, preview_fps, model_version, clock) = {
                 let guard = self.state.lock().unwrap();
                 let (mut guard, _) = self
                     .frame_cond
                     .wait_timeout_while(guard, Duration::from_millis(50), |st| {
-                        st.pending.is_none() && !self.stop_flag.load(Ordering::Relaxed)
+                        st.lifecycle == lifecycle
+                            && st.pending.is_none()
+                            && !stop_flag.load(Ordering::Acquire)
                     })
                     .unwrap();
-                if self.stop_flag.load(Ordering::Relaxed) {
+                if guard.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
                     break;
                 }
                 let Some(pending) = guard.pending.take() else {
@@ -589,15 +660,23 @@ impl RuntimeInner {
 
             if upper.is_finite() && upper > stale_ms {
                 if has_clock && local_age_ms <= stale_ms {
-                    self.request_clock_resync();
-                    if upper > (stale_ms * 2.0).max(2000.0) {
+                    {
                         let mut state = self.state.lock().unwrap();
-                        state.clock = None;
-                        upper = local_age_ms;
+                        if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
+                            break;
+                        }
+                        if upper > (stale_ms * 2.0).max(2000.0) {
+                            state.clock = None;
+                            upper = local_age_ms;
+                        }
                     }
+                    self.request_clock_resync();
                 }
                 if upper.is_finite() && upper > stale_ms {
                     let mut state = self.state.lock().unwrap();
+                    if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
+                        break;
+                    }
                     state.counts.stale += 1;
                     continue;
                 }
@@ -627,8 +706,10 @@ impl RuntimeInner {
                 let mut fatal = false;
                 {
                     let mut state = self.state.lock().unwrap();
-                    if self.stop_flag.load(Ordering::Relaxed)
-                        || state.order.session != Some(pending.header.session_id)
+                    if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
+                        break;
+                    }
+                    if state.order.session != Some(pending.header.session_id)
                         || model_version != state.model_version
                     {
                         state.counts.superseded += 1;
@@ -643,9 +724,9 @@ impl RuntimeInner {
                     }
                 }
                 if fatal {
-                    self.stop_flag.store(true, Ordering::SeqCst);
+                    stop_flag.store(true, Ordering::SeqCst);
                     self.wake_clock_thread();
-                    self.interrupt_active_socket();
+                    self.interrupt_active_socket_for_session(lifecycle);
                     self.frame_cond.notify_all();
                     break;
                 }
@@ -655,8 +736,10 @@ impl RuntimeInner {
             let decoded = wire::monotonic_ns();
             let (preview_version, should_preview) = {
                 let mut state = self.state.lock().unwrap();
-                if self.stop_flag.load(Ordering::Relaxed)
-                    || state.order.session != Some(pending.header.session_id)
+                if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
+                    break;
+                }
+                if state.order.session != Some(pending.header.session_id)
                     || model_version != state.model_version
                 {
                     state.counts.superseded += 1;
@@ -669,8 +752,8 @@ impl RuntimeInner {
                 state.decoded_times.push_back(decoded);
                 state.last_header = Some(pending.header.clone());
                 let min_interval_ns = 1e9 / (preview_fps as f64);
-                let due =
-                    state.last_preview_ns == 0 || (decoded - state.last_preview_ns) as f64 >= min_interval_ns;
+                let due = state.last_preview_ns == 0
+                    || (decoded - state.last_preview_ns) as f64 >= min_interval_ns;
                 (state.model_version, due)
             };
 
@@ -682,8 +765,11 @@ impl RuntimeInner {
                             let mut fatal = false;
                             {
                                 let mut state = self.state.lock().unwrap();
-                                if self.stop_flag.load(Ordering::Relaxed)
-                                    || state.order.session != Some(pending.header.session_id)
+                                if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire)
+                                {
+                                    break;
+                                }
+                                if state.order.session != Some(pending.header.session_id)
                                     || preview_version != state.model_version
                                 {
                                     state.counts.superseded += 1;
@@ -698,9 +784,9 @@ impl RuntimeInner {
                                 }
                             }
                             if fatal {
-                                self.stop_flag.store(true, Ordering::SeqCst);
+                                stop_flag.store(true, Ordering::SeqCst);
                                 self.wake_clock_thread();
-                                self.interrupt_active_socket();
+                                self.interrupt_active_socket_for_session(lifecycle);
                                 self.frame_cond.notify_all();
                                 break;
                             }
@@ -713,8 +799,9 @@ impl RuntimeInner {
                 };
 
                 let mut state = self.state.lock().unwrap();
-                if state.order.session == Some(pending.header.session_id)
-                    && !self.stop_flag.load(Ordering::Relaxed)
+                if state.lifecycle == lifecycle
+                    && !stop_flag.load(Ordering::Acquire)
+                    && state.order.session == Some(pending.header.session_id)
                     && preview_version == state.model_version
                 {
                     state.preview = Some(preview_bytes);
@@ -805,6 +892,7 @@ impl Runtime {
             last_header: None,
             last_preview_ns: 0,
             lifecycle: 0,
+            stop_flag: Arc::new(AtomicBool::new(true)),
             output_session_id: unix_time_ns(),
             model_version: 0,
             capture_context: None,
@@ -821,7 +909,6 @@ impl Runtime {
                 frame_cond: Condvar::new(),
                 clock_state: Mutex::new(false),
                 clock_cond: Condvar::new(),
-                stop_flag: AtomicBool::new(false),
                 threads: Mutex::new(Vec::new()),
             }),
         }
@@ -915,11 +1002,9 @@ impl Runtime {
             serde_json::to_string_pretty(&Value::Object(saved_map)).map_err(|e| e.to_string())?;
         write_text_atomic(&self.inner.config_path, &serialized).map_err(|e| e.to_string())?;
 
-        let mut state = self.inner.state.lock().unwrap();
-        state.config = updated.clone();
-        state.last_error = None;
-
-        Ok(updated)
+        Ok(self
+            .inner
+            .commit_configured_fields(map, &updated, was_running))
     }
 
     pub fn start(&self, req: StartRequest) -> Result<Value, String> {
@@ -980,7 +1065,7 @@ impl Runtime {
                 let mut clock_req = self.inner.clock_state.lock().unwrap();
                 *clock_req = false;
             }
-            let prev_camera = {
+            let (prev_camera, session_lifecycle, session_stop) = {
                 let mut state = self.inner.state.lock().unwrap();
                 if generation != state.lifecycle {
                     return Err("Startup was cancelled by stop/shutdown".to_string());
@@ -989,7 +1074,10 @@ impl Runtime {
                     return Err("Runtime is already running".to_string());
                 }
                 let prev_camera = state.config.preview_camera.clone();
-                self.inner.stop_flag.store(false, Ordering::SeqCst);
+                state.lifecycle += 1;
+                let session_lifecycle = state.lifecycle;
+                let session_stop = Arc::new(AtomicBool::new(false));
+                state.stop_flag = Arc::clone(&session_stop);
                 state.config.preview_camera = target.preview_camera.clone();
                 state.session_target = Some(target);
                 state.running = true;
@@ -1010,59 +1098,70 @@ impl Runtime {
                 state.last_preview_ns = 0;
                 state.counts = MetricsCounts::default();
                 state.active_socket = None;
-                prev_camera
+                (prev_camera, session_lifecycle, session_stop)
             };
 
             let inner_decode = Arc::clone(&self.inner);
             let inner_recv = Arc::clone(&self.inner);
             let inner_clock = Arc::clone(&self.inner);
+            let stop_decode = Arc::clone(&session_stop);
+            let stop_recv = Arc::clone(&session_stop);
+            let stop_clock = Arc::clone(&session_stop);
 
             let mut spawned = Vec::with_capacity(3);
             let spawn_res: Result<(), String> = (|| {
                 let t_decode = wire::spawn_bounded("camera-preview", move || {
-                    inner_decode.decode_worker_loop()
+                    inner_decode.decode_worker_loop(session_lifecycle, stop_decode)
                 })
                 .map_err(|e| e.to_string())?;
                 spawned.push(t_decode);
 
-                let t_recv =
-                    wire::spawn_bounded("camera-source", move || inner_recv.receive_loop())
-                        .map_err(|e| e.to_string())?;
+                let t_recv = wire::spawn_bounded("camera-source", move || {
+                    inner_recv.receive_loop(session_lifecycle, stop_recv)
+                })
+                .map_err(|e| e.to_string())?;
                 spawned.push(t_recv);
 
-                let t_clock =
-                    wire::spawn_bounded("camera-clock", move || inner_clock.clock_refresh_loop())
-                        .map_err(|e| e.to_string())?;
+                let t_clock = wire::spawn_bounded("camera-clock", move || {
+                    inner_clock.clock_refresh_loop(session_lifecycle, stop_clock)
+                })
+                .map_err(|e| e.to_string())?;
                 spawned.push(t_clock);
                 Ok(())
             })();
 
             if let Err(err) = spawn_res {
-                self.inner.stop_flag.store(true, Ordering::SeqCst);
+                session_stop.store(true, Ordering::SeqCst);
                 self.inner.wake_clock_thread();
                 let sock = {
                     let mut state = self.inner.state.lock().unwrap();
-                    state.model_version += 1;
-                    state.pending = None;
-                    state.preview = None;
-                    let sock = state.active_socket.take();
-                    self.inner.frame_cond.notify_all();
-                    sock
+                    if state.lifecycle == session_lifecycle {
+                        state.model_version += 1;
+                        state.pending = None;
+                        state.preview = None;
+                        let sock = state.active_socket.take();
+                        self.inner.frame_cond.notify_all();
+                        sock
+                    } else {
+                        None
+                    }
                 };
                 if let Some(s) = sock {
                     let _ = s.shutdown(Shutdown::Both);
                 }
                 wire::join_all_bounded(spawned, Duration::from_secs(5));
                 let mut state = self.inner.state.lock().unwrap();
-                state.active_socket = None;
-                state.running = false;
-                state.connected = false;
-                state.mode = "idle".to_string();
-                state.config.enabled = false;
-                state.config.preview_camera = prev_camera;
-                state.session_target = None;
-                state.pending = None;
-                state.preview = None;
+                if state.lifecycle == session_lifecycle {
+                    state.active_socket = None;
+                    state.running = false;
+                    state.connected = false;
+                    state.mode = "idle".to_string();
+                    state.config.enabled = false;
+                    state.config.preview_camera = prev_camera;
+                    state.session_target = None;
+                    state.pending = None;
+                    state.preview = None;
+                }
                 return Err(err);
             }
 
@@ -1073,18 +1172,19 @@ impl Runtime {
     }
 
     pub fn stop(&self) -> Result<(), String> {
-        self.inner.stop_flag.store(true, Ordering::SeqCst);
-        self.inner.wake_clock_thread();
-        let sock = {
+        let (stop_lifecycle, sock) = {
             let mut state = self.inner.state.lock().unwrap();
+            state.stop_flag.store(true, Ordering::SeqCst);
             state.model_version += 1;
             state.pending = None;
             state.preview = None;
             state.lifecycle += 1;
+            let stop_lifecycle = state.lifecycle;
             let sock = state.active_socket.take();
             self.inner.frame_cond.notify_all();
-            sock
+            (stop_lifecycle, sock)
         };
+        self.inner.wake_clock_thread();
         if let Some(s) = sock {
             let _ = s.shutdown(Shutdown::Both);
         }
@@ -1096,15 +1196,17 @@ impl Runtime {
         wire::join_all_bounded(handles, Duration::from_secs(5));
 
         let mut state = self.inner.state.lock().unwrap();
-        state.active_socket = None;
-        state.running = false;
-        state.connected = false;
-        state.mode = "idle".to_string();
-        state.last_error = None;
-        state.config.enabled = false;
-        state.session_target = None;
-        state.pending = None;
-        state.preview = None;
+        if state.lifecycle == stop_lifecycle {
+            state.active_socket = None;
+            state.running = false;
+            state.connected = false;
+            state.mode = "idle".to_string();
+            state.last_error = None;
+            state.config.enabled = false;
+            state.session_target = None;
+            state.pending = None;
+            state.preview = None;
+        }
         Ok(())
     }
 
@@ -1580,5 +1682,116 @@ mod tests {
             .configure(json!({"headset_host": "127.0.0.1", "preview_fps": 25}))
             .is_err());
         assert_eq!(rt.config(), before);
+    }
+
+    #[test]
+    fn stale_detached_session_cannot_corrupt_new_session() {
+        let mouth = FakeCameraServer::start("jpeg", 100, 90001, 1);
+        let dir = tempfile::tempdir().unwrap();
+        let rt = Runtime::new(dir.path().join("config.json"));
+
+        // Start session 1, capture its per-session token + lifecycle, then stop and start session 2.
+        rt.start(StartRequest {
+            mode: Some("capture".into()),
+            headset_host: Some("127.0.0.1".into()),
+            headset_port: Some(json!(mouth.port)),
+            ..Default::default()
+        })
+        .unwrap();
+        let (stale_lifecycle, stale_stop) = {
+            let st = rt.inner.state.lock().unwrap();
+            (st.lifecycle, Arc::clone(&st.stop_flag))
+        };
+        rt.stop().unwrap();
+        assert!(
+            stale_stop.load(Ordering::Acquire),
+            "stopped session token must stay true forever"
+        );
+
+        rt.start(StartRequest {
+            mode: Some("capture".into()),
+            headset_host: Some("127.0.0.1".into()),
+            headset_port: Some(json!(mouth.port)),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(
+            stale_stop.load(Ordering::Acquire),
+            "starting a new session must not reset a previous session's stop token"
+        );
+        wait_for(
+            || {
+                rt.preview_jpeg().is_some()
+                    && rt.status()["metrics"]["decoded"].as_u64().unwrap_or(0) >= 2
+            },
+            Duration::from_secs(4),
+        );
+
+        let before_decoded = rt.status()["metrics"]["decoded"].as_u64().unwrap();
+
+        // Simulate stale detached workers from session 1 finishing/mutating (both with their
+        // permanently-true stop token and even with a forged false token to exercise lifecycle guards).
+        let stale_false_stop = Arc::new(AtomicBool::new(false));
+        let inner_r1 = Arc::clone(&rt.inner);
+        let inner_r2 = Arc::clone(&rt.inner);
+        let inner_d = Arc::clone(&rt.inner);
+        let inner_c = Arc::clone(&rt.inner);
+        inner_r1.receive_loop(stale_lifecycle, Arc::clone(&stale_stop));
+        inner_r2.receive_loop(stale_lifecycle, Arc::clone(&stale_false_stop));
+        inner_d.decode_worker_loop(stale_lifecycle, Arc::clone(&stale_false_stop));
+        rt.inner.wake_clock_thread();
+        inner_c.clock_refresh_loop(stale_lifecycle, Arc::clone(&stale_stop));
+        assert!(!rt.inner.publish(
+            stale_lifecycle,
+            &stale_false_stop,
+            make_header(999, 77777, JPEG, 4),
+            vec![0u8; 4],
+            wire::monotonic_ns(),
+        ));
+        rt.inner.interrupt_active_socket_for_session(stale_lifecycle);
+
+        // Session 2 must remain running, connected, and advancing cleanly.
+        let st = rt.status();
+        assert_eq!(st["running"], true);
+        assert_eq!(st["connected"], true);
+        assert_eq!(st["last_error"], Value::Null);
+        assert!(rt.preview_jpeg().is_some());
+        wait_for(
+            || rt.status()["metrics"]["decoded"].as_u64().unwrap_or(0) > before_decoded,
+            Duration::from_secs(3),
+        );
+        rt.stop().unwrap();
+    }
+
+    #[test]
+    fn configure_preserves_error_and_disabled_state_if_stream_fails_during_disk_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = Runtime::new(dir.path().join("config.json"));
+
+        // Simulate a stream that was running when configure() began, then died fatally
+        // while write_text_atomic() was running unlocked.
+        let mut updated = rt.config();
+        updated.enabled = true;
+        updated.preview_fps = 24;
+        {
+            let mut st = rt.inner.state.lock().unwrap();
+            st.running = false;
+            st.config.enabled = false;
+            st.last_error = Some("PTJ1 stream closed between frames".to_string());
+        }
+        let mut map = Map::new();
+        map.insert("preview_fps".to_string(), json!(24));
+        let committed = rt.inner.commit_configured_fields(&map, &updated, true);
+
+        assert_eq!(committed.preview_fps, 24);
+        assert!(
+            !committed.enabled,
+            "enabled must reflect actual state.running == false"
+        );
+        assert_eq!(
+            rt.status()["last_error"],
+            "PTJ1 stream closed between frames",
+            "fatal stream error during disk write must not be wiped"
+        );
     }
 }

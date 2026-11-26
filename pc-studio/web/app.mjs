@@ -272,6 +272,7 @@ export function createApp(doc, options = {}) {
     error: "",
     errorKey: "",
     polling: false,
+    pollPromise: null,
     pollError: "",
     destroyed: false,
     stoppedByUser: false,
@@ -641,26 +642,32 @@ export function createApp(doc, options = {}) {
   }
 
   async function pollStatus() {
-    if (state.polling || state.busy || state.destroyed) return;
+    if (state.busy || state.destroyed) return;
+    if (state.pollPromise) return state.pollPromise;
     state.polling = true;
     const generation = state.generation;
     const wasOnline = state.online;
-    try {
-      const status = await requestJson(fetcher, "/api/status");
-      if (generation !== state.generation || state.destroyed) return;
-      state.status = status;
-      applyConfig(status.config ?? await requestJson(fetcher, "/api/config"));
-      applyCympleRelay(status.cymple_relay);
-      state.online = true;
-      state.at = now();
-      state.pollError = "";
-      if (!wasOnline || (status.running && status.connected && !status.last_error)) state.error = "";
-    } catch (error) {
-      if (generation === state.generation && !state.destroyed) { state.online = false; state.pollError = error.message; }
-    } finally {
-      state.polling = false;
-      if (!state.destroyed) render();
-    }
+    const promise = (async () => {
+      try {
+        const status = await requestJson(fetcher, "/api/status");
+        if (generation !== state.generation || state.destroyed) return;
+        state.status = status;
+        applyConfig(status.config ?? await requestJson(fetcher, "/api/config"));
+        applyCympleRelay(status.cymple_relay);
+        state.online = true;
+        state.at = now();
+        state.pollError = "";
+        if (!wasOnline || (status.running && status.connected && !status.last_error)) state.error = "";
+      } catch (error) {
+        if (generation === state.generation && !state.destroyed) { state.online = false; state.pollError = error.message; }
+      } finally {
+        state.polling = false;
+        if (state.pollPromise === promise) state.pollPromise = null;
+        if (!state.destroyed) render();
+      }
+    })();
+    state.pollPromise = promise;
+    return promise;
   }
 
   function readForm() {
@@ -860,8 +867,10 @@ export function createApp(doc, options = {}) {
       if (generation === state.previewGeneration && !state.destroyed) { state.previewError = true; clearPreview(); render(); }
     } finally {
       timers.clearTimeout(timeout);
-      state.previewBusy = false;
-      state.previewAbort = null;
+      if (state.previewAbort === controller) {
+        state.previewBusy = false;
+        state.previewAbort = null;
+      }
     }
   }
 
@@ -876,6 +885,11 @@ export function createApp(doc, options = {}) {
     if (state.destroyed || doc.hidden) return;
     void refreshPreview();
     schedulePreview();
+  }
+
+  function startPreviewLoop() {
+    if (state.destroyed || doc.hidden || state.previewTimer != null) return;
+    previewLoop();
   }
 
   function startStatusInterval() {
@@ -896,6 +910,7 @@ export function createApp(doc, options = {}) {
       timers.clearTimeout(state.previewTimer);
       state.previewTimer = null;
     }
+    state.previewGeneration++;
     state.previewAbort?.abort();
   }
 
@@ -903,11 +918,15 @@ export function createApp(doc, options = {}) {
     if (state.destroyed) return;
     if (doc.hidden) {
       pauseBackgroundLoops();
-    } else {
-      startStatusInterval();
-      void pollStatus();
-      previewLoop();
+      return;
     }
+    if (state.online) state.at = now();
+    return pollStatus().finally(() => {
+      if (!state.destroyed && !doc.hidden) {
+        startStatusInterval();
+        startPreviewLoop();
+      }
+    });
   };
   doc.addEventListener?.("visibilitychange", onVisibilityChange);
 
@@ -980,7 +999,7 @@ export function createApp(doc, options = {}) {
     if (!state.destroyed) {
       if (!doc.hidden) {
         startStatusInterval();
-        previewLoop();
+        startPreviewLoop();
       }
       void checkUpdates(false);
       await discover();

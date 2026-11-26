@@ -91,16 +91,15 @@ begin
   end;
 end;
 
-procedure RunStopCommand(const ExePath, WorkDir: String; const WaitMs: Integer);
+function RunStopCommand(const ExePath, WorkDir: String; const WaitMs: Integer): Boolean;
 var
   ResultCode: Integer;
 begin
-  if FileExists(ExePath) then
-  begin
-    Exec(ExePath, '--stop', WorkDir, SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    if WaitMs > 0 then
-      Sleep(WaitMs);
-  end;
+  Result := FileExists(ExePath) and
+            Exec(ExePath, '--stop', WorkDir, SW_HIDE, ewWaitUntilTerminated, ResultCode) and
+            (ResultCode = 0);
+  if Result and (WaitMs > 0) then
+    Sleep(WaitMs);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -112,11 +111,7 @@ begin
   try
     ExtractTemporaryFile('PicoET-PC-Studio.exe');
     TempExe := ExpandConstant('{tmp}\PicoET-PC-Studio.exe');
-    if FileExists(TempExe) then
-    begin
-      RunStopCommand(TempExe, ExpandConstant('{tmp}'), 500);
-      StoppedViaTemp := True;
-    end;
+    StoppedViaTemp := RunStopCommand(TempExe, ExpandConstant('{tmp}'), 500);
   except
     StoppedViaTemp := False;
   end;

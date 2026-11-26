@@ -595,6 +595,55 @@ pub fn resolve_host_cancellable(
     }
 }
 
+fn order_addrs_ipv4_first(mut addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
+    addrs.sort_by_key(|a| !a.is_ipv4());
+    addrs
+}
+
+fn compute_addr_deadline(now: Instant, deadline: Instant, remaining_addrs: usize) -> Instant {
+    let remaining = deadline.saturating_duration_since(now);
+    if remaining_addrs <= 1 || remaining.is_zero() {
+        return deadline;
+    }
+    let share = remaining / (remaining_addrs as u32);
+    let min_budget = Duration::from_millis(50);
+    let budget = share.max(min_budget).min(remaining);
+    now + budget
+}
+
+fn connect_addrs_cancellable(
+    addrs: Vec<SocketAddr>,
+    deadline: Instant,
+    stop_flag: Option<&AtomicBool>,
+    host: &str,
+    port: u16,
+) -> Result<TcpStream, WireError> {
+    let addrs = order_addrs_ipv4_first(addrs);
+    let total = addrs.len();
+    let mut last_err: Option<io::Error> = None;
+    for (idx, addr) in addrs.into_iter().enumerate() {
+        if stop_flag.is_some_and(|s| s.load(Ordering::Relaxed)) {
+            return Err(WireError::Cancelled);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(WireError::Io(last_err.unwrap_or_else(|| {
+                io::Error::new(io::ErrorKind::TimedOut, "timed out")
+            })));
+        }
+        let addr_deadline = compute_addr_deadline(now, deadline, total - idx);
+        match connect_one_cancellable(addr, addr_deadline, stop_flag) {
+            Ok(stream) => return Ok(stream),
+            Err(WireError::Cancelled) => return Err(WireError::Cancelled),
+            Err(WireError::Io(err)) => last_err = Some(err),
+            Err(other) => return Err(other),
+        }
+    }
+    Err(WireError::Io(last_err.unwrap_or_else(|| {
+        io::Error::other(format!("Unable to connect to {host}:{port}"))
+    })))
+}
+
 /// Connect to `host:port` with a single shared deadline across DNS resolution and all
 /// resolved addresses while polling `stop_flag` so unreachable hosts cancel within ~50ms.
 pub fn connect_cancellable(
@@ -608,26 +657,7 @@ pub fn connect_cancellable(
     }
     let deadline = Instant::now() + timeout;
     let addrs = resolve_host_cancellable(host, port, timeout, stop_flag)?;
-    let mut last_err: Option<io::Error> = None;
-    for addr in addrs {
-        if stop_flag.is_some_and(|s| s.load(Ordering::Relaxed)) {
-            return Err(WireError::Cancelled);
-        }
-        if Instant::now() >= deadline {
-            return Err(WireError::Io(last_err.unwrap_or_else(|| {
-                io::Error::new(io::ErrorKind::TimedOut, "timed out")
-            })));
-        }
-        match connect_one_cancellable(addr, deadline, stop_flag) {
-            Ok(stream) => return Ok(stream),
-            Err(WireError::Cancelled) => return Err(WireError::Cancelled),
-            Err(WireError::Io(err)) => last_err = Some(err),
-            Err(other) => return Err(other),
-        }
-    }
-    Err(WireError::Io(last_err.unwrap_or_else(|| {
-        io::Error::other(format!("Unable to connect to {host}:{port}"))
-    })))
+    connect_addrs_cancellable(addrs, deadline, stop_flag, host, port)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1021,5 +1051,89 @@ mod tests {
         ];
         let fallback = select_best_clock_sample(&all_neg).unwrap();
         assert_eq!(fallback.rtt_ns, -200);
+    }
+
+    #[test]
+    fn connect_orders_ipv4_first_and_budgets_fallback_addresses() {
+        let mixed: Vec<SocketAddr> = vec![
+            "[::1]:45681".parse().unwrap(),
+            "[fe80::1]:45681".parse().unwrap(),
+            "127.0.0.1:45681".parse().unwrap(),
+            "192.0.2.2:45681".parse().unwrap(),
+        ];
+        let ordered = order_addrs_ipv4_first(mixed);
+        assert_eq!(
+            ordered,
+            vec![
+                "127.0.0.1:45681".parse::<SocketAddr>().unwrap(),
+                "192.0.2.2:45681".parse::<SocketAddr>().unwrap(),
+                "[::1]:45681".parse::<SocketAddr>().unwrap(),
+                "[fe80::1]:45681".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+
+        let now = Instant::now();
+        let deadline = now + Duration::from_millis(3000);
+        assert_eq!(
+            compute_addr_deadline(now, deadline, 3).duration_since(now),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            compute_addr_deadline(now, deadline, 2).duration_since(now),
+            Duration::from_millis(1500)
+        );
+        assert_eq!(compute_addr_deadline(now, deadline, 1), deadline);
+
+        // Floor prevents vanishingly tiny slices when many addresses remain.
+        let tight = now + Duration::from_millis(120);
+        assert_eq!(
+            compute_addr_deadline(now, tight, 10).duration_since(now),
+            Duration::from_millis(50)
+        );
+
+        // 1. IPv4-first: unreachable IPv6 listed before reachable IPv4 connects immediately.
+        let listener_v4 = TcpListener::bind("127.0.0.1:0").unwrap();
+        let good_v4 = listener_v4.local_addr().unwrap();
+        let srv1 = thread::spawn(move || {
+            let _ = listener_v4.accept();
+        });
+        let t0 = Instant::now();
+        let stream1 = connect_addrs_cancellable(
+            vec!["[::1]:1".parse().unwrap(), good_v4],
+            t0 + Duration::from_millis(800),
+            None,
+            "localhost",
+            good_v4.port(),
+        )
+        .expect("IPv4-first should connect without stalling on IPv6");
+        assert_eq!(stream1.peer_addr().unwrap(), good_v4);
+        assert!(t0.elapsed() < Duration::from_millis(400));
+        drop(stream1);
+        let _ = srv1.join();
+
+        // 2. Budgeted fallback: a slow/unresponsive first IPv4 address gets only its share
+        // of the shared deadline, so the second reachable IPv4 address still connects in time.
+        let unused_v4 = {
+            let tmp = TcpListener::bind("127.0.0.1:0").unwrap();
+            tmp.local_addr().unwrap()
+        };
+        let listener2 = TcpListener::bind("127.0.0.1:0").unwrap();
+        let good_addr = listener2.local_addr().unwrap();
+        let srv2 = thread::spawn(move || {
+            let _ = listener2.accept();
+        });
+        let t1 = Instant::now();
+        let stream2 = connect_addrs_cancellable(
+            vec![unused_v4, good_addr],
+            t1 + Duration::from_millis(800),
+            None,
+            "test-host",
+            good_addr.port(),
+        )
+        .expect("budget split should fall back to second IPv4 address before overall deadline");
+        assert_eq!(stream2.peer_addr().unwrap(), good_addr);
+        assert!(t1.elapsed() < Duration::from_millis(800));
+        drop(stream2);
+        let _ = srv2.join();
     }
 }

@@ -131,13 +131,13 @@ fn local_ipv4_interfaces() -> Vec<Ipv4Addr> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum ChunkedStatus {
+pub(crate) enum ChunkedStatus {
     Complete(Vec<u8>),
     Incomplete,
     Invalid,
 }
 
-fn decode_chunked_body(raw: &[u8], max_bytes: usize) -> ChunkedStatus {
+pub(crate) fn decode_chunked_body(raw: &[u8], max_bytes: usize) -> ChunkedStatus {
     let mut out = Vec::new();
     let mut pos = 0usize;
 
@@ -171,7 +171,12 @@ fn decode_chunked_body(raw: &[u8], max_bytes: usize) -> ChunkedStatus {
         if out.len().saturating_add(chunk_len) > max_bytes {
             return ChunkedStatus::Invalid;
         }
-        let needed = pos.saturating_add(chunk_len).saturating_add(2);
+        let Some(needed) = pos
+            .checked_add(chunk_len)
+            .and_then(|end| end.checked_add(2))
+        else {
+            return ChunkedStatus::Invalid;
+        };
         if raw.len() < needed {
             return ChunkedStatus::Incomplete;
         }
@@ -179,7 +184,7 @@ fn decode_chunked_body(raw: &[u8], max_bytes: usize) -> ChunkedStatus {
             return ChunkedStatus::Invalid;
         }
         out.extend_from_slice(&raw[pos..pos + chunk_len]);
-        pos += chunk_len + 2;
+        pos = needed;
     }
 }
 
@@ -584,5 +589,29 @@ mod tests {
         assert_eq!(cat.session_id, 100);
         assert_eq!(cat.service_generation, 200);
         let _ = srv.join();
+    }
+
+    #[test]
+    fn decode_chunked_body_rejects_overflow_and_malformed_chunks() {
+        assert_eq!(
+            decode_chunked_body(b"ffffffffffffffff\r\n", 64 * 1024),
+            ChunkedStatus::Invalid
+        );
+        assert_eq!(
+            decode_chunked_body(b"ffffffffffffffff\r\n", usize::MAX),
+            ChunkedStatus::Invalid
+        );
+        assert_eq!(
+            decode_chunked_body(b"+1\r\na\r\n0\r\n\r\n", 64 * 1024),
+            ChunkedStatus::Invalid
+        );
+        assert_eq!(
+            decode_chunked_body(b"1\r\naXX0\r\n\r\n", 64 * 1024),
+            ChunkedStatus::Invalid
+        );
+        assert_eq!(
+            decode_chunked_body(b"5;ext=1\r\nhello\r\n0\r\nX-Trailer: 1\r\n\r\n", 64 * 1024),
+            ChunkedStatus::Complete(b"hello".to_vec())
+        );
     }
 }

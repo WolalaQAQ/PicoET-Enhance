@@ -281,8 +281,10 @@ impl EyeMetrics {
 struct RelayState {
     config: RelayConfig,
     running: bool,
-    starting: bool,
+    starting_gen: Option<u64>,
+    closed: bool,
     generation: u64,
+    stop_flag: Arc<AtomicBool>,
     error: String,
     source_host: String,
     active_left_port: Option<u16>,
@@ -367,7 +369,6 @@ struct RelayInner {
     discover: DiscoverFn,
     config_write_lock: Mutex<()>,
     state: Mutex<RelayState>,
-    stop_flag: AtomicBool,
     backoff_lock: Mutex<()>,
     backoff_cond: Condvar,
     threads: Mutex<Vec<wire::BoundedThread>>,
@@ -421,19 +422,19 @@ impl RelayInner {
         }
     }
 
-    fn wait_backoff(&self, duration: Duration) {
+    fn wait_backoff(&self, duration: Duration, stop_flag: &AtomicBool) {
         let guard = self.backoff_lock.lock().unwrap();
         let _ = self
             .backoff_cond
-            .wait_timeout_while(guard, duration, |_| {
-                !self.stop_flag.load(Ordering::Relaxed)
-            })
+            .wait_timeout_while(guard, duration, |_| !stop_flag.load(Ordering::Acquire))
             .unwrap();
     }
 
     #[allow(clippy::too_many_arguments)]
     fn worker_loop(
         self: Arc<Self>,
+        generation: u64,
+        stop_flag: Arc<AtomicBool>,
         eye_idx: usize,
         channel: u8,
         src_host: String,
@@ -448,22 +449,25 @@ impl RelayInner {
         let mut seq: u8 = 0;
         let mut backoff_ms: u64 = 500;
 
-        while !self.stop_flag.load(Ordering::Relaxed) {
+        while !stop_flag.load(Ordering::Acquire) {
             if udp_sock.is_none() {
                 match UdpSocket::bind("0.0.0.0:0") {
                     Ok(s) => udp_sock = Some(s),
                     Err(err) => {
-                        if self.stop_flag.load(Ordering::Relaxed) {
+                        if stop_flag.load(Ordering::Acquire) {
                             break;
                         }
                         {
                             let mut state = self.state.lock().unwrap();
+                            if state.generation != generation || stop_flag.load(Ordering::Acquire) {
+                                break;
+                            }
                             let eye = &mut state.eyes[eye_idx];
                             eye.connected = false;
                             eye.state = "reconnecting";
                             eye.error = Some(err.to_string());
                         }
-                        self.wait_backoff(Duration::from_millis(backoff_ms));
+                        self.wait_backoff(Duration::from_millis(backoff_ms), &stop_flag);
                         backoff_ms = (backoff_ms * 2).min(5000);
                         continue;
                     }
@@ -473,6 +477,9 @@ impl RelayInner {
             let mut wait_after = false;
             {
                 let mut state = self.state.lock().unwrap();
+                if state.generation != generation || stop_flag.load(Ordering::Acquire) {
+                    break;
+                }
                 let eye = &mut state.eyes[eye_idx];
                 if eye.frames == 0 && eye.error.is_none() {
                     eye.state = "connecting";
@@ -480,6 +487,8 @@ impl RelayInner {
             }
 
             let step_result = self.run_eye_connection(
+                generation,
+                &stop_flag,
                 eye_idx,
                 channel,
                 &src_host,
@@ -495,18 +504,23 @@ impl RelayInner {
                 &mut wait_after,
             );
 
-            // Always drop any tracked socket clone when this connection ends.
+            // Drop tracked socket clone only if this session still owns state.
             {
                 let mut state = self.state.lock().unwrap();
-                state.sockets[eye_idx] = None;
+                if state.generation == generation {
+                    state.sockets[eye_idx] = None;
+                }
             }
 
             if let Err(err_msg) = step_result {
-                if self.stop_flag.load(Ordering::Relaxed) {
+                if stop_flag.load(Ordering::Acquire) {
                     break;
                 }
                 {
                     let mut state = self.state.lock().unwrap();
+                    if state.generation != generation || stop_flag.load(Ordering::Acquire) {
+                        break;
+                    }
                     let eye = &mut state.eyes[eye_idx];
                     eye.connected = false;
                     eye.state = "reconnecting";
@@ -515,8 +529,8 @@ impl RelayInner {
                 wait_after = true;
             }
 
-            if wait_after && !self.stop_flag.load(Ordering::Relaxed) {
-                self.wait_backoff(Duration::from_millis(backoff_ms));
+            if wait_after && !stop_flag.load(Ordering::Acquire) {
+                self.wait_backoff(Duration::from_millis(backoff_ms), &stop_flag);
                 backoff_ms = (backoff_ms * 2).min(5000);
             }
         }
@@ -525,6 +539,8 @@ impl RelayInner {
     #[allow(clippy::too_many_arguments)]
     fn run_eye_connection(
         &self,
+        generation: u64,
+        stop_flag: &AtomicBool,
         eye_idx: usize,
         channel: u8,
         src_host: &str,
@@ -543,7 +559,7 @@ impl RelayInner {
             cymple_host,
             cymple_port,
             Duration::from_secs(4),
-            Some(&self.stop_flag),
+            Some(stop_flag),
         ) {
             Ok(addrs) => addrs
                 .into_iter()
@@ -559,7 +575,7 @@ impl RelayInner {
             src_host,
             src_port,
             Duration::from_secs(4),
-            Some(&self.stop_flag),
+            Some(stop_flag),
         ) {
             Ok(s) => s,
             Err(WireError::Cancelled) => return Ok(()),
@@ -572,7 +588,7 @@ impl RelayInner {
 
         {
             let mut state = self.state.lock().unwrap();
-            if self.stop_flag.load(Ordering::Relaxed) {
+            if state.generation != generation || stop_flag.load(Ordering::Acquire) {
                 return Ok(());
             }
             state.sockets[eye_idx] = tcp_sock.try_clone().ok();
@@ -586,11 +602,11 @@ impl RelayInner {
 
         tcp_sock.write_all(b"JPEG\n").map_err(|e| e.to_string())?;
 
-        while !self.stop_flag.load(Ordering::Relaxed) {
+        while !stop_flag.load(Ordering::Acquire) {
             let (header, payload) = match wire::read_frame(
                 &mut tcp_sock,
                 Duration::from_secs(4),
-                Some(&self.stop_flag),
+                Some(stop_flag),
             ) {
                 Ok(frame) => frame,
                 Err(WireError::IdleTimeout(_)) => continue,
@@ -600,7 +616,7 @@ impl RelayInner {
 
             if (header.flags & END) != 0 {
                 let mut state = self.state.lock().unwrap();
-                if !self.stop_flag.load(Ordering::Relaxed) {
+                if state.generation == generation && !stop_flag.load(Ordering::Acquire) {
                     let eye = &mut state.eyes[eye_idx];
                     eye.connected = false;
                     eye.state = "reconnecting";
@@ -615,7 +631,16 @@ impl RelayInner {
 
             let jpeg = prepare_jpeg(&payload, rotate_cw, hflip, vflip)?;
             let packets = encode_cymple_packets(&jpeg, channel, *seq)?;
+            {
+                let state = self.state.lock().unwrap();
+                if state.generation != generation || stop_flag.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+            }
             for pkt in &packets {
+                if stop_flag.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 udp_sock
                     .send_to(pkt, dst_addr)
                     .map_err(|e| e.to_string())?;
@@ -625,6 +650,9 @@ impl RelayInner {
             let now_ns = wire::monotonic_ns();
 
             let mut state = self.state.lock().unwrap();
+            if state.generation != generation || stop_flag.load(Ordering::Acquire) {
+                return Ok(());
+            }
             let eye = &mut state.eyes[eye_idx];
             eye.state = "streaming";
             eye.connected = true;
@@ -695,8 +723,10 @@ impl CympleEyeRelay {
                 state: Mutex::new(RelayState {
                     config,
                     running: false,
-                    starting: false,
+                    starting_gen: None,
+                    closed: false,
                     generation: 0,
+                    stop_flag: Arc::new(AtomicBool::new(true)),
                     error: String::new(),
                     source_host: String::new(),
                     active_left_port: None,
@@ -704,7 +734,6 @@ impl CympleEyeRelay {
                     eyes,
                     sockets: [None, None],
                 }),
-                stop_flag: AtomicBool::new(false),
                 backoff_lock: Mutex::new(()),
                 backoff_cond: Condvar::new(),
                 threads: Mutex::new(Vec::new()),
@@ -716,7 +745,10 @@ impl CympleEyeRelay {
         let _cfg_guard = self.inner.config_write_lock.lock().unwrap();
         let updated = {
             let state = self.inner.state.lock().unwrap();
-            if state.running || state.starting {
+            if state.closed {
+                return Err("Application is shutting down".to_string());
+            }
+            if state.running || state.starting_gen.is_some() {
                 return Err(
                     "Stop the Cymple eye relay before changing relay settings".to_string()
                 );
@@ -728,7 +760,10 @@ impl CympleEyeRelay {
         self.inner.save_config(&updated)?;
 
         let mut state = self.inner.state.lock().unwrap();
-        if state.running || state.starting {
+        if state.closed {
+            return Err("Application is shutting down".to_string());
+        }
+        if state.running || state.starting_gen.is_some() {
             return Err("Stop the Cymple eye relay before changing relay settings".to_string());
         }
         state.config = updated.clone();
@@ -757,25 +792,46 @@ impl CympleEyeRelay {
 
         let (updated_cfg, generation) = {
             let _cfg_guard = self.inner.config_write_lock.lock().unwrap();
-            let updated = {
-                let state = self.inner.state.lock().unwrap();
-                if state.running || state.starting {
+            let (updated, generation) = {
+                let mut state = self.inner.state.lock().unwrap();
+                if state.closed {
+                    return Err("Application is shutting down".to_string());
+                }
+                if state.running || state.starting_gen.is_some() {
                     return Err("Cymple eye relay is already running".to_string());
                 }
-                validate_relay_config(&state.config, &Value::Object(relay_changes))?
+                let updated =
+                    validate_relay_config(&state.config, &Value::Object(relay_changes))?;
+                let generation = state.generation;
+                state.starting_gen = Some(generation);
+                (updated, generation)
             };
             // Persist unlocked from `state` and commit in-memory config only on success.
-            self.inner.save_config(&updated)?;
+            if let Err(err) = self.inner.save_config(&updated) {
+                let mut state = self.inner.state.lock().unwrap();
+                if state.starting_gen == Some(generation) {
+                    state.starting_gen = None;
+                }
+                return Err(err);
+            }
 
             let mut state = self.inner.state.lock().unwrap();
-            if state.running || state.starting {
+            if generation != state.generation || state.closed {
+                if state.starting_gen == Some(generation) {
+                    state.starting_gen = None;
+                }
+                return Err("Cymple eye relay startup was cancelled".to_string());
+            }
+            if state.running {
+                if state.starting_gen == Some(generation) {
+                    state.starting_gen = None;
+                }
                 return Err("Cymple eye relay is already running".to_string());
             }
             state.config = updated.clone();
             state.eyes[0].port = updated.left_port;
             state.eyes[1].port = updated.right_port;
-            state.starting = true;
-            (updated, state.generation)
+            (updated, generation)
         };
 
         let explicit_host = match opts_map.get("headset_host") {
@@ -790,8 +846,10 @@ impl CympleEyeRelay {
             Ok(ep) => ep,
             Err(err) => {
                 let mut state = self.inner.state.lock().unwrap();
-                state.starting = false;
-                if generation != state.generation {
+                if state.starting_gen == Some(generation) {
+                    state.starting_gen = None;
+                }
+                if generation != state.generation || state.closed {
                     return Err("Cymple eye relay startup was cancelled".to_string());
                 }
                 state.error = err.clone();
@@ -801,20 +859,23 @@ impl CympleEyeRelay {
 
         let mut threads = self.inner.threads.lock().unwrap();
         let mut state = self.inner.state.lock().unwrap();
-        if generation != state.generation {
-            state.starting = false;
+        if state.starting_gen == Some(generation) {
+            state.starting_gen = None;
+        }
+        if generation != state.generation || state.closed {
             return Err("Cymple eye relay startup was cancelled".to_string());
         }
         if state.running {
             let err = "Cymple eye relay is already running".to_string();
             state.error = err.clone();
-            state.starting = false;
             return Err(err);
         }
 
-        self.inner.stop_flag.store(false, Ordering::SeqCst);
+        state.generation += 1;
+        let session_gen = state.generation;
+        let session_stop = Arc::new(AtomicBool::new(false));
+        state.stop_flag = Arc::clone(&session_stop);
         state.running = true;
-        state.starting = false;
         state.error.clear();
         state.source_host = src_host.clone();
         state.active_left_port = Some(left_port);
@@ -827,6 +888,8 @@ impl CympleEyeRelay {
 
         let left_inner = Arc::clone(&self.inner);
         let right_inner = Arc::clone(&self.inner);
+        let left_stop = Arc::clone(&session_stop);
+        let right_stop = Arc::clone(&session_stop);
         let src_host_l = src_host.clone();
         let src_host_r = src_host;
         let cymple_host_l = updated_cfg.cymple_host.clone();
@@ -837,6 +900,8 @@ impl CympleEyeRelay {
         let spawn_res: Result<(), String> = (|| {
             let t_left = wire::spawn_bounded("cymple-relay-eye_left", move || {
                 left_inner.worker_loop(
+                    session_gen,
+                    left_stop,
                     0,
                     0,
                     src_host_l,
@@ -853,6 +918,8 @@ impl CympleEyeRelay {
 
             let t_right = wire::spawn_bounded("cymple-relay-eye_right", move || {
                 right_inner.worker_loop(
+                    session_gen,
+                    right_stop,
                     1,
                     1,
                     src_host_r,
@@ -870,31 +937,36 @@ impl CympleEyeRelay {
         })();
 
         if let Err(err) = spawn_res {
-            self.inner.stop_flag.store(true, Ordering::SeqCst);
+            session_stop.store(true, Ordering::SeqCst);
             {
                 let _guard = self.inner.backoff_lock.lock().unwrap();
                 self.inner.backoff_cond.notify_all();
             }
-            let sockets = [state.sockets[0].take(), state.sockets[1].take()];
+            let sockets = if state.generation == session_gen {
+                [state.sockets[0].take(), state.sockets[1].take()]
+            } else {
+                [None, None]
+            };
             drop(state);
             for sock in sockets.into_iter().flatten() {
                 let _ = sock.shutdown(Shutdown::Both);
             }
             wire::join_all_bounded(spawned, Duration::from_secs(5));
             let mut state = self.inner.state.lock().unwrap();
-            state.sockets = [None, None];
-            state.running = false;
-            state.starting = false;
-            state.error = err.clone();
-            state.source_host.clear();
-            state.active_left_port = None;
-            state.active_right_port = None;
-            let lp = state.config.left_port;
-            let rp = state.config.right_port;
-            state.eyes = [
-                EyeMetrics::new(0, lp, "idle"),
-                EyeMetrics::new(1, rp, "idle"),
-            ];
+            if state.generation == session_gen {
+                state.sockets = [None, None];
+                state.running = false;
+                state.error = err.clone();
+                state.source_host.clear();
+                state.active_left_port = None;
+                state.active_right_port = None;
+                let lp = state.config.left_port;
+                let rp = state.config.right_port;
+                state.eyes = [
+                    EyeMetrics::new(0, lp, "idle"),
+                    EyeMetrics::new(1, rp, "idle"),
+                ];
+            }
             return Err(err);
         }
 
@@ -902,18 +974,23 @@ impl CympleEyeRelay {
         Ok(state.status_snapshot())
     }
 
-    pub fn stop(&self) -> Value {
-        self.inner.stop_flag.store(true, Ordering::SeqCst);
+    fn stop_internal(&self, mark_closed: bool) -> Value {
+        let (stop_generation, sockets) = {
+            let mut state = self.inner.state.lock().unwrap();
+            if mark_closed {
+                state.closed = true;
+            }
+            state.stop_flag.store(true, Ordering::SeqCst);
+            state.starting_gen = None;
+            state.generation += 1;
+            let gen = state.generation;
+            let sockets = [state.sockets[0].take(), state.sockets[1].take()];
+            (gen, sockets)
+        };
         {
             let _guard = self.inner.backoff_lock.lock().unwrap();
             self.inner.backoff_cond.notify_all();
         }
-
-        let sockets = {
-            let mut state = self.inner.state.lock().unwrap();
-            state.generation += 1;
-            [state.sockets[0].take(), state.sockets[1].take()]
-        };
         for sock in sockets.into_iter().flatten() {
             let _ = sock.shutdown(Shutdown::Both);
         }
@@ -925,27 +1002,33 @@ impl CympleEyeRelay {
         wire::join_all_bounded(handles, Duration::from_secs(5));
 
         let mut state = self.inner.state.lock().unwrap();
-        state.sockets = [None, None];
-        state.running = false;
-        state.error.clear();
-        state.source_host.clear();
-        state.active_left_port = None;
-        state.active_right_port = None;
-        let left_port = state.config.left_port;
-        let right_port = state.config.right_port;
-        state.eyes[0].port = left_port;
-        state.eyes[0].state = "idle";
-        state.eyes[0].connected = false;
-        state.eyes[0].error = None;
-        state.eyes[1].port = right_port;
-        state.eyes[1].state = "idle";
-        state.eyes[1].connected = false;
-        state.eyes[1].error = None;
+        if state.generation == stop_generation {
+            state.sockets = [None, None];
+            state.running = false;
+            state.error.clear();
+            state.source_host.clear();
+            state.active_left_port = None;
+            state.active_right_port = None;
+            let left_port = state.config.left_port;
+            let right_port = state.config.right_port;
+            state.eyes[0].port = left_port;
+            state.eyes[0].state = "idle";
+            state.eyes[0].connected = false;
+            state.eyes[0].error = None;
+            state.eyes[1].port = right_port;
+            state.eyes[1].state = "idle";
+            state.eyes[1].connected = false;
+            state.eyes[1].error = None;
+        }
         state.status_snapshot()
     }
 
+    pub fn stop(&self) -> Value {
+        self.stop_internal(false)
+    }
+
     pub fn close(&self) {
-        let _ = self.stop();
+        let _ = self.stop_internal(true);
     }
 
     pub fn status(&self) -> Value {
@@ -1528,5 +1611,164 @@ mod tests {
         assert!(relay.configure(json!({"left_rotate": 90, "left_port": 45690})).is_err());
         assert_eq!(relay.status()["config"], before);
         assert_eq!(relay.status()["left_port"], DEFAULT_LEFT_PORT);
+    }
+
+    #[test]
+    fn stop_during_inflight_discovery_immediately_unlocks_configure_and_start() {
+        let entered = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let entered_d = Arc::clone(&entered);
+        let release_d = Arc::clone(&release);
+
+        let cam_l = FakeEyeStream::start(corner_jpeg(400, 400, 95));
+        let cam_r = FakeEyeStream::start(corner_jpeg(400, 400, 95));
+        let sink = UdpReassembler::start();
+
+        let relay = Arc::new(CympleEyeRelay::new_with_discover(
+            None,
+            Box::new(move |_| {
+                entered_d.store(true, Ordering::SeqCst);
+                while !release_d.load(Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                DiscoveryResult { devices: vec![] }
+            }),
+        ));
+
+        let r_start = Arc::clone(&relay);
+        let old_starter = thread::spawn(move || r_start.start(json!({"headset_host": ""}), ""));
+        wait_for(|| entered.load(Ordering::SeqCst), Duration::from_secs(2));
+
+        // Stop cancels in-flight discovery and immediately clears starting_gen.
+        let stopped = relay.stop();
+        assert_eq!(stopped["running"], false);
+
+        // Even while the old start() is STILL blocked inside discover(), configure() and start() must succeed!
+        let configured = relay
+            .configure(json!({
+                "left_rotate": 180,
+                "cymple_host": "127.0.0.1",
+                "cymple_port": sink.port,
+                "left_port": cam_l.port,
+                "right_port": cam_r.port,
+            }))
+            .expect("configure must succeed immediately after stop()");
+        assert_eq!(configured["config"]["left_rotate"], 180);
+
+        let restarted = relay
+            .start(json!({"headset_host": "127.0.0.1"}), "")
+            .expect("new start must succeed immediately after stop()");
+        assert_eq!(restarted["running"], true);
+
+        // Now let the stale discovery return; it must fail with cancelled and leave the new session intact.
+        release.store(true, Ordering::SeqCst);
+        let old_res = old_starter.join().unwrap();
+        assert!(old_res.is_err());
+        assert!(old_res.unwrap_err().contains("cancelled"));
+
+        wait_for(
+            || relay.status()["eyes"]["eye_left"]["frames"].as_u64().unwrap_or(0) >= 2,
+            Duration::from_secs(3),
+        );
+        assert_eq!(relay.status()["running"], true);
+        assert_eq!(relay.status()["error"], "");
+
+        relay.close();
+        assert!(relay.configure(json!({"left_rotate": 90})).is_err());
+        assert!(relay.start(json!({"headset_host": "127.0.0.1"}), "").is_err());
+    }
+
+    #[test]
+    fn stale_detached_worker_cannot_corrupt_new_session_or_send_udp() {
+        let cam_l = FakeEyeStream::start(corner_jpeg(400, 400, 95));
+        let cam_r = FakeEyeStream::start(corner_jpeg(400, 400, 95));
+        let sink_live = UdpReassembler::start();
+        let sink_stale = UdpReassembler::start();
+
+        let relay = CympleEyeRelay::new(None);
+        relay
+            .start(
+                json!({
+                    "headset_host": "127.0.0.1",
+                    "cymple_host": "127.0.0.1",
+                    "cymple_port": sink_stale.port,
+                    "left_port": cam_l.port,
+                    "right_port": cam_r.port,
+                }),
+                "",
+            )
+            .unwrap();
+        let (stale_gen, stale_stop) = {
+            let st = relay.inner.state.lock().unwrap();
+            (st.generation, Arc::clone(&st.stop_flag))
+        };
+        relay.stop();
+        assert!(
+            stale_stop.load(Ordering::Acquire),
+            "stopped session token must stay true forever"
+        );
+
+        // Start session 2 targeting sink_live.
+        relay
+            .start(
+                json!({
+                    "headset_host": "127.0.0.1",
+                    "cymple_host": "127.0.0.1",
+                    "cymple_port": sink_live.port,
+                    "left_port": cam_l.port,
+                    "right_port": cam_r.port,
+                }),
+                "",
+            )
+            .unwrap();
+        assert!(
+            stale_stop.load(Ordering::Acquire),
+            "new session must not reset previous session's stop token"
+        );
+        wait_for(
+            || relay.status()["eyes"]["eye_left"]["frames"].as_u64().unwrap_or(0) >= 2,
+            Duration::from_secs(3),
+        );
+
+        let stale_udp_before = sink_stale.frames.lock().unwrap()[0].len();
+        let live_frames_before = relay.status()["eyes"]["eye_left"]["frames"].as_u64().unwrap();
+
+        // Run a stale detached worker_loop (with stale_gen and even a forged false stop token)
+        // targeting sink_stale: it must exit immediately without touching state or sending UDP.
+        let forged_false = Arc::new(AtomicBool::new(false));
+        Arc::clone(&relay.inner).worker_loop(
+            stale_gen,
+            Arc::clone(&stale_stop),
+            0,
+            0,
+            "127.0.0.1".to_string(),
+            cam_l.port,
+            "127.0.0.1".to_string(),
+            sink_stale.port,
+            0,
+            false,
+            false,
+        );
+        Arc::clone(&relay.inner).worker_loop(
+            stale_gen,
+            Arc::clone(&forged_false),
+            0,
+            0,
+            "127.0.0.1".to_string(),
+            cam_l.port,
+            "127.0.0.1".to_string(),
+            sink_stale.port,
+            0,
+            false,
+            false,
+        );
+
+        assert_eq!(sink_stale.frames.lock().unwrap()[0].len(), stale_udp_before);
+        wait_for(
+            || relay.status()["eyes"]["eye_left"]["frames"].as_u64().unwrap_or(0) > live_frames_before,
+            Duration::from_secs(3),
+        );
+        assert_eq!(relay.status()["running"], true);
+        relay.stop();
     }
 }

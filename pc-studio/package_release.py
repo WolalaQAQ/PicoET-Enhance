@@ -203,7 +203,7 @@ def build_packages(version=None, *, output_dir=None, work_dir=None, iscc=None, s
             check=True,
         )
 
-        target_dir = Path(env['CARGO_TARGET_DIR']) if env.get('CARGO_TARGET_DIR') else (TAURI_DIR / 'target')
+        target_dir = (TAURI_DIR / env['CARGO_TARGET_DIR']).resolve() if env.get('CARGO_TARGET_DIR') else (TAURI_DIR / 'target')
         built_exe = target_dir / 'release' / 'PicoET-PC-Studio.exe'
         if not built_exe.is_file():
             raise FileNotFoundError(f'Cargo release binary missing: {built_exe}')
@@ -226,6 +226,7 @@ def build_packages(version=None, *, output_dir=None, work_dir=None, iscc=None, s
             for file_path in sorted(bundle_dir.rglob('*')):
                 if file_path.is_file():
                     zf.write(file_path, file_path.relative_to(bundle_dir).as_posix())
+            zf.writestr('user-data/.portable', '')
         portable_sha, _ = write_sha256(portable_zip)
 
         result = {

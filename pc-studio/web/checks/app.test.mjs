@@ -719,16 +719,123 @@ test("background status polling and preview loop pause while doc.hidden and resu
   await Promise.resolve();
   assert.equal(f.server.calls.length, callsBeforeHide);
 
-  // Restore window: immediately triggers status poll + restarts interval and preview loop.
+  // Restore window: immediately triggers status poll, then restarts interval and preview loop.
   f.doc.hidden = false;
-  f.doc.emit("visibilitychange");
-  await Promise.resolve();
+  await f.doc.emit("visibilitychange");
   assert.notEqual(f.app.state.interval, null);
   assert.notEqual(f.app.state.previewTimer, null);
   assert.ok(
     f.server.calls.slice(callsBeforeHide).some(c => c.path === "/api/status"),
     "expected immediate /api/status refresh on visibilitychange",
   );
+});
+
+test("hiding while a preview request is in flight does not set previewError or show Preview unavailable", async t => {
+  const f = setup(t);
+  await f.app.init();
+  await f.app.start("capture");
+
+  f.server.before = (path, opts) => {
+    if (!path.startsWith("/api/preview.jpg")) return;
+    return new Promise((_, reject) => {
+      const onAbort = () => {
+        const err = new Error("Aborted");
+        err.name = "AbortError";
+        reject(err);
+      };
+      if (opts.signal?.aborted) { onAbort(); return; }
+      opts.signal?.addEventListener("abort", onAbort, {once: true});
+    });
+  };
+
+  const pendingPreview = f.app.refreshPreview();
+  f.doc.hidden = true;
+  f.doc.emit("visibilitychange");
+  await pendingPreview;
+
+  assert.equal(f.app.state.previewError, false);
+  assert.notEqual(f.el("placeholder").textContent, messages.en.previewError);
+
+  // Restoring when the headset is asleep/unworn shows the wake hint instead of "Preview unavailable".
+  f.server.before = null;
+  f.server.status.metrics.video_fresh = false;
+  f.doc.hidden = false;
+  await f.doc.emit("visibilitychange");
+  assert.equal(f.app.state.previewError, false);
+  assert.equal(f.el("placeholder").textContent, messages.en.waitingHeadsetWake);
+});
+
+test("visibilitychange during startup does not spawn duplicate preview timers", async t => {
+  const f = setup(t);
+  let releaseStatus;
+  f.server.before = (path) => {
+    if (path === "/api/status" && !releaseStatus) {
+      return new Promise(resolve => { releaseStatus = () => resolve(null); });
+    }
+  };
+
+  const initPromise = f.app.init();
+  f.doc.hidden = false;
+  const visPromise = f.doc.emit("visibilitychange");
+
+  releaseStatus();
+  await Promise.all([initPromise, visPromise]);
+
+  const previewTimers = f.timers.filter(entry => entry.kind === "timeout" && entry.ms === 100);
+  const statusIntervals = f.timers.filter(entry => entry.kind === "interval" && entry.ms === 500);
+  assert.equal(previewTimers.length, 1);
+  assert.equal(statusIntervals.length, 1);
+  assert.equal(f.app.state.previewTimer, previewTimers[0].id);
+  assert.equal(f.app.state.interval, statusIntervals[0].id);
+
+  // Pausing clears the single preview timer without leaving a stray duplicate chain.
+  f.doc.hidden = true;
+  f.doc.emit("visibilitychange");
+  assert.ok(f.clearedTimeouts.includes(previewTimers[0].id));
+  assert.equal(f.app.state.previewTimer, null);
+});
+
+test("hiding for over 4s and restoring does not flash offline and resumes preview immediately", async t => {
+  const f = setup(t);
+  await f.app.init();
+  await f.app.start("capture");
+  await f.app.refreshPreview();
+  assert.equal(f.el("preview").hidden, false);
+  assert.equal(f.el("service-state").textContent, messages.en.serviceOnline);
+
+  f.doc.hidden = true;
+  f.doc.emit("visibilitychange");
+  f.advance(10000);
+
+  let releaseStatus;
+  f.server.before = (path) => {
+    if (path === "/api/status") {
+      return new Promise(resolve => { releaseStatus = () => resolve(null); });
+    }
+  };
+
+  const callsBeforeResume = f.server.calls.length;
+  f.doc.hidden = false;
+  const resumePromise = f.doc.emit("visibilitychange");
+
+  // An intermediate render while the resume status poll is in flight must not flash offline or clear preview.
+  f.app.navigate("tracking", false);
+  assert.equal(f.el("status").textContent, messages.en.recordingOnly);
+  assert.equal(f.el("service-state").textContent, messages.en.serviceOnline);
+  assert.equal(f.el("snapshot-state").textContent, messages.en.snapshot);
+  assert.equal(f.el("preview").hidden, false);
+
+  f.server.before = null;
+  releaseStatus();
+  await resumePromise;
+
+  assert.notEqual(f.app.state.interval, null);
+  assert.notEqual(f.app.state.previewTimer, null);
+  assert.ok(
+    f.server.calls.slice(callsBeforeResume).some(c => c.path.startsWith("/api/preview.jpg")),
+    "expected immediate /api/preview.jpg fetch after resume poll settles",
+  );
+  assert.equal(f.el("status").textContent, messages.en.recordingOnly);
 });
 
 test("version badge has no hardcoded version in index.html and topbar CSS avoids clipping", () => {

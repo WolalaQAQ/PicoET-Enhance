@@ -216,25 +216,11 @@ fn signal_and_wait_named_instance(
     }
 }
 
-fn decode_chunked_body(raw: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut pos = 0;
-    while pos < raw.len() {
-        let line_end = raw[pos..].windows(2).position(|w| w == b"\r\n")? + pos;
-        let size_str = std::str::from_utf8(&raw[pos..line_end]).ok()?;
-        let size_hex = size_str.split(';').next()?.trim();
-        let size = usize::from_str_radix(size_hex, 16).ok()?;
-        pos = line_end + 2;
-        if size == 0 {
-            return Some(out);
-        }
-        if pos + size + 2 > raw.len() {
-            return None;
-        }
-        out.extend_from_slice(&raw[pos..pos + size]);
-        pos += size + 2;
+fn decode_legacy_chunked_body(raw: &[u8]) -> Option<Vec<u8>> {
+    match discovery::decode_chunked_body(raw, LEGACY_STATUS_MAX_BYTES) {
+        discovery::ChunkedStatus::Complete(decoded) => Some(decoded),
+        discovery::ChunkedStatus::Incomplete | discovery::ChunkedStatus::Invalid => None,
     }
-    None
 }
 
 fn probe_legacy_picoet_status(addr: SocketAddr, port: u16) -> bool {
@@ -292,7 +278,9 @@ fn probe_legacy_picoet_status(addr: SocketAddr, port: u16) -> bool {
     let is_chunked = lines.any(|line| {
         if let Some((name, val)) = line.split_once(':') {
             name.trim().eq_ignore_ascii_case("transfer-encoding")
-                && val.to_ascii_lowercase().contains("chunked")
+                && val
+                    .split(',')
+                    .any(|tok| tok.trim().eq_ignore_ascii_case("chunked"))
         } else {
             false
         }
@@ -300,7 +288,7 @@ fn probe_legacy_picoet_status(addr: SocketAddr, port: u16) -> bool {
 
     let body_raw = &buf[header_end + 4..];
     let body_bytes = if is_chunked {
-        let Some(decoded) = decode_chunked_body(body_raw) else {
+        let Some(decoded) = decode_legacy_chunked_body(body_raw) else {
             return false;
         };
         decoded
@@ -625,24 +613,26 @@ async fn stop_camera(state: State<'_, Arc<AppState>>) -> Result<Value, String> {
     .map_err(|e| e.to_string())?
 }
 
+fn resolve_discover_targets(
+    host: Option<String>,
+    port: Option<Value>,
+) -> Result<Option<Vec<(String, u16)>>, String> {
+    let parsed_port = match port {
+        None | Some(Value::Null) => discovery::DEFAULT_PORT,
+        Some(ref v) => runtime::parse_port_value(v, "headset_port")?,
+    };
+    Ok(host
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+        .map(|h| vec![(h, parsed_port)]))
+}
+
 #[tauri::command]
 async fn discover_sources(
     host: Option<String>,
-    port: Option<u16>,
+    port: Option<Value>,
 ) -> Result<DiscoveryResult, String> {
-    let explicit_targets = match host.map(|h| h.trim().to_string()).filter(|h| !h.is_empty()) {
-        Some(h) => {
-            let p = match port {
-                Some(0) => {
-                    return Err("headset_port must be an integer in 1..65535".to_string());
-                }
-                Some(v) => v,
-                None => discovery::DEFAULT_PORT,
-            };
-            Some(vec![(h, p)])
-        }
-        None => None,
-    };
+    let explicit_targets = resolve_discover_targets(host, port)?;
     tauri::async_runtime::spawn_blocking(move || {
         discovery::discover_sources(DISCOVERY_TIMEOUT, explicit_targets)
     })
@@ -1096,5 +1086,54 @@ mod tests {
         );
         release_tx.send(()).unwrap();
         stuck_worker.join().unwrap();
+    }
+
+    #[test]
+    fn legacy_chunked_decoder_rejects_overflow_without_panic() {
+        use std::net::TcpListener;
+
+        assert_eq!(decode_legacy_chunked_body(b"ffffffffffffffff\r\n"), None);
+        assert_eq!(decode_legacy_chunked_body(b"+4\r\ntest\r\n0\r\n\r\n"), None);
+        assert_eq!(
+            decode_legacy_chunked_body(b"4\r\ntest\r\n0\r\n\r\n"),
+            Some(b"test".to_vec())
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let port = addr.port();
+        let srv = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut req = [0u8; 512];
+                let _ = stream.read(&mut req);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\nffffffffffffffff\r\n",
+                );
+            }
+        });
+        assert!(!probe_legacy_picoet_status(addr, port));
+        srv.join().unwrap();
+    }
+
+    #[test]
+    fn discover_sources_validates_port_range() {
+        assert_eq!(
+            resolve_discover_targets(Some(" 127.0.0.1 ".into()), None).unwrap(),
+            Some(vec![("127.0.0.1".to_string(), discovery::DEFAULT_PORT)])
+        );
+        assert_eq!(
+            resolve_discover_targets(Some("127.0.0.1".into()), Some(Value::Null)).unwrap(),
+            Some(vec![("127.0.0.1".to_string(), discovery::DEFAULT_PORT)])
+        );
+        assert_eq!(
+            resolve_discover_targets(Some("127.0.0.1".into()), Some(json!(45690))).unwrap(),
+            Some(vec![("127.0.0.1".to_string(), 45690)])
+        );
+        assert_eq!(resolve_discover_targets(None, None).unwrap(), None);
+
+        for bad in [json!(0), json!(-1), json!(70000), json!(true), json!("abc")] {
+            let err = resolve_discover_targets(Some("127.0.0.1".into()), Some(bad)).unwrap_err();
+            assert_eq!(err, "headset_port must be an integer in 1..65535");
+        }
     }
 }

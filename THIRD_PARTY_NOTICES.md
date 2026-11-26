@@ -238,9 +238,10 @@ licenses:
 - **Zlib** (single- or dual-licensed with MIT / Apache-2.0): `zune-jpeg`,
   `zune-core`, `zlib-rs`, `foldhash`, `miniz_oxide`, `bytemuck`, `tinyvec`.
 - **Unicode-3.0**: ICU4X / Unicode data crates (`icu_collections`,
-  `icu_locale_core`, `icu_normalizer`, `icu_properties`, `icu_provider`,
-  `zerovec`, `zerotrie`, `yoke`, `zerofrom`, `litemap`, `tinystr`, `writeable`,
-  `potential_utf`) and `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`).
+  `icu_locale_core`, `icu_normalizer`, `icu_normalizer_data`, `icu_properties`,
+  `icu_properties_data`, `icu_provider`, `zerovec`, `zerotrie`, `yoke`,
+  `zerofrom`, `litemap`, `tinystr`, `writeable`, `potential_utf`) and
+  `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`).
 - **Unlicense / 0BSD / CC0-1.0 / BSL-1.0** (dual-licensed with MIT or
   Apache-2.0): `memchr`, `aho-corasick`, `byteorder`, `jiff`, `walkdir`,
   `adler2`, `dunce`, `ryu`.
