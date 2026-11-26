@@ -130,34 +130,168 @@ fn local_ipv4_interfaces() -> Vec<Ipv4Addr> {
     found
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ChunkedStatus {
+    Complete(Vec<u8>),
+    Incomplete,
+    Invalid,
+}
+
+fn decode_chunked_body(raw: &[u8], max_bytes: usize) -> ChunkedStatus {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+
+    loop {
+        let Some(rel_crlf) = raw[pos..].windows(2).position(|w| w == b"\r\n") else {
+            return ChunkedStatus::Incomplete;
+        };
+        let line_bytes = &raw[pos..pos + rel_crlf];
+        let Ok(line) = std::str::from_utf8(line_bytes) else {
+            return ChunkedStatus::Invalid;
+        };
+        let size_hex = line.split(';').next().unwrap_or("").trim();
+        if size_hex.is_empty() || !size_hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return ChunkedStatus::Invalid;
+        }
+        let Ok(chunk_len) = usize::from_str_radix(size_hex, 16) else {
+            return ChunkedStatus::Invalid;
+        };
+        pos += rel_crlf + 2;
+
+        if chunk_len == 0 {
+            if raw[pos..].starts_with(b"\r\n") {
+                return ChunkedStatus::Complete(out);
+            }
+            if raw[pos..].windows(4).any(|w| w == b"\r\n\r\n") {
+                return ChunkedStatus::Complete(out);
+            }
+            return ChunkedStatus::Incomplete;
+        }
+
+        if out.len().saturating_add(chunk_len) > max_bytes {
+            return ChunkedStatus::Invalid;
+        }
+        let needed = pos.saturating_add(chunk_len).saturating_add(2);
+        if raw.len() < needed {
+            return ChunkedStatus::Incomplete;
+        }
+        if &raw[pos + chunk_len..pos + chunk_len + 2] != b"\r\n" {
+            return ChunkedStatus::Invalid;
+        }
+        out.extend_from_slice(&raw[pos..pos + chunk_len]);
+        pos += chunk_len + 2;
+    }
+}
+
 fn fetch_http_cameras_catalog(host: &str, port: u16, timeout: Duration) -> Option<CameraCatalog> {
+    const MAX_HTTP_BYTES: usize = 16384;
+    const MAX_BODY_BYTES: usize = 8192;
+
+    let deadline = Instant::now() + timeout;
     let mut stream = connect_cancellable(host, port, timeout, None).ok()?;
-    let _ = stream.set_read_timeout(Some(timeout));
-    let _ = stream.set_write_timeout(Some(timeout));
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return None;
+    }
+    let _ = stream.set_write_timeout(Some(remaining));
     let req = format!("GET /cameras HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
     stream.write_all(req.as_bytes()).ok()?;
 
     let mut raw = Vec::new();
     let mut buf = [0u8; 2048];
-    while raw.len() < 16384 {
+    let mut header_end: Option<usize> = None;
+    let mut content_length: Option<usize> = None;
+    let mut is_chunked = false;
+
+    while raw.len() < MAX_HTTP_BYTES {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let _ = stream.set_read_timeout(Some(remaining));
         match stream.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => raw.extend_from_slice(&buf[..n]),
+            Ok(n) => {
+                let take = n.min(MAX_HTTP_BYTES - raw.len());
+                raw.extend_from_slice(&buf[..take]);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
+
+        if header_end.is_none() {
+            if let Some(sep) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                let header_str = std::str::from_utf8(&raw[..sep]).ok()?;
+                let mut lines = header_str.lines();
+                let status_line = lines.next()?;
+                let status_code: u16 = status_line.split_whitespace().nth(1)?.parse().ok()?;
+                if status_code != 200 {
+                    return None;
+                }
+                for line in lines {
+                    let Some((name, value)) = line.split_once(':') else {
+                        continue;
+                    };
+                    let name = name.trim();
+                    let value = value.trim();
+                    if name.eq_ignore_ascii_case("transfer-encoding") {
+                        if value
+                            .split(',')
+                            .any(|tok| tok.trim().eq_ignore_ascii_case("chunked"))
+                        {
+                            is_chunked = true;
+                        }
+                    } else if name.eq_ignore_ascii_case("content-length") {
+                        let parsed = value.parse::<usize>().ok()?;
+                        if parsed > MAX_BODY_BYTES {
+                            return None;
+                        }
+                        content_length = Some(parsed);
+                    }
+                }
+                if is_chunked {
+                    content_length = None;
+                }
+                header_end = Some(sep);
+            }
+        }
+
+        if let Some(sep) = header_end {
+            let body = &raw[sep + 4..];
+            if is_chunked {
+                match decode_chunked_body(body, MAX_BODY_BYTES) {
+                    ChunkedStatus::Complete(decoded) => return parse_catalog(&decoded),
+                    ChunkedStatus::Invalid => return None,
+                    ChunkedStatus::Incomplete => {}
+                }
+            } else if let Some(cl) = content_length {
+                if body.len() >= cl {
+                    return parse_catalog(&body[..cl]);
+                }
+            } else if body.len() > MAX_BODY_BYTES {
+                return None;
+            }
+        }
     }
-    let sep = raw.windows(4).position(|w| w == b"\r\n\r\n")?;
-    let header_str = std::str::from_utf8(&raw[..sep]).ok()?;
-    let status_line = header_str.lines().next()?;
-    let status_code: u16 = status_line.split_whitespace().nth(1)?.parse().ok()?;
-    if status_code != 200 {
-        return None;
-    }
+
+    let sep = header_end?;
     let body = &raw[sep + 4..];
-    if body.len() > 8192 {
-        return None;
+    if is_chunked {
+        match decode_chunked_body(body, MAX_BODY_BYTES) {
+            ChunkedStatus::Complete(decoded) => parse_catalog(&decoded),
+            ChunkedStatus::Incomplete | ChunkedStatus::Invalid => None,
+        }
+    } else if let Some(cl) = content_length {
+        if body.len() < cl {
+            return None;
+        }
+        parse_catalog(&body[..cl])
+    } else {
+        if body.len() > MAX_BODY_BYTES {
+            return None;
+        }
+        parse_catalog(body)
     }
-    parse_catalog(body)
 }
 
 pub fn discover_sources(
@@ -374,5 +508,81 @@ mod tests {
 
         let bad_str = br#"{"service":"pico-camera","version":1,"session_id":"not-a-num","service_generation":"789","streams":[{"id":"mouth","port":45681,"path":"/stream.mjpg"},{"id":"eye_left","port":45682,"path":"/stream.mjpg"},{"id":"eye_right","port":45683,"path":"/stream.mjpg"}]}"#;
         assert!(parse_catalog(bad_str).is_none());
+    }
+
+    #[test]
+    fn fetch_http_catalog_honors_content_length_without_waiting_for_close() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        let body = r#"{"service":"pico-camera","version":1,"session_id":10,"service_generation":20,"streams":[{"id":"mouth","port":45681,"path":"/stream.mjpg"},{"id":"eye_left","port":45682,"path":"/stream.mjpg"},{"id":"eye_right","port":45683,"path":"/stream.mjpg"}]}"#;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let srv = thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut req_buf = [0u8; 512];
+            let _ = conn.read(&mut req_buf);
+            let _ = conn.write_all(resp.as_bytes());
+            // Intentionally keep socket open to verify client stops as soon as Content-Length is met.
+            thread::sleep(Duration::from_millis(800));
+        });
+
+        let t0 = Instant::now();
+        let cat = fetch_http_cameras_catalog("127.0.0.1", port, Duration::from_secs(2))
+            .expect("catalog should parse");
+        assert!(
+            t0.elapsed() < Duration::from_millis(500),
+            "should not stall waiting for EOF when Content-Length is satisfied"
+        );
+        assert_eq!(cat.session_id, 10);
+        assert_eq!(cat.service_generation, 20);
+        let _ = srv.join();
+    }
+
+    #[test]
+    fn fetch_http_catalog_decodes_chunked_transfer_encoding() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        let body = br#"{"service":"pico-camera","version":1,"session_id":"100","service_generation":"200","streams":[{"id":"mouth","port":45681,"path":"/stream.mjpg"},{"id":"eye_left","port":45682,"path":"/stream.mjpg"},{"id":"eye_right","port":45683,"path":"/stream.mjpg"}]}"#;
+        let split = body.len() / 2;
+        let mut resp = Vec::new();
+        resp.extend_from_slice(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+        );
+        resp.extend_from_slice(format!("{:x};ext=1\r\n", split).as_bytes());
+        resp.extend_from_slice(&body[..split]);
+        resp.extend_from_slice(b"\r\n");
+        resp.extend_from_slice(format!("{:x}\r\n", body.len() - split).as_bytes());
+        resp.extend_from_slice(&body[split..]);
+        resp.extend_from_slice(b"\r\n0\r\n\r\n");
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let srv = thread::spawn(move || {
+            let (mut conn, _) = listener.accept().unwrap();
+            let mut req_buf = [0u8; 512];
+            let _ = conn.read(&mut req_buf);
+            for part in resp.chunks(17) {
+                let _ = conn.write_all(part);
+            }
+            thread::sleep(Duration::from_millis(800));
+        });
+
+        let t0 = Instant::now();
+        let cat = fetch_http_cameras_catalog("127.0.0.1", port, Duration::from_secs(2))
+            .expect("chunked catalog should parse");
+        assert!(
+            t0.elapsed() < Duration::from_millis(500),
+            "should return immediately after terminal zero chunk"
+        );
+        assert_eq!(cat.session_id, 100);
+        assert_eq!(cat.service_generation, 200);
+        let _ = srv.join();
     }
 }

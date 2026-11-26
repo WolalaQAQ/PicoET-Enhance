@@ -240,14 +240,25 @@ export function createApp(doc, options = {}) {
       if (p && typeof p.catch === "function") p.catch(() => {});
     } catch {}
   }
+  function isSafeExternalUrl(href) {
+    if (typeof href !== "string") return false;
+    const trimmed = href.trim();
+    if (!/^https:\/\//i.test(trimmed) || trimmed.length <= 8 || trimmed[8] === "/") return false;
+    if (/[\u0000-\u001f\u007f\s"\\]/.test(trimmed)) return false;
+    return true;
+  }
   function wireExternalLink(link, href) {
-    if (!tauriCore?.invoke || !/^https:\/\//i.test(href)) return;
-    link.addEventListener("click", event => {
+    if (!tauriCore?.invoke || !isSafeExternalUrl(href)) return;
+    const open = event => {
       event?.preventDefault?.();
       try {
         const p = tauriCore.invoke("open_external_url", {url: href});
         if (p && typeof p.catch === "function") p.catch(() => {});
       } catch {}
+    };
+    link.addEventListener("click", open);
+    link.addEventListener("auxclick", event => {
+      if (event?.button === 1) open(event);
     });
   }
   const get = id => doc.getElementById(id), state = {
@@ -346,14 +357,29 @@ export function createApp(doc, options = {}) {
     const notesEl = get("update-notes"), linksEl = get("update-links");
     if (info.error) {
       get("update-message").textContent = `${t("updateFailed")} ${info.error}`;
-      notesEl.hidden = true;
-      notesEl.replaceChildren();
-      linksEl.replaceChildren();
+      if (state.updateKey !== "error") {
+        state.updateKey = "error";
+        notesEl.hidden = true;
+        notesEl.replaceChildren();
+        linksEl.replaceChildren();
+      }
       return;
     }
+    const addLink = (href, labelKey, primary = false) => {
+      if (!isSafeExternalUrl(href)) return;
+      const safeHref = href.trim();
+      const link = doc.createElement("a");
+      link.setAttribute("href", safeHref);
+      link.setAttribute("target", "_blank");
+      link.setAttribute("rel", "noopener noreferrer");
+      if (primary) link.setAttribute("class", "primary-link");
+      link.textContent = t(labelKey);
+      wireExternalLink(link, safeHref);
+      linksEl.append(link);
+    };
     if (info.update_available) {
       get("update-message").textContent = `${t("updateAvailable")} v${info.latest_version} (${t("updateCurrent")}: v${info.current_version})`;
-      const key = JSON.stringify([state.language, info.latest_version, info.notes, info.installer_url, info.portable_url, info.module_url, info.release_url]);
+      const key = JSON.stringify(["available", state.language, info.latest_version, info.notes, info.installer_url, info.portable_url, info.module_url, info.release_url]);
       if (key !== state.updateKey) {
         state.updateKey = key;
         notesEl.replaceChildren();
@@ -364,17 +390,6 @@ export function createApp(doc, options = {}) {
         }
         notesEl.hidden = !(info.notes?.length);
         linksEl.replaceChildren();
-        const addLink = (href, labelKey, primary = false) => {
-          if (!href) return;
-          const link = doc.createElement("a");
-          link.setAttribute("href", href);
-          link.setAttribute("target", "_blank");
-          link.setAttribute("rel", "noopener noreferrer");
-          if (primary) link.setAttribute("class", "primary-link");
-          link.textContent = t(labelKey);
-          wireExternalLink(link, href);
-          linksEl.append(link);
-        };
         addLink(info.installer_url, "downloadInstaller", true);
         addLink(info.portable_url, "downloadPortable");
         addLink(info.module_url, "downloadModule");
@@ -383,19 +398,14 @@ export function createApp(doc, options = {}) {
       return;
     }
     get("update-message").textContent = `${t("updateUpToDate")} v${info.current_version}`;
-    notesEl.hidden = true;
-    notesEl.replaceChildren();
-    linksEl.replaceChildren();
-    if (info.release_url) {
-      const link = doc.createElement("a");
-      link.setAttribute("href", info.release_url);
-      link.setAttribute("target", "_blank");
-      link.setAttribute("rel", "noopener noreferrer");
-      link.textContent = t("openReleasePage");
-      wireExternalLink(link, info.release_url);
-      linksEl.append(link);
+    const key = JSON.stringify(["uptodate", state.language, info.release_url]);
+    if (key !== state.updateKey) {
+      state.updateKey = key;
+      notesEl.hidden = true;
+      notesEl.replaceChildren();
+      linksEl.replaceChildren();
+      addLink(info.release_url, "openReleasePage");
     }
-    state.updateKey = "";
   }
 
   function renderPages() {
@@ -558,7 +568,9 @@ export function createApp(doc, options = {}) {
     get("status").textContent = state.stoppedByUser ? t("serviceStopped") :
       t(state.busy || (!state.config && !state.pollError ? "loading" : current.key));
     get("status").setAttribute("data-state", state.stoppedByUser ? "offline" : current.key);
-    get("version-badge").textContent = `v${state.status?.version || "2.6.2"}`;
+    const versionText = state.status?.version ? `v${state.status.version}` : "";
+    get("version-badge").textContent = versionText;
+    get("version-badge").hidden = !versionText;
     get("camera-panel").setAttribute("data-live", String(current.video));
     get("service-state").textContent = t(current.current && !state.stoppedByUser ? "serviceOnline" : "serviceOffline");
     get("service-state").setAttribute("data-online", String(current.current && !state.stoppedByUser));
@@ -853,10 +865,51 @@ export function createApp(doc, options = {}) {
     }
   }
 
-  function previewLoop() {
-    void refreshPreview();
-    if (!state.destroyed) state.previewTimer = timers.setTimeout(previewLoop, 1000 / Math.min(30, Math.max(1, state.config?.preview_fps ?? 10)));
+  function schedulePreview() {
+    if (state.destroyed || doc.hidden || state.previewTimer != null) return;
+    const delay = 1000 / Math.min(30, Math.max(1, state.config?.preview_fps ?? 10));
+    state.previewTimer = timers.setTimeout(previewLoop, delay);
   }
+
+  function previewLoop() {
+    state.previewTimer = null;
+    if (state.destroyed || doc.hidden) return;
+    void refreshPreview();
+    schedulePreview();
+  }
+
+  function startStatusInterval() {
+    if (state.destroyed || doc.hidden || state.interval != null) return;
+    state.interval = timers.setInterval(() => {
+      if (doc.hidden || state.destroyed) return;
+      render();
+      void pollStatus();
+    }, 500);
+  }
+
+  function pauseBackgroundLoops() {
+    if (state.interval != null) {
+      timers.clearInterval(state.interval);
+      state.interval = null;
+    }
+    if (state.previewTimer != null) {
+      timers.clearTimeout(state.previewTimer);
+      state.previewTimer = null;
+    }
+    state.previewAbort?.abort();
+  }
+
+  const onVisibilityChange = () => {
+    if (state.destroyed) return;
+    if (doc.hidden) {
+      pauseBackgroundLoops();
+    } else {
+      startStatusInterval();
+      void pollStatus();
+      previewLoop();
+    }
+  };
+  doc.addEventListener?.("visibilitychange", onVisibilityChange);
 
   function setLanguage(language) {
     if (!Object.hasOwn(messages, language)) return;
@@ -925,8 +978,10 @@ export function createApp(doc, options = {}) {
     render();
     await pollStatus();
     if (!state.destroyed) {
-      state.interval = timers.setInterval(() => { render(); void pollStatus(); }, 500);
-      previewLoop();
+      if (!doc.hidden) {
+        startStatusInterval();
+        previewLoop();
+      }
       void checkUpdates(false);
       await discover();
     }
@@ -936,8 +991,8 @@ export function createApp(doc, options = {}) {
     state.destroyed = true;
     state.generation++;
     navigation?.removeEventListener("hashchange", hashChanged);
-    timers.clearInterval(state.interval);
-    timers.clearTimeout(state.previewTimer);
+    doc.removeEventListener?.("visibilitychange", onVisibilityChange);
+    pauseBackgroundLoops();
     clearPreview();
   }
 

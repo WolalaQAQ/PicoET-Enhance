@@ -14,7 +14,6 @@ use std::net::{Shutdown, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const CAMERAS: [&str; 3] = ["mouth", "eye_left", "eye_right"];
@@ -65,9 +64,9 @@ pub struct StartRequest {
     pub mode: Option<String>,
     pub camera: Option<String>,
     pub headset_host: Option<String>,
-    pub headset_port: Option<u16>,
-    pub eye_left_port: Option<u16>,
-    pub eye_right_port: Option<u16>,
+    pub headset_port: Option<Value>,
+    pub eye_left_port: Option<Value>,
+    pub eye_right_port: Option<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -138,12 +137,13 @@ struct RuntimeState {
 struct RuntimeInner {
     config_path: PathBuf,
     source_directory: String,
+    config_write_lock: Mutex<()>,
     state: Mutex<RuntimeState>,
     frame_cond: Condvar,
     clock_state: Mutex<bool>,
     clock_cond: Condvar,
     stop_flag: AtomicBool,
-    threads: Mutex<Vec<JoinHandle<()>>>,
+    threads: Mutex<Vec<wire::BoundedThread>>,
 }
 
 pub struct Runtime {
@@ -192,14 +192,6 @@ fn parse_port_value(value: &Value, name: &str) -> Result<u16, String> {
             }
         }
         _ => Err(err()),
-    }
-}
-
-fn validate_port_u16(value: u16, name: &str) -> Result<u16, String> {
-    if value == 0 {
-        Err(format!("{name} must be an integer in 1..65535"))
-    } else {
-        Ok(value)
     }
 }
 
@@ -329,7 +321,7 @@ impl RuntimeInner {
             state.last_header = None;
         }
         state.counts.received += 1;
-        state.counts.source_gaps += gaps;
+        state.counts.source_gaps = state.counts.source_gaps.saturating_add(gaps);
         if state.received_times.len() >= 900 {
             state.received_times.pop_front();
         }
@@ -687,19 +679,32 @@ impl RuntimeInner {
                     match encode_raw_gray_jpeg90(&pending.payload) {
                         Ok(bytes) => bytes,
                         Err(err_msg) => {
-                            let mut state = self.state.lock().unwrap();
-                            state.counts.decode_errors += 1;
-                            state.last_error = Some(format!("DecodeError: {err_msg}"));
-                            state.running = false;
-                            state.connected = false;
-                            state.mode = "idle".to_string();
-                            state.config.enabled = false;
-                            self.stop_flag.store(true, Ordering::SeqCst);
-                            drop(state);
-                            self.wake_clock_thread();
-                            self.interrupt_active_socket();
-                            self.frame_cond.notify_all();
-                            break;
+                            let mut fatal = false;
+                            {
+                                let mut state = self.state.lock().unwrap();
+                                if self.stop_flag.load(Ordering::Relaxed)
+                                    || state.order.session != Some(pending.header.session_id)
+                                    || preview_version != state.model_version
+                                {
+                                    state.counts.superseded += 1;
+                                } else {
+                                    state.counts.decode_errors += 1;
+                                    state.last_error = Some(format!("DecodeError: {err_msg}"));
+                                    state.running = false;
+                                    state.connected = false;
+                                    state.mode = "idle".to_string();
+                                    state.config.enabled = false;
+                                    fatal = true;
+                                }
+                            }
+                            if fatal {
+                                self.stop_flag.store(true, Ordering::SeqCst);
+                                self.wake_clock_thread();
+                                self.interrupt_active_socket();
+                                self.frame_cond.notify_all();
+                                break;
+                            }
+                            continue;
                         }
                     }
                 } else {
@@ -811,6 +816,7 @@ impl Runtime {
             inner: Arc::new(RuntimeInner {
                 config_path,
                 source_directory,
+                config_write_lock: Mutex::new(()),
                 state: Mutex::new(state),
                 frame_cond: Condvar::new(),
                 clock_state: Mutex::new(false),
@@ -843,6 +849,8 @@ impl Runtime {
             unknown.sort();
             return Err(format!("Unknown configuration fields: {}", unknown.join(", ")));
         }
+
+        let _cfg_guard = self.inner.config_write_lock.lock().unwrap();
 
         let (current_cfg, was_running) = {
             let state = self.inner.state.lock().unwrap();
@@ -891,11 +899,13 @@ impl Runtime {
             updated.enabled = false;
         }
 
-        let mut state = self.inner.state.lock().unwrap();
-        state.config = updated.clone();
-        state.last_error = None;
-
-        let mut saved_map = state.preserved_extra.clone();
+        // Snapshot preserved_extra under short lock, then perform blocking atomic disk write
+        // unlocked so 90Hz streaming and status()/preview_jpeg() never stall, and commit
+        // in-memory config only if the disk write succeeds.
+        let mut saved_map = {
+            let state = self.inner.state.lock().unwrap();
+            state.preserved_extra.clone()
+        };
         if let Value::Object(cfg_obj) = serde_json::to_value(&updated).map_err(|e| e.to_string())? {
             for (k, v) in cfg_obj {
                 saved_map.insert(k, v);
@@ -904,6 +914,10 @@ impl Runtime {
         let serialized =
             serde_json::to_string_pretty(&Value::Object(saved_map)).map_err(|e| e.to_string())?;
         write_text_atomic(&self.inner.config_path, &serialized).map_err(|e| e.to_string())?;
+
+        let mut state = self.inner.state.lock().unwrap();
+        state.config = updated.clone();
+        state.last_error = None;
 
         Ok(updated)
     }
@@ -915,7 +929,7 @@ impl Runtime {
         }
 
         let target = {
-            let mut state = self.inner.state.lock().unwrap();
+            let state = self.inner.state.lock().unwrap();
             if state.running {
                 return Err("Runtime is already running".to_string());
             }
@@ -936,18 +950,17 @@ impl Runtime {
                 return Err("Enter the headset address before starting live input".to_string());
             }
             let headset_port = match req.headset_port {
-                Some(p) => validate_port_u16(p, "headset_port")?,
+                Some(ref v) => parse_port_value(v, "headset_port")?,
                 None => state.config.headset_port,
             };
             let eye_left_port = match req.eye_left_port {
-                Some(p) => validate_port_u16(p, "eye_left_port")?,
+                Some(ref v) => parse_port_value(v, "eye_left_port")?,
                 None => state.config.eye_left_port,
             };
             let eye_right_port = match req.eye_right_port {
-                Some(p) => validate_port_u16(p, "eye_right_port")?,
+                Some(ref v) => parse_port_value(v, "eye_right_port")?,
                 None => state.config.eye_right_port,
             };
-            state.config.preview_camera = selected_camera.clone();
             SessionTarget {
                 headset_host: host,
                 headset_port,
@@ -959,20 +972,25 @@ impl Runtime {
 
         // Ensure any previously exited worker threads are joined cleanly.
         self.stop()?;
+        let generation = self.inner.state.lock().unwrap().lifecycle;
 
         {
             let mut threads = self.inner.threads.lock().unwrap();
-            let generation = self.inner.state.lock().unwrap().lifecycle;
             {
                 let mut clock_req = self.inner.clock_state.lock().unwrap();
                 *clock_req = false;
             }
-            {
+            let prev_camera = {
                 let mut state = self.inner.state.lock().unwrap();
                 if generation != state.lifecycle {
                     return Err("Startup was cancelled by stop/shutdown".to_string());
                 }
+                if state.running {
+                    return Err("Runtime is already running".to_string());
+                }
+                let prev_camera = state.config.preview_camera.clone();
                 self.inner.stop_flag.store(false, Ordering::SeqCst);
+                state.config.preview_camera = target.preview_camera.clone();
                 state.session_target = Some(target);
                 state.running = true;
                 state.connected = false;
@@ -992,28 +1010,63 @@ impl Runtime {
                 state.last_preview_ns = 0;
                 state.counts = MetricsCounts::default();
                 state.active_socket = None;
-            }
+                prev_camera
+            };
 
             let inner_decode = Arc::clone(&self.inner);
             let inner_recv = Arc::clone(&self.inner);
             let inner_clock = Arc::clone(&self.inner);
 
-            let t_decode = thread::Builder::new()
-                .name("camera-preview".to_string())
-                .spawn(move || inner_decode.decode_worker_loop())
+            let mut spawned = Vec::with_capacity(3);
+            let spawn_res: Result<(), String> = (|| {
+                let t_decode = wire::spawn_bounded("camera-preview", move || {
+                    inner_decode.decode_worker_loop()
+                })
                 .map_err(|e| e.to_string())?;
-            let t_recv = thread::Builder::new()
-                .name("camera-source".to_string())
-                .spawn(move || inner_recv.receive_loop())
-                .map_err(|e| e.to_string())?;
-            let t_clock = thread::Builder::new()
-                .name("camera-clock".to_string())
-                .spawn(move || inner_clock.clock_refresh_loop())
-                .map_err(|e| e.to_string())?;
+                spawned.push(t_decode);
 
-            threads.push(t_decode);
-            threads.push(t_recv);
-            threads.push(t_clock);
+                let t_recv =
+                    wire::spawn_bounded("camera-source", move || inner_recv.receive_loop())
+                        .map_err(|e| e.to_string())?;
+                spawned.push(t_recv);
+
+                let t_clock =
+                    wire::spawn_bounded("camera-clock", move || inner_clock.clock_refresh_loop())
+                        .map_err(|e| e.to_string())?;
+                spawned.push(t_clock);
+                Ok(())
+            })();
+
+            if let Err(err) = spawn_res {
+                self.inner.stop_flag.store(true, Ordering::SeqCst);
+                self.inner.wake_clock_thread();
+                let sock = {
+                    let mut state = self.inner.state.lock().unwrap();
+                    state.model_version += 1;
+                    state.pending = None;
+                    state.preview = None;
+                    let sock = state.active_socket.take();
+                    self.inner.frame_cond.notify_all();
+                    sock
+                };
+                if let Some(s) = sock {
+                    let _ = s.shutdown(Shutdown::Both);
+                }
+                wire::join_all_bounded(spawned, Duration::from_secs(5));
+                let mut state = self.inner.state.lock().unwrap();
+                state.active_socket = None;
+                state.running = false;
+                state.connected = false;
+                state.mode = "idle".to_string();
+                state.config.enabled = false;
+                state.config.preview_camera = prev_camera;
+                state.session_target = None;
+                state.pending = None;
+                state.preview = None;
+                return Err(err);
+            }
+
+            threads.extend(spawned);
         }
 
         Ok(self.status())
@@ -1040,12 +1093,7 @@ impl Runtime {
             let mut guard = self.inner.threads.lock().unwrap();
             std::mem::take(&mut *guard)
         };
-        let current_id = thread::current().id();
-        for handle in handles {
-            if handle.thread().id() != current_id {
-                let _ = handle.join();
-            }
-        }
+        wire::join_all_bounded(handles, Duration::from_secs(5));
 
         let mut state = self.inner.state.lock().unwrap();
         state.active_socket = None;
@@ -1143,6 +1191,7 @@ mod tests {
     use super::*;
     use std::io::Read;
     use std::net::TcpListener;
+    use std::thread::{self, JoinHandle};
 
     fn make_header(seq: u64, session_id: u64, flags: u32, payload_bytes: u32) -> FrameHeader {
         let now = wire::monotonic_ns().max(0) as u64;
@@ -1349,9 +1398,9 @@ mod tests {
                 mode: Some("capture".into()),
                 camera: Some("mouth".into()),
                 headset_host: Some("127.0.0.1".into()),
-                headset_port: Some(mouth.port),
+                headset_port: Some(json!(mouth.port)),
                 eye_left_port: None,
-                eye_right_port: Some(eye_r.port),
+                eye_right_port: Some(json!(eye_r.port)),
             })
             .unwrap();
         assert_eq!(st_eph["running"], true);
@@ -1456,7 +1505,7 @@ mod tests {
         rt.start(StartRequest {
             mode: Some("capture".into()),
             headset_host: Some("127.0.0.1".into()),
-            headset_port: Some(port),
+            headset_port: Some(json!(port)),
             ..Default::default()
         })
         .unwrap();
@@ -1478,7 +1527,7 @@ mod tests {
         rt.start(StartRequest {
             mode: Some("capture".into()),
             headset_host: Some("198.51.100.1".into()),
-            headset_port: Some(45681),
+            headset_port: Some(json!(45681)),
             ..Default::default()
         })
         .unwrap();
@@ -1487,5 +1536,49 @@ mod tests {
         rt.stop().unwrap();
         assert!(t0.elapsed() < Duration::from_secs(2));
         assert_eq!(rt.status()["running"], false);
+    }
+
+    #[test]
+    fn start_request_validates_ports_and_preserves_preview_camera_on_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = Runtime::new(dir.path().join("config.json"));
+        assert_eq!(rt.config().preview_camera, "mouth");
+
+        let req: StartRequest = serde_json::from_value(json!({
+            "mode": "capture",
+            "camera": "eye_left",
+            "headset_host": "127.0.0.1",
+            "headset_port": 70000
+        }))
+        .unwrap();
+        let err = rt.start(req).unwrap_err();
+        assert_eq!(err, "headset_port must be an integer in 1..65535");
+        assert_eq!(
+            rt.config().preview_camera,
+            "mouth",
+            "failed start must not mutate preview_camera"
+        );
+
+        let req_zero: StartRequest = serde_json::from_value(json!({
+            "headset_host": "127.0.0.1",
+            "eye_right_port": 0
+        }))
+        .unwrap();
+        assert_eq!(
+            rt.start(req_zero).unwrap_err(),
+            "eye_right_port must be an integer in 1..65535"
+        );
+    }
+
+    #[test]
+    fn failed_configure_disk_write_does_not_mutate_in_memory_config() {
+        let dir = tempfile::tempdir().unwrap();
+        // Passing a directory as config_path forces write_text_atomic to fail.
+        let rt = Runtime::new(dir.path().to_path_buf());
+        let before = rt.config();
+        assert!(rt
+            .configure(json!({"headset_host": "127.0.0.1", "preview_fps": 25}))
+            .is_err());
+        assert_eq!(rt.config(), before);
     }
 }

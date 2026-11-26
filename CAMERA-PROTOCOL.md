@@ -69,11 +69,11 @@ Send the exact ASCII datagram `PICO_CAMERA_DISCOVER_V1\n` to **UDP 45681** via b
 
 `GET /cameras` and `GET /` on any of the three TCP ports return the same JSON catalog (`200 OK`, `Cache-Control: no-store`, `Connection: close`). When the daemon is not attached to a verified service instance, it returns `503 Service Unavailable`. Unrecognized paths return `404 Not Found`.
 
-The bundled Python discovery helper probes every local IPv4 interface (so it works even when the PC's default route points to a VPN) and cross-checks both HTTP `/cameras` and TCP `CONTEXT`:
+The bundled Python discovery helper probes every local IPv4 interface (so it works even when the PC's default route points to a VPN) and cross-checks both HTTP `/cameras` and TCP `CONTEXT` (PC Studio's native Rust implementation lives in `pc-studio/src-tauri/src/discovery.rs`):
 
 ```powershell
-python pc-studio/discovery.py --cameras
-python pc-studio/discovery.py --cameras --host <headset-ip>
+python camera-source/checks/protocol_client.py --cameras
+python camera-source/checks/protocol_client.py --cameras --host <headset-ip>
 ```
 
 ### TCP Control Commands (`CONTEXT` & `PING`)
@@ -182,7 +182,7 @@ Both result side channels are **opt-in** under **LAN broadcast → Result sharin
 - Each side channel allows at most **1** concurrent subscriber. Duplicate or refused connections close immediately with EOF.
 - Disabling a result toggle closes the active result subscriber with EOF (no `END` frame) without interrupting camera image feeds or PicoFacialBridge.
 - PC Studio's camera preview and Cymple eye relay subscribe only to image streams and never open `LABELS` or `EYES`.
-- Reference Python decoders live in `pc-studio/stock.py` (`read_stock` and `read_eye`).
+- Reference Python decoders live in `camera-source/checks/protocol_client.py` (`read_capture_context`, `read_stock`, and `read_eye`); PC Studio's native Rust protocol implementations live in `pc-studio/src-tauri/src/wire.rs`, `pc-studio/src-tauri/src/stock.rs`, and `pc-studio/src-tauri/src/discovery.rs`.
 
 ### Mouth Results (`PSL1` via `LABELS\n`)
 

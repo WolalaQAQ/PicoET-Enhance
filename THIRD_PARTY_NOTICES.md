@@ -178,7 +178,7 @@ portions embedded by compilation. See the [LLVM license](https://llvm.org/LICENS
 and the fixed NDK's `NOTICE.toolchain` for its license and exception text. No NDK
 tool executables are distributed in the module.
 
-## LAN camera JPEG daemon and PC Studio dependencies
+## LAN camera JPEG daemon
 
 The optional JPEG daemon links the libjpeg API from
 [libjpeg-turbo 3.1.2](https://github.com/libjpeg-turbo/libjpeg-turbo/tree/3.1.2).
@@ -192,10 +192,72 @@ includes both in `licenses/libjpeg-turbo/`. Keep those notices and this
 attribution when distributing a linked daemon. ShadowHook and the Android C++
 runtime use the existing notices above.
 
-The PC Studio web companion (`pc-studio/`) uses Pillow (MIT-CMU / HPND license);
-release packages bundle Python, Pillow and OpenSSL via PyInstaller and build the
-Windows installer with Inno Setup 6. No third-party Python package or wheel is
-committed to this repository.
+## PC Studio (Rust, Tauri v2, WebView2, Inno Setup 6)
+
+The Windows PC Studio companion (`pc-studio/src-tauri/`) is compiled from Rust
+with Tauri v2 into a standalone executable (`PicoET-PC-Studio.exe`). No
+third-party binaries or prebuilt runtime packages are committed to this
+repository; exact crate versions and checksums are pinned in
+`pc-studio/src-tauri/Cargo.lock` and can be inspected with
+`cargo metadata --locked --filter-platform x86_64-pc-windows-msvc --manifest-path pc-studio/src-tauri/Cargo.toml`.
+
+### MPL-2.0 Rust crates (source availability notice)
+
+`PicoET-PC-Studio.exe` statically links the following unmodified third-party
+Rust crates licensed under the **Mozilla Public License, v. 2.0 (MPL-2.0)**
+(transitive dependencies of `tauri`):
+
+- `option-ext` (`0.2.0`) — <https://github.com/soc/option-ext>
+- `cssparser` (`0.37.0`) — <https://github.com/servo/rust-cssparser>
+- `cssparser-macros` (`0.7.1`) — <https://github.com/servo/rust-cssparser>
+- `dtoa-short` (`0.3.5`) — <https://github.com/upsuper/dtoa-short>
+- `selectors` (`0.38.0`) — <https://github.com/servo/stylo>
+
+These components are subject to the terms of the Mozilla Public License, v. 2.0
+(<https://www.mozilla.org/en-US/MPL/2.0/>) and are combined with this
+MIT-licensed Larger Work under MPL-2.0 Section 3.3. Their unmodified Source Code
+Form is publicly available from [crates.io](https://crates.io/) and the upstream
+repositories listed above at the exact versions pinned in
+`pc-studio/src-tauri/Cargo.lock`.
+
+### Permissive Rust crates
+
+The remaining statically linked Rust dependencies in
+`pc-studio/src-tauri/Cargo.lock` are licensed under permissive open-source
+licenses:
+
+- **Apache-2.0 / MIT** (single- or dual-licensed, including `tauri`,
+  `tauri-plugin-single-instance`, `tao` [Apache-2.0], `wry`, `webview2-com`
+  [MIT], `reqwest`, `schannel` [MIT], `image`, `serde`, `serde_json`, `socket2`,
+  `windows-sys`, `dpi`, `sync_wrapper` [Apache-2.0], and their transitive
+  dependencies). The Apache License 2.0 text is available at
+  <https://www.apache.org/licenses/LICENSE-2.0>.
+- **BSD-3-Clause** (single- or dual-licensed with MIT / Apache-2.0): `brotli`,
+  `brotli-decompressor`, `alloc-stdlib`, `alloc-no-stdlib`, `moxcms`, `pxfm`,
+  `if-addrs`.
+- **Zlib** (single- or dual-licensed with MIT / Apache-2.0): `zune-jpeg`,
+  `zune-core`, `zlib-rs`, `foldhash`, `miniz_oxide`, `bytemuck`, `tinyvec`.
+- **Unicode-3.0**: ICU4X / Unicode data crates (`icu_collections`,
+  `icu_locale_core`, `icu_normalizer`, `icu_properties`, `icu_provider`,
+  `zerovec`, `zerotrie`, `yoke`, `zerofrom`, `litemap`, `tinystr`, `writeable`,
+  `potential_utf`) and `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`).
+- **Unlicense / 0BSD / CC0-1.0 / BSL-1.0** (dual-licensed with MIT or
+  Apache-2.0): `memchr`, `aho-corasick`, `byteorder`, `jiff`, `walkdir`,
+  `adler2`, `dunce`, `ryu`.
+
+### Microsoft Edge WebView2 Runtime
+
+`PicoET-PC-Studio.exe` statically links the MIT-licensed `webview2-com` bindings
+and hosts its UI via the system-installed **Microsoft Edge WebView2 Runtime**
+(Evergreen). Microsoft Edge WebView2 Runtime is proprietary software owned by
+Microsoft Corporation and is not redistributed by this project.
+
+### Inno Setup 6
+
+The Windows installer (`PicoET-PC-Studio-Setup-v<version>.exe`) is packaged
+with **Inno Setup 6** (Copyright (C) Jordan Russell & Martijn Laan), licensed
+under the [Inno Setup License](https://jrsoftware.org/files/is/license.txt)
+(modified BSD-style license).
 
 ## PICO system software
 

@@ -26,7 +26,7 @@ def find_cargo():
 def main():
     cargo = find_cargo()
     subprocess.run(
-        [cargo, 'test', '--manifest-path', str(TAURI_DIR / 'Cargo.toml')],
+        [cargo, 'test', '--locked', '--manifest-path', str(TAURI_DIR / 'Cargo.toml')],
         cwd=TAURI_DIR,
         check=True,
     )

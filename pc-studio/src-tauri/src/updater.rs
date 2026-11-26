@@ -22,13 +22,25 @@ pub fn parse_version(text: &str) -> Option<ParsedVersion> {
         .or_else(|| trimmed.strip_prefix('V'))
         .unwrap_or(trimmed);
     let (core, suffix) = match stripped.split_once('-') {
-        Some((c, s)) => (c, s.trim().to_string()),
+        Some((c, s)) => {
+            let trimmed_suffix = s.trim();
+            if trimmed_suffix.is_empty() {
+                return None;
+            }
+            (c, trimmed_suffix.to_string())
+        }
         None => (stripped, String::new()),
     };
+    let parse_digits = |part: &str| -> Option<u64> {
+        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        part.parse::<u64>().ok()
+    };
     let mut parts = core.split('.');
-    let major: u64 = parts.next()?.parse().ok()?;
-    let minor: u64 = parts.next()?.parse().ok()?;
-    let patch: u64 = parts.next()?.parse().ok()?;
+    let major = parse_digits(parts.next()?)?;
+    let minor = parse_digits(parts.next()?)?;
+    let patch = parse_digits(parts.next()?)?;
     if parts.next().is_some() {
         return None;
     }
@@ -80,27 +92,36 @@ pub struct ClassifiedAssets {
     pub module_url: String,
 }
 
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    T: Default + Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ReleaseAsset {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub browser_download_url: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct GithubReleasePayload {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     tag_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     html_url: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     published_at: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     body: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     assets: Vec<ReleaseAsset>,
 }
 
@@ -345,5 +366,60 @@ mod tests {
         assert_eq!(got.installer_url, "https://example.com/setup.exe");
         assert_eq!(got.portable_url, "https://example.com/portable.zip");
         assert_eq!(got.module_url, "https://example.com/module.zip");
+    }
+
+    #[test]
+    fn parse_version_rejects_empty_suffix_and_signed_digits() {
+        assert!(parse_version("2.6.2-").is_none());
+        assert!(parse_version("2.6.2-   ").is_none());
+        assert!(parse_version("+2.6.2").is_none());
+        assert!(parse_version("v+2.6.2").is_none());
+        assert!(parse_version("2.+6.2").is_none());
+        assert!(parse_version("2.6.+2").is_none());
+        assert!(parse_version("-2.6.2").is_none());
+        assert!(parse_version("2.6").is_none());
+        assert!(parse_version("2.6.2.0").is_none());
+
+        let parsed = parse_version("V2.6.2-rc.1").unwrap();
+        assert_eq!(parsed.nums, (2, 6, 2));
+        assert!(!parsed.is_stable);
+        assert_eq!(parsed.suffix, "rc.1");
+    }
+
+    #[test]
+    fn github_release_payload_accepts_null_fields() {
+        let all_null = r#"{
+            "tag_name": null,
+            "name": null,
+            "html_url": null,
+            "published_at": null,
+            "body": null,
+            "assets": null
+        }"#;
+        let payload: GithubReleasePayload = serde_json::from_str(all_null).unwrap();
+        assert_eq!(payload.tag_name, "");
+        assert_eq!(payload.name, "");
+        assert_eq!(payload.html_url, "");
+        assert_eq!(payload.published_at, "");
+        assert_eq!(payload.body, "");
+        assert!(payload.assets.is_empty());
+
+        let mixed = r#"{
+            "tag_name": "v2.7.0",
+            "name": null,
+            "html_url": "https://github.com/WolalaQAQ/PicoET-Enhance/releases/tag/v2.7.0",
+            "published_at": null,
+            "body": null,
+            "assets": [
+                {"name": null, "browser_download_url": null},
+                {"name": "PicoET-PC-Studio-Setup-v2.7.0.exe", "browser_download_url": "https://example.com/setup.exe"}
+            ]
+        }"#;
+        let payload: GithubReleasePayload = serde_json::from_str(mixed).unwrap();
+        assert_eq!(payload.tag_name, "v2.7.0");
+        assert_eq!(payload.body, "");
+        assert_eq!(payload.assets.len(), 2);
+        let classified = classify_assets(&payload.assets);
+        assert_eq!(classified.installer_url, "https://example.com/setup.exe");
     }
 }

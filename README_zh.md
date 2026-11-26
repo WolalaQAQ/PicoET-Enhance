@@ -120,22 +120,22 @@ PICO 原厂固件在表情神经网络输出之后内置了多层后处理（眉
 
 ## PC Studio
 
-[`pc-studio`](pc-studio) 是配套的 Windows 桌面工具，用于局域网实时预览头显相机并将双眼画面转发给 **Cymple**。
+[`pc-studio`](pc-studio) 是原生 Windows 桌面工具（Rust + Tauri v2 单文件可执行程序），用于局域网实时预览头显相机并将双眼画面转发给 **Cymple**。运行环境需 **Windows 10/11（x64）** 与 **Microsoft Edge WebView2 Runtime**（Windows 11 与大多数已更新的 Windows 10 默认内置；LTSC 或精简系统如缺失可从微软官网下载）。
 
-- **安装程序（推荐）**：从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载 `PicoET-PC-Studio-Setup-v2.6.2.exe`。默认装至 `%LOCALAPPDATA%\Programs\PicoET PC Studio`（无需管理员权限），创建开始菜单快捷方式并以 Edge / Chrome 独立应用窗口打开。
-- **绿色便携包**：解压 `picoet-pc-studio-v2.6.2.zip` 后直接运行 `PicoET-PC-Studio.exe`。
-- **源码运行**（需 Python 3 与 Pillow）：
+- **安装程序（推荐）**：从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载 `PicoET-PC-Studio-Setup-v2.6.2.exe`。默认装至 `%LOCALAPPDATA%\Programs\PicoET PC Studio`（无需管理员权限），并创建开始菜单快捷方式。
+- **绿色便携包**：解压 `picoet-pc-studio-v2.6.2.zip` 后直接运行 `PicoET-PC-Studio.exe`。便携版配置保存在程序同级的 `user-data/` 目录（安装版保存在 `%LOCALAPPDATA%\PicoET-PC-Studio\user-data\`）。
+- **源码运行**（需 Rust `>= 1.90`、MSVC Build Tools 与 Edge WebView2 Runtime）：
 
   ```powershell
-  pip install -r pc-studio/requirements.txt
-  pc-studio\start.cmd          # 自动打开 http://127.0.0.1:8787
+  cargo run --manifest-path pc-studio/src-tauri/Cargo.toml
   ```
 
 主要功能：
 - 自动发现局域网内的头显（即使 PC 默认路由指向 VPN 也能发现），或手动输入地址。
 - 切换实时预览嘴部、左眼、右眼画面，并直接复制各路 MJPEG 地址供 VLC、FFmpeg、OBS 或自研脚本使用。
 - **Cymple 眼部转发**：将左右眼 `PTJ1` 画面转发至 Cymple 原生 UDP 入口（`127.0.0.1:23303`），支持自定义端口及每只眼睛独立的旋转与镜像。
-- 内置 GitHub Releases 更新检查（直达新版 PC Studio 与头显模块下载链接）以及一键停止后台服务的退出按钮。
+- **系统托盘与完整退出**：关闭主窗口时最小化到 Windows 系统托盘，保持眼部转发在后台运行；通过托盘右键菜单或应用内 **退出** 按钮即可停止转发并完整退出。
+- 内置 GitHub Releases 更新检查（直达新版 PC Studio 与头显模块下载链接）。
 
 ## 关闭与卸载
 
@@ -275,7 +275,9 @@ sh "$MOD/picoet.sh" reload-processing
 
 ## 从源码构建
 
-构建依赖：**Python 3**、**JDK 17+**（`JAVA_HOME`）、**Android SDK Platform 35** 与 **Build-Tools 35.0.0**（`ANDROID_HOME`）、**NDK 26.1.10909125** 以及 **CMake 3.22.1 / Ninja**。
+构建依赖：
+- **头显模块**：**Python 3**、**JDK 17+**（`JAVA_HOME`）、**Android SDK Platform 35** 与 **Build-Tools 35.0.0**（`ANDROID_HOME`）、**NDK 26.1.10909125** 以及 **CMake 3.22.1 / Ninja**。
+- **PC Studio**：**Rust / Cargo `>= 1.90`**、**Visual Studio / MSVC Build Tools**（Windows x64）、**Microsoft Edge WebView2 Runtime**、**Node.js**（前端 JS 检查）以及 **Inno Setup 6**（构建 Windows 安装程序）。
 
 ```powershell
 # 1. 构建注入器、hook 载荷、配置工具与面板后台
@@ -294,7 +296,7 @@ pwsh -File build-picoet-enhance.ps1 -Python python
 配套 APK 直接调用 Android SDK 工具编译，不依赖 Gradle 或外部 Android 库。打包阶段会执行 ELF 白名单校验并确认包内不含任何 PICO 二进制。
 
 - **签名**：本地构建默认自动生成并复用开发签名；正式分发请通过 `-PanelKeystore`（或 `PICOET_PANEL_KEYSTORE`）、可选 `-PanelKeyAlias`（默认 `panel`）与 `PICOET_PANEL_PASSWORD` 提供持久签名，升级必须沿用同一签名。推送 `v<版本>` 标签触发 GitHub Actions 发布时，需配置仓库 Secrets `PICOET_PANEL_KEYSTORE_BASE64` 与 `PICOET_PANEL_PASSWORD`。
-- **PC Studio 测试与打包**：执行 `python pc-studio/check.py` 运行单元测试与前端校验；执行 `python pc-studio/package_release.py` 构建独立可执行程序、绿色 ZIP 与 Inno Setup 安装包。
+- **PC Studio 测试与打包**：执行 `python pc-studio/check.py` 运行锁定依赖的 Cargo 单元测试与 Node.js 前端校验；执行 `python pc-studio/package_release.py` 构建独立 Rust / Tauri 可执行程序、绿色 ZIP 与 Inno Setup 6 安装包（加 `--skip-installer` 可仅打包绿色 ZIP）。
 
 ## 后续计划
 
@@ -326,4 +328,4 @@ pwsh -File build-picoet-enhance.ps1 -Python python
 
 ## 许可证
 
-本项目原创代码与脚本采用 [MIT 许可证](LICENSE)。内置的 **ShadowHook 2.0.1** 包含 MIT / BSD 许可依赖，相机传输模块内置 **libjpeg-turbo**，所有第三方声明随 Magisk ZIP 分发并汇总于 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目不包含也不分发任何 PICO 二进制。
+本项目原创代码与脚本采用 [MIT 许可证](LICENSE)。内置的 **ShadowHook 2.0.1** 包含 MIT / BSD 许可依赖，相机传输模块内置 **libjpeg-turbo**，PC Studio 静态链接 Rust / Tauri v2 依赖（包含 MIT、Apache-2.0、BSD、Zlib、Unicode-3.0 与未修改的 MPL-2.0 crates）；所有第三方声明均随 Magisk ZIP 与 PC Studio 安装包一并分发并汇总于 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目不包含也不分发任何 PICO 二进制。

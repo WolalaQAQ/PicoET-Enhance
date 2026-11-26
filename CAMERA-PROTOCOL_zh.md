@@ -69,11 +69,11 @@ flowchart LR
 
 在任意一路 TCP 端口请求 `GET /cameras` 或 `GET /` 均返回同一份 JSON 目录（`200 OK`、`Cache-Control: no-store`、`Connection: close`）。未附加服务时返回 `503 Service Unavailable`，未知路径返回 `404 Not Found`。
 
-仓库自带的 Python 发现工具会遍历本机所有 IPv4 网卡（即使 PC 默认路由指向 VPN 也能工作），并交叉校验 HTTP `/cameras` 与 TCP `CONTEXT`：
+仓库自带的 Python 发现工具会遍历本机所有 IPv4 网卡（即使 PC 默认路由指向 VPN 也能工作），并交叉校验 HTTP `/cameras` 与 TCP `CONTEXT`（PC Studio 的原生 Rust 实现位于 `pc-studio/src-tauri/src/discovery.rs`）：
 
 ```powershell
-python pc-studio/discovery.py --cameras
-python pc-studio/discovery.py --cameras --host <头显地址>
+python camera-source/checks/protocol_client.py --cameras
+python camera-source/checks/protocol_client.py --cameras --host <头显地址>
 ```
 
 ### TCP 控制命令（`CONTEXT` 与 `PING`）
@@ -182,7 +182,7 @@ with urlopen("http://<头显地址>:45681/stream.mjpg", timeout=10) as stream:
 - 每条结果通道同时仅支持 **1** 个订阅者；被拒绝或重复的订阅连接会立即以 EOF 关闭。
 - 关闭对应结果开关会以 EOF 断开当前结果订阅者（不发送 `END` 帧），不会中断图像流或 PicoFacialBridge。
 - PC Studio 的预览与 Cymple 眼部转发仅订阅图像流，从不打开 `LABELS` 或 `EYES`。
-- 参考 Python 解码器位于 `pc-studio/stock.py`（`read_stock` 与 `read_eye`）。
+- 参考 Python 解码器位于 `camera-source/checks/protocol_client.py`（`read_capture_context`、`read_stock` 与 `read_eye`）；PC Studio 的原生 Rust 协议实现位于 `pc-studio/src-tauri/src/wire.rs`、`pc-studio/src-tauri/src/stock.rs` 与 `pc-studio/src-tauri/src/discovery.rs`。
 
 ### 嘴部结果（`LABELS\n` → `PSL1`）
 

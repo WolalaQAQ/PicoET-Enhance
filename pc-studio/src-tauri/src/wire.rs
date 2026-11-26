@@ -3,9 +3,10 @@ use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::collections::HashSet;
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{mpsc, OnceLock};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 pub const HEADER_SIZE: usize = 128;
@@ -227,13 +228,94 @@ impl FrameHeader {
     }
 }
 
+pub(crate) struct BoundedThread {
+    handle: JoinHandle<()>,
+    done_rx: mpsc::Receiver<()>,
+}
+
+pub(crate) fn spawn_bounded<F>(name: &str, f: F) -> io::Result<BoundedThread>
+where
+    F: FnOnce() + Send + 'static,
+{
+    struct DoneGuard(Option<mpsc::Sender<()>>);
+    impl Drop for DoneGuard {
+        fn drop(&mut self) {
+            if let Some(tx) = self.0.take() {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::Builder::new().name(name.to_string()).spawn(move || {
+        let _guard = DoneGuard(Some(tx));
+        f();
+    })?;
+    Ok(BoundedThread {
+        handle,
+        done_rx: rx,
+    })
+}
+
+pub(crate) fn join_all_bounded(workers: Vec<BoundedThread>, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    let current_id = thread::current().id();
+    for worker in workers {
+        if worker.handle.thread().id() == current_id {
+            continue;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match worker.done_rx.recv_timeout(remaining) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = worker.handle.join();
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Bounded wait expired; detach thread so stop()/shutdown cannot hang indefinitely.
+                drop(worker.handle);
+            }
+        }
+    }
+}
+
 pub fn enable_keepalive(stream: &TcpStream, idle_ms: u64, interval_ms: u64) {
     let sock_ref = socket2::SockRef::from(stream);
     let _ = sock_ref.set_keepalive(true);
     let keepalive = TcpKeepalive::new()
         .with_time(Duration::from_millis(idle_ms))
         .with_interval(Duration::from_millis(interval_ms));
+    #[cfg(any(
+        target_os = "android",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "fuchsia",
+        target_os = "illumos",
+        target_os = "ios",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "netbsd",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "cygwin",
+    ))]
+    let keepalive = keepalive.with_retries(5);
     let _ = sock_ref.set_tcp_keepalive(&keepalive);
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Networking::WinSock::{
+            setsockopt, IPPROTO_TCP, SOCKET, TCP_KEEPCNT,
+        };
+        let retries: u32 = 5;
+        unsafe {
+            let _ = setsockopt(
+                stream.as_raw_socket() as SOCKET,
+                IPPROTO_TCP,
+                TCP_KEEPCNT,
+                (&retries as *const u32).cast::<u8>(),
+                std::mem::size_of::<u32>() as i32,
+            );
+        }
+    }
 }
 
 /// Wait for a TCP stream to become readable (or error/hangup) up to `timeout`,
@@ -247,9 +329,7 @@ pub fn poll_readable(
     stop_flag: Option<&AtomicBool>,
 ) -> Result<bool, WireError> {
     use std::os::windows::io::AsRawSocket;
-    use windows_sys::Win32::Networking::WinSock::{
-        WSAPoll, POLLERR, POLLHUP, POLLRDNORM, SOCKET, WSAPOLLFD,
-    };
+    use windows_sys::Win32::Networking::WinSock::{WSAPoll, POLLRDNORM, SOCKET, WSAPOLLFD};
 
     let raw = stream.as_raw_socket() as SOCKET;
     let deadline = Instant::now() + timeout;
@@ -261,7 +341,7 @@ pub fn poll_readable(
         if now >= deadline {
             return Ok(false);
         }
-        let slice_ms = (deadline - now).as_millis().min(100) as i32;
+        let slice_ms = (deadline - now).as_millis().clamp(1, 100) as i32;
         let mut pfd = WSAPOLLFD {
             fd: raw,
             events: POLLRDNORM as i16,
@@ -269,9 +349,6 @@ pub fn poll_readable(
         };
         let rc = unsafe { WSAPoll(&mut pfd, 1, slice_ms) };
         if rc > 0 {
-            if (pfd.revents & (POLLRDNORM as i16 | POLLERR as i16 | POLLHUP as i16)) != 0 {
-                return Ok(true);
-            }
             return Ok(true);
         } else if rc < 0 {
             return Err(WireError::Io(io::Error::last_os_error()));
@@ -451,8 +528,75 @@ impl SourceOrder {
     }
 }
 
-/// Connect to `host:port` with a deadline while polling `stop_flag` so unreachable hosts
-/// can be cancelled within ~50ms.
+/// Resolve `host:port` without blocking cancellation or exceeding `timeout`.
+/// Numeric IP literals bypass DNS completely; hostnames resolve on a detached
+/// helper thread while polling `stop_flag` and `timeout`.
+pub fn resolve_host_cancellable(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+    stop_flag: Option<&AtomicBool>,
+) -> Result<Vec<SocketAddr>, WireError> {
+    if stop_flag.is_some_and(|s| s.load(Ordering::Relaxed)) {
+        return Err(WireError::Cancelled);
+    }
+
+    let trimmed = host.trim();
+    let literal = trimmed
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(trimmed);
+    if let Ok(ip) = literal.parse::<IpAddr>() {
+        return Ok(vec![SocketAddr::new(ip, port)]);
+    }
+
+    let deadline = Instant::now() + timeout;
+    let host_owned = trimmed.to_string();
+    let (tx, rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("dns-resolve".to_string())
+        .spawn(move || {
+            let res = (host_owned.as_str(), port)
+                .to_socket_addrs()
+                .map(|iter| iter.collect::<Vec<SocketAddr>>());
+            let _ = tx.send(res);
+        })?;
+
+    loop {
+        if stop_flag.is_some_and(|s| s.load(Ordering::Relaxed)) {
+            return Err(WireError::Cancelled);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(WireError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out",
+            )));
+        }
+        let slice = (deadline - now).min(Duration::from_millis(50));
+        match rx.recv_timeout(slice) {
+            Ok(Ok(addrs)) => {
+                if addrs.is_empty() {
+                    return Err(WireError::Io(io::Error::new(
+                        io::ErrorKind::AddrNotAvailable,
+                        format!("Unable to resolve {host}:{port}"),
+                    )));
+                }
+                return Ok(addrs);
+            }
+            Ok(Err(err)) => return Err(WireError::Io(err)),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(WireError::Io(io::Error::other(format!(
+                    "Unable to resolve {host}:{port}"
+                ))));
+            }
+        }
+    }
+}
+
+/// Connect to `host:port` with a single shared deadline across DNS resolution and all
+/// resolved addresses while polling `stop_flag` so unreachable hosts cancel within ~50ms.
 pub fn connect_cancellable(
     host: &str,
     port: u16,
@@ -462,19 +606,19 @@ pub fn connect_cancellable(
     if stop_flag.is_some_and(|s| s.load(Ordering::Relaxed)) {
         return Err(WireError::Cancelled);
     }
-    let addrs: Vec<SocketAddr> = (host, port).to_socket_addrs()?.collect();
-    if addrs.is_empty() {
-        return Err(WireError::Io(io::Error::new(
-            io::ErrorKind::AddrNotAvailable,
-            format!("Unable to connect to {host}:{port}"),
-        )));
-    }
+    let deadline = Instant::now() + timeout;
+    let addrs = resolve_host_cancellable(host, port, timeout, stop_flag)?;
     let mut last_err: Option<io::Error> = None;
     for addr in addrs {
         if stop_flag.is_some_and(|s| s.load(Ordering::Relaxed)) {
             return Err(WireError::Cancelled);
         }
-        match connect_one_cancellable(addr, timeout, stop_flag) {
+        if Instant::now() >= deadline {
+            return Err(WireError::Io(last_err.unwrap_or_else(|| {
+                io::Error::new(io::ErrorKind::TimedOut, "timed out")
+            })));
+        }
+        match connect_one_cancellable(addr, deadline, stop_flag) {
             Ok(stream) => return Ok(stream),
             Err(WireError::Cancelled) => return Err(WireError::Cancelled),
             Err(WireError::Io(err)) => last_err = Some(err),
@@ -486,9 +630,16 @@ pub fn connect_cancellable(
     })))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectPoll {
+    Pending,
+    Writable,
+    Failed,
+}
+
 fn connect_one_cancellable(
     addr: SocketAddr,
-    timeout: Duration,
+    deadline: Instant,
     stop_flag: Option<&AtomicBool>,
 ) -> Result<TcpStream, WireError> {
     let domain = if addr.is_ipv4() {
@@ -513,7 +664,6 @@ fn connect_one_cancellable(
         }
     }
 
-    let deadline = Instant::now() + timeout;
     loop {
         if stop_flag.is_some_and(|s| s.load(Ordering::Relaxed)) {
             return Err(WireError::Cancelled);
@@ -526,42 +676,76 @@ fn connect_one_cancellable(
             )));
         }
         let slice = (deadline - now).min(Duration::from_millis(50));
-        if poll_connect_complete(&sock, slice)? {
-            if let Some(err) = sock.take_error()? {
-                return Err(WireError::Io(err));
+        match poll_connect_complete(&sock, slice)? {
+            ConnectPoll::Pending => {}
+            ConnectPoll::Writable => {
+                if let Some(err) = sock.take_error()? {
+                    return Err(WireError::Io(err));
+                }
+                sock.set_nonblocking(false)?;
+                return Ok(TcpStream::from(sock));
             }
-            sock.set_nonblocking(false)?;
-            return Ok(TcpStream::from(sock));
+            ConnectPoll::Failed => {
+                if let Some(err) = sock.take_error()? {
+                    return Err(WireError::Io(err));
+                }
+                return Err(WireError::Io(io::Error::new(
+                    io::ErrorKind::ConnectionRefused,
+                    "Connection failed",
+                )));
+            }
         }
     }
 }
 
 #[cfg(windows)]
-fn poll_connect_complete(sock: &Socket, timeout: Duration) -> Result<bool, WireError> {
+fn poll_connect_complete(sock: &Socket, timeout: Duration) -> Result<ConnectPoll, WireError> {
     use std::os::windows::io::AsRawSocket;
-    use windows_sys::Win32::Networking::WinSock::{
-        WSAPoll, POLLERR, POLLHUP, POLLWRNORM, SOCKET, WSAPOLLFD,
+    use windows_sys::Win32::Networking::WinSock::{select, FD_SET, SOCKET, TIMEVAL};
+
+    let raw = sock.as_raw_socket() as SOCKET;
+    let mut write_fds: FD_SET = unsafe { std::mem::zeroed() };
+    write_fds.fd_count = 1;
+    write_fds.fd_array[0] = raw;
+
+    let mut except_fds: FD_SET = unsafe { std::mem::zeroed() };
+    except_fds.fd_count = 1;
+    except_fds.fd_array[0] = raw;
+
+    let us = timeout.as_micros().max(1000);
+    let tv = TIMEVAL {
+        tv_sec: (us / 1_000_000) as i32,
+        tv_usec: (us % 1_000_000) as i32,
     };
 
-    let mut pfd = WSAPOLLFD {
-        fd: sock.as_raw_socket() as SOCKET,
-        events: POLLWRNORM as i16,
-        revents: 0,
+    let rc = unsafe {
+        select(
+            0,
+            std::ptr::null_mut(),
+            &mut write_fds,
+            &mut except_fds,
+            &tv,
+        )
     };
-    let rc = unsafe { WSAPoll(&mut pfd, 1, timeout.as_millis().max(1) as i32) };
     if rc > 0 {
-        Ok((pfd.revents & (POLLWRNORM as i16 | POLLERR as i16 | POLLHUP as i16)) != 0)
+        if except_fds.fd_count > 0 {
+            Ok(ConnectPoll::Failed)
+        } else if write_fds.fd_count > 0 {
+            Ok(ConnectPoll::Writable)
+        } else {
+            Ok(ConnectPoll::Pending)
+        }
     } else if rc == 0 {
-        Ok(false)
+        Ok(ConnectPoll::Pending)
     } else {
         Err(WireError::Io(io::Error::last_os_error()))
     }
 }
 
 #[cfg(not(windows))]
-fn poll_connect_complete(_sock: &Socket, timeout: Duration) -> Result<bool, WireError> {
+fn poll_connect_complete(_sock: &Socket, timeout: Duration) -> Result<ConnectPoll, WireError> {
     std::thread::sleep(timeout);
-    Ok(true)
+    Ok(ConnectPoll::Writable)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -616,16 +800,22 @@ pub fn sync_clock(
             rtt_ns,
         });
     }
-    let best = samples
-        .iter()
-        .min_by_key(|s| s.rtt_ns)
+    let best = select_best_clock_sample(&samples)
         .ok_or_else(|| WireError::Invalid("No clock sync samples collected".into()))?;
     Ok(ClockCalibration {
         offset_ns: ((best.low_ns + best.high_ns) as f64) / 2.0,
-        uncertainty_ms: ((best.high_ns - best.low_ns) as f64) / 2e6,
+        uncertainty_ms: ((best.high_ns - best.low_ns).max(0) as f64) / 2e6,
         calibrated_pc_ns: best.pc_recv_ns,
         samples,
     })
+}
+
+fn select_best_clock_sample(samples: &[ClockSample]) -> Option<&ClockSample> {
+    samples
+        .iter()
+        .filter(|s| s.rtt_ns >= 0)
+        .min_by_key(|s| s.rtt_ns)
+        .or_else(|| samples.iter().min_by_key(|s| s.rtt_ns.abs()))
 }
 
 #[cfg(test)]
@@ -749,5 +939,87 @@ mod tests {
         let mut client = TcpStream::connect(addr).unwrap();
         let err = read_frame(&mut client, Duration::from_millis(120), None).unwrap_err();
         assert!(matches!(err, WireError::IdleTimeout(_)));
+    }
+
+    #[test]
+    fn resolve_host_cancellable_fast_paths_ip_and_respects_cancel() {
+        let addrs =
+            resolve_host_cancellable("127.0.0.1", 45681, Duration::from_secs(1), None).unwrap();
+        assert_eq!(addrs, vec!["127.0.0.1:45681".parse().unwrap()]);
+
+        let v6 = resolve_host_cancellable("[::1]", 45682, Duration::from_secs(1), None).unwrap();
+        assert_eq!(v6, vec!["[::1]:45682".parse().unwrap()]);
+
+        let cancel = AtomicBool::new(true);
+        let err = resolve_host_cancellable(
+            "nonexistent.invalid",
+            45681,
+            Duration::from_secs(5),
+            Some(&cancel),
+        )
+        .unwrap_err();
+        assert!(matches!(err, WireError::Cancelled));
+    }
+
+    #[test]
+    fn connect_cancellable_reports_refused_immediately() {
+        // Bind and immediately drop a loopback listener to pick a guaranteed-unused port.
+        // Windows TCP loopback retries SYN for ~2s before delivering WSAECONNREFUSED, so
+        // use a 5s timeout and assert ConnectionRefused arrives well before the timeout.
+        let port = {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let t0 = Instant::now();
+        let err = connect_cancellable("127.0.0.1", port, Duration::from_secs(5), None).unwrap_err();
+        assert!(
+            t0.elapsed() < Duration::from_secs(4),
+            "expected ConnectionRefused before 5s timeout, took {:?}",
+            t0.elapsed()
+        );
+        match err {
+            WireError::Io(io_err) => {
+                assert_eq!(io_err.kind(), io::ErrorKind::ConnectionRefused);
+            }
+            other => panic!("expected IO ConnectionRefused error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_clock_prefers_non_negative_rtt_over_corrupted_negative_sample() {
+        let bad = ClockSample {
+            pc_send_ns: 100,
+            device_recv_ns: 1_000,
+            device_send_ns: 5_000,
+            pc_recv_ns: 200,
+            low_ns: 4_800,
+            high_ns: 900,
+            rtt_ns: -3_900,
+        };
+        let good = ClockSample {
+            pc_send_ns: 300,
+            device_recv_ns: 1_350,
+            device_send_ns: 1_360,
+            pc_recv_ns: 400,
+            low_ns: 960,
+            high_ns: 1_050,
+            rtt_ns: 90,
+        };
+        let samples = [bad, good];
+        let picked = select_best_clock_sample(&samples).unwrap();
+        assert_eq!(picked.rtt_ns, 90);
+
+        let all_neg = [
+            ClockSample {
+                rtt_ns: -5_000,
+                ..samples[0].clone()
+            },
+            ClockSample {
+                rtt_ns: -200,
+                ..samples[0].clone()
+            },
+        ];
+        let fallback = select_best_clock_sample(&all_neg).unwrap();
+        assert_eq!(fallback.rtt_ns, -200);
     }
 }

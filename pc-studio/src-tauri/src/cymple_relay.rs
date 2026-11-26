@@ -7,11 +7,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::io::Write;
-use std::net::{Shutdown, TcpStream, ToSocketAddrs, UdpSocket};
+use std::net::{Shutdown, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 pub const CYMPLE_UDP_HOST: &str = "127.0.0.1";
@@ -366,11 +365,12 @@ impl RelayState {
 struct RelayInner {
     config_path: Option<PathBuf>,
     discover: DiscoverFn,
+    config_write_lock: Mutex<()>,
     state: Mutex<RelayState>,
     stop_flag: AtomicBool,
     backoff_lock: Mutex<()>,
     backoff_cond: Condvar,
-    threads: Mutex<Vec<JoinHandle<()>>>,
+    threads: Mutex<Vec<wire::BoundedThread>>,
 }
 
 impl RelayInner {
@@ -444,23 +444,32 @@ impl RelayInner {
         hflip: bool,
         vflip: bool,
     ) {
-        let udp_sock = match UdpSocket::bind("0.0.0.0:0") {
-            Ok(s) => s,
-            Err(err) => {
-                if !self.stop_flag.load(Ordering::Relaxed) {
-                    let mut state = self.state.lock().unwrap();
-                    state.eyes[eye_idx].connected = false;
-                    state.eyes[eye_idx].state = "reconnecting";
-                    state.eyes[eye_idx].error = Some(err.to_string());
-                }
-                return;
-            }
-        };
-
+        let mut udp_sock: Option<UdpSocket> = None;
         let mut seq: u8 = 0;
         let mut backoff_ms: u64 = 500;
 
         while !self.stop_flag.load(Ordering::Relaxed) {
+            if udp_sock.is_none() {
+                match UdpSocket::bind("0.0.0.0:0") {
+                    Ok(s) => udp_sock = Some(s),
+                    Err(err) => {
+                        if self.stop_flag.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        {
+                            let mut state = self.state.lock().unwrap();
+                            let eye = &mut state.eyes[eye_idx];
+                            eye.connected = false;
+                            eye.state = "reconnecting";
+                            eye.error = Some(err.to_string());
+                        }
+                        self.wait_backoff(Duration::from_millis(backoff_ms));
+                        backoff_ms = (backoff_ms * 2).min(5000);
+                        continue;
+                    }
+                }
+            }
+
             let mut wait_after = false;
             {
                 let mut state = self.state.lock().unwrap();
@@ -480,7 +489,7 @@ impl RelayInner {
                 rotate_cw,
                 hflip,
                 vflip,
-                &udp_sock,
+                udp_sock.as_ref().unwrap(),
                 &mut seq,
                 &mut backoff_ms,
                 &mut wait_after,
@@ -530,11 +539,21 @@ impl RelayInner {
         backoff_ms: &mut u64,
         wait_after: &mut bool,
     ) -> Result<(), String> {
-        let dst_addr = (cymple_host, cymple_port)
-            .to_socket_addrs()
-            .map_err(|e| e.to_string())?
-            .find(|a| a.is_ipv4())
-            .ok_or_else(|| format!("Unable to resolve Cymple host {cymple_host}:{cymple_port}"))?;
+        let dst_addr = match wire::resolve_host_cancellable(
+            cymple_host,
+            cymple_port,
+            Duration::from_secs(4),
+            Some(&self.stop_flag),
+        ) {
+            Ok(addrs) => addrs
+                .into_iter()
+                .find(|a| a.is_ipv4())
+                .ok_or_else(|| {
+                    format!("Unable to resolve Cymple host {cymple_host}:{cymple_port}")
+                })?,
+            Err(WireError::Cancelled) => return Ok(()),
+            Err(err) => return Err(err.to_string()),
+        };
 
         let mut tcp_sock = match wire::connect_cancellable(
             src_host,
@@ -672,6 +691,7 @@ impl CympleEyeRelay {
             inner: Arc::new(RelayInner {
                 config_path,
                 discover,
+                config_write_lock: Mutex::new(()),
                 state: Mutex::new(RelayState {
                     config,
                     running: false,
@@ -693,15 +713,27 @@ impl CympleEyeRelay {
     }
 
     pub fn configure(&self, changes: Value) -> Result<Value, String> {
+        let _cfg_guard = self.inner.config_write_lock.lock().unwrap();
+        let updated = {
+            let state = self.inner.state.lock().unwrap();
+            if state.running || state.starting {
+                return Err(
+                    "Stop the Cymple eye relay before changing relay settings".to_string()
+                );
+            }
+            validate_relay_config(&state.config, &changes)?
+        };
+        // Persist unlocked from `state` so status polling never stalls on disk I/O
+        // and disk errors never leave dirty in-memory config.
+        self.inner.save_config(&updated)?;
+
         let mut state = self.inner.state.lock().unwrap();
         if state.running || state.starting {
             return Err("Stop the Cymple eye relay before changing relay settings".to_string());
         }
-        let updated = validate_relay_config(&state.config, &changes)?;
         state.config = updated.clone();
         state.eyes[0].port = updated.left_port;
         state.eyes[1].port = updated.right_port;
-        self.inner.save_config(&updated)?;
         Ok(state.status_snapshot())
     }
 
@@ -724,16 +756,24 @@ impl CympleEyeRelay {
         }
 
         let (updated_cfg, generation) = {
+            let _cfg_guard = self.inner.config_write_lock.lock().unwrap();
+            let updated = {
+                let state = self.inner.state.lock().unwrap();
+                if state.running || state.starting {
+                    return Err("Cymple eye relay is already running".to_string());
+                }
+                validate_relay_config(&state.config, &Value::Object(relay_changes))?
+            };
+            // Persist unlocked from `state` and commit in-memory config only on success.
+            self.inner.save_config(&updated)?;
+
             let mut state = self.inner.state.lock().unwrap();
             if state.running || state.starting {
                 return Err("Cymple eye relay is already running".to_string());
             }
-            let updated =
-                validate_relay_config(&state.config, &Value::Object(relay_changes))?;
             state.config = updated.clone();
             state.eyes[0].port = updated.left_port;
             state.eyes[1].port = updated.right_port;
-            self.inner.save_config(&updated)?;
             state.starting = true;
             (updated, state.generation)
         };
@@ -750,8 +790,11 @@ impl CympleEyeRelay {
             Ok(ep) => ep,
             Err(err) => {
                 let mut state = self.inner.state.lock().unwrap();
-                state.error = err.clone();
                 state.starting = false;
+                if generation != state.generation {
+                    return Err("Cymple eye relay startup was cancelled".to_string());
+                }
+                state.error = err.clone();
                 return Err(err);
             }
         };
@@ -759,10 +802,8 @@ impl CympleEyeRelay {
         let mut threads = self.inner.threads.lock().unwrap();
         let mut state = self.inner.state.lock().unwrap();
         if generation != state.generation {
-            let err = "Cymple eye relay startup was cancelled".to_string();
-            state.error = err.clone();
             state.starting = false;
-            return Err(err);
+            return Err("Cymple eye relay startup was cancelled".to_string());
         }
         if state.running {
             let err = "Cymple eye relay is already running".to_string();
@@ -792,9 +833,9 @@ impl CympleEyeRelay {
         let cymple_host_r = updated_cfg.cymple_host.clone();
         let cymple_port = updated_cfg.cymple_port;
 
-        let t_left = thread::Builder::new()
-            .name("cymple-relay-eye_left".to_string())
-            .spawn(move || {
+        let mut spawned = Vec::with_capacity(2);
+        let spawn_res: Result<(), String> = (|| {
+            let t_left = wire::spawn_bounded("cymple-relay-eye_left", move || {
                 left_inner.worker_loop(
                     0,
                     0,
@@ -808,9 +849,9 @@ impl CympleEyeRelay {
                 )
             })
             .map_err(|e| e.to_string())?;
-        let t_right = thread::Builder::new()
-            .name("cymple-relay-eye_right".to_string())
-            .spawn(move || {
+            spawned.push(t_left);
+
+            let t_right = wire::spawn_bounded("cymple-relay-eye_right", move || {
                 right_inner.worker_loop(
                     1,
                     1,
@@ -824,9 +865,40 @@ impl CympleEyeRelay {
                 )
             })
             .map_err(|e| e.to_string())?;
+            spawned.push(t_right);
+            Ok(())
+        })();
 
-        threads.push(t_left);
-        threads.push(t_right);
+        if let Err(err) = spawn_res {
+            self.inner.stop_flag.store(true, Ordering::SeqCst);
+            {
+                let _guard = self.inner.backoff_lock.lock().unwrap();
+                self.inner.backoff_cond.notify_all();
+            }
+            let sockets = [state.sockets[0].take(), state.sockets[1].take()];
+            drop(state);
+            for sock in sockets.into_iter().flatten() {
+                let _ = sock.shutdown(Shutdown::Both);
+            }
+            wire::join_all_bounded(spawned, Duration::from_secs(5));
+            let mut state = self.inner.state.lock().unwrap();
+            state.sockets = [None, None];
+            state.running = false;
+            state.starting = false;
+            state.error = err.clone();
+            state.source_host.clear();
+            state.active_left_port = None;
+            state.active_right_port = None;
+            let lp = state.config.left_port;
+            let rp = state.config.right_port;
+            state.eyes = [
+                EyeMetrics::new(0, lp, "idle"),
+                EyeMetrics::new(1, rp, "idle"),
+            ];
+            return Err(err);
+        }
+
+        threads.extend(spawned);
         Ok(state.status_snapshot())
     }
 
@@ -850,12 +922,7 @@ impl CympleEyeRelay {
             let mut guard = self.inner.threads.lock().unwrap();
             std::mem::take(&mut *guard)
         };
-        let current_id = thread::current().id();
-        for handle in handles {
-            if handle.thread().id() != current_id {
-                let _ = handle.join();
-            }
-        }
+        wire::join_all_bounded(handles, Duration::from_secs(5));
 
         let mut state = self.inner.state.lock().unwrap();
         state.sockets = [None, None];
@@ -895,6 +962,7 @@ mod tests {
     use std::collections::HashMap;
     use std::io::Read;
     use std::net::TcpListener;
+    use std::thread::{self, JoinHandle};
     use std::time::Instant;
 
     fn corner_jpeg(width: u32, height: u32, quality: u8) -> Vec<u8> {
@@ -1444,5 +1512,21 @@ mod tests {
         assert!(res.is_err());
         assert!(res.unwrap_err().contains("cancelled"));
         assert_eq!(race_relay.status()["running"], false);
+        assert_eq!(
+            race_relay.status()["error"],
+            "",
+            "cancelled startup must not overwrite cleared state.error"
+        );
+    }
+
+    #[test]
+    fn failed_config_write_does_not_mutate_in_memory_relay_config() {
+        let dir = tempfile::tempdir().unwrap();
+        // Passing a directory path as config_path forces write_text_atomic to fail.
+        let relay = CympleEyeRelay::new(Some(dir.path().to_path_buf()));
+        let before = relay.status()["config"].clone();
+        assert!(relay.configure(json!({"left_rotate": 90, "left_port": 45690})).is_err());
+        assert_eq!(relay.status()["config"], before);
+        assert_eq!(relay.status()["left_port"], DEFAULT_LEFT_PORT);
     }
 }

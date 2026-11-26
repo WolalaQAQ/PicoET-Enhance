@@ -34,7 +34,9 @@ pub fn resolve_data_dir() -> PathBuf {
 /// Atomically write UTF-8 text to `path`, retrying transient Windows sharing/access errors (5, 32).
 pub fn write_text_atomic(path: &Path, content: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
     }
     let pid = std::process::id();
     let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -44,7 +46,10 @@ pub fn write_text_atomic(path: &Path, content: &str) -> io::Result<()> {
         .unwrap_or("config.json");
     let tmp = path.with_file_name(format!("{file_name}.{pid}.{seq}.tmp"));
 
-    fs::write(&tmp, content.as_bytes())?;
+    if let Err(err) = fs::write(&tmp, content.as_bytes()) {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
 
     let mut last_err = None;
     for attempt in 0..6 {
@@ -106,5 +111,28 @@ mod tests {
         assert_eq!(fs::read_to_string(&target).unwrap(), "{\"a\":1}");
         write_text_atomic(&target, "{\"a\":2}").unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "{\"a\":2}");
+    }
+
+    #[test]
+    fn atomic_write_supports_bare_relative_filename() {
+        struct RemoveOnDrop(PathBuf);
+        impl Drop for RemoveOnDrop {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+            }
+        }
+
+        let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let rel = PathBuf::from(format!(
+            "picoet-atomic-rel-test-{}-{seq}.json",
+            std::process::id()
+        ));
+        assert_eq!(rel.parent(), Some(Path::new("")));
+        let _guard = RemoveOnDrop(rel.clone());
+
+        write_text_atomic(&rel, "{\"rel\":1}").unwrap();
+        assert_eq!(fs::read_to_string(&rel).unwrap(), "{\"rel\":1}");
+        write_text_atomic(&rel, "{\"rel\":2}").unwrap();
+        assert_eq!(fs::read_to_string(&rel).unwrap(), "{\"rel\":2}");
     }
 }

@@ -12,10 +12,7 @@ Thumbs.db
 .DS_Store
 
 # PC Studio runtime and LAN camera source build outputs
-pc-studio/.venv*/
 pc-studio/user-data/
-pc-studio/tests-work/
-pc-studio/build-*/
 pc-studio/__pycache__/
 pc-studio/src-tauri/target/
 pc-studio/src-tauri/gen/

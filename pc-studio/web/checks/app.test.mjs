@@ -38,12 +38,16 @@ function setup(t, options = {}) {
   elements.get("cymple-left-rotate").value = "0";
   elements.get("cymple-right-rotate").value = "0";
 
+  const docListeners = new Map();
   const doc = {
     documentElement: {},
     hidden: false,
     title: "",
     createElement: () => new Element(),
     getElementById: id => { assert.ok(elements.has(id), `Missing element #${id}`); return elements.get(id); },
+    addEventListener(type, fn) { docListeners.set(type, fn); },
+    removeEventListener(type, fn) { if (docListeners.get(type) === fn) docListeners.delete(type); },
+    emit(type) { return docListeners.get(type)?.(); },
   };
   const config = {
     enabled: false,
@@ -183,11 +187,11 @@ function setup(t, options = {}) {
     throw Error(path);
   };
 
-  const timerCalls = [], timers = {
-    setInterval: (fn, ms) => { timerCalls.push({fn, ms}); return timerCalls.length; },
-    setTimeout: (fn, ms) => { timerCalls.push({fn, ms}); return timerCalls.length; },
-    clearInterval() {},
-    clearTimeout() {},
+  const timerCalls = [], clearedIntervals = [], clearedTimeouts = [], timers = {
+    setInterval: (fn, ms) => { const id = timerCalls.length + 1; timerCalls.push({id, kind: "interval", fn, ms}); return id; },
+    setTimeout: (fn, ms) => { const id = timerCalls.length + 1; timerCalls.push({id, kind: "timeout", fn, ms}); return id; },
+    clearInterval(id) { clearedIntervals.push(id); },
+    clearTimeout(id) { clearedTimeouts.push(id); },
   };
   const urls = {
     created: [],
@@ -199,7 +203,7 @@ function setup(t, options = {}) {
   let time = 10000;
   const app = createApp(doc, {fetch: fetcher, timers, urlApi: urls, storage, languages: ["en-US"], now: () => time, ...options});
   t.after(() => app.destroy());
-  return {app, server, doc, el: id => doc.getElementById(id), saved, urls, timers: timerCalls, advance: ms => time += ms};
+  return {app, server, doc, el: id => doc.getElementById(id), saved, urls, timers: timerCalls, clearedIntervals, clearedTimeouts, advance: ms => time += ms};
 }
 
 test("restored UI preserves the original green palette and excludes unfinished model/capture/training pages", () => {
@@ -604,4 +608,131 @@ test("Tauri mode syncs tray language and intercepts external update links", asyn
     command: "open_external_url",
     args: {url: "https://example.invalid/Setup.exe"},
   });
+
+  // Middle click (auxclick with button === 1) must also be intercepted via open_external_url.
+  let auxPrevented = false;
+  firstLink.listeners.auxclick({button: 1, preventDefault() { auxPrevented = true; }});
+  assert.equal(auxPrevented, true);
+  assert.equal(invokes.filter(c => c.command === "open_external_url").length, 2);
+
+  // Right click (button === 2) must not trigger open_external_url.
+  let rightPrevented = false;
+  firstLink.listeners.auxclick({button: 2, preventDefault() { rightPrevented = true; }});
+  assert.equal(rightPrevented, false);
+  assert.equal(invokes.filter(c => c.command === "open_external_url").length, 2);
+});
+
+test("createTauriFetcher handles Array preview fallback and invokeWithSignal abort/timeout", async () => {
+  let invokeCount = 0;
+  let previewPayload = [0xff, 0xd8, 0x02, 0xff, 0xd9];
+  const tauriCore = {
+    invoke(command) {
+      invokeCount++;
+      if (command === "get_preview_frame") return Promise.resolve(previewPayload);
+      if (command === "get_status") return new Promise(() => {});
+      return Promise.resolve({});
+    },
+  };
+  const fetcher = createTauriFetcher(tauriCore);
+
+  // Array preview payload fallback -> 200 JPEG blob with exact bytes.
+  const resArr = await fetcher("/api/preview.jpg?t=1");
+  assert.equal(resArr.ok, true);
+  assert.equal(resArr.status, 200);
+  assert.deepEqual([...new Uint8Array(await (await resArr.blob()).arrayBuffer())], [0xff, 0xd8, 0x02, 0xff, 0xd9]);
+
+  // Empty Array preview payload fallback -> 204.
+  previewPayload = [];
+  const resEmpty = await fetcher("/api/preview.jpg?t=2");
+  assert.equal(resEmpty.ok, true);
+  assert.equal(resEmpty.status, 204);
+
+  // Pre-aborted signal rejects immediately with AbortError without invoking backend.
+  const preAborted = new AbortController();
+  preAborted.abort();
+  const callsBeforeAbort = invokeCount;
+  await assert.rejects(
+    () => fetcher("/api/status", {signal: preAborted.signal}),
+    err => err.name === "AbortError",
+  );
+  assert.equal(invokeCount, callsBeforeAbort);
+
+  // In-flight hanging invoke rejects cleanly on timeout via requestJson AbortController.
+  await assert.rejects(
+    () => requestJson(fetcher, "/api/status", undefined, 25),
+    /request timed out \(25 ms\)/,
+  );
+});
+
+test("up-to-date update banner memoizes #update-links DOM and filters unsafe URLs", async t => {
+  const f = setup(t, {tauriCore: {invoke: async () => {}}});
+  await f.app.init();
+
+  // Manual check when up-to-date renders one safe link and preserves exact DOM node across polls.
+  await f.app.checkUpdates(true);
+  assert.equal(f.el("update-banner").hidden, false);
+  assert.equal(f.el("update-links").children.length, 1);
+  const originalLink = f.el("update-links").children[0];
+
+  await f.app.pollStatus();
+  await f.app.pollStatus();
+  assert.strictEqual(f.el("update-links").children[0], originalLink);
+
+  // Changing language updates the link label cleanly.
+  f.app.setLanguage("zh-CN");
+  assert.equal(f.el("update-links").children.length, 1);
+  assert.equal(f.el("update-links").children[0].textContent, messages["zh-CN"].openReleasePage);
+
+  // Non-https, hostless, whitespace, or backslash URLs must never be attached as links.
+  f.server.updateResponse = {
+    current_version: "2.6.0",
+    latest_version: "2.7.0",
+    update_available: true,
+    release_url: "javascript:alert(1)",
+    installer_url: "https:///C:/Windows/win.ini",
+    portable_url: "https://example.invalid/has space.zip",
+    module_url: "https://example.invalid/back\\slash.zip",
+    notes: [],
+    error: null,
+  };
+  await f.app.checkUpdates(true);
+  assert.equal(f.el("update-links").children.length, 0);
+});
+
+test("background status polling and preview loop pause while doc.hidden and resume on visibilitychange", async t => {
+  const f = setup(t);
+  await f.app.init();
+  await f.app.start("capture");
+
+  const intervalEntry = f.timers.find(entry => entry.kind === "interval" && entry.ms === 500);
+  assert.ok(intervalEntry, "expected 500ms status interval");
+
+  // Hide window (e.g. minimized to tray): timers are cleared and manual tick is skipped.
+  const callsBeforeHide = f.server.calls.length;
+  f.doc.hidden = true;
+  f.doc.emit("visibilitychange");
+  assert.ok(f.clearedIntervals.includes(intervalEntry.id));
+  assert.equal(f.app.state.interval, null);
+  assert.equal(f.app.state.previewTimer, null);
+
+  intervalEntry.fn();
+  await Promise.resolve();
+  assert.equal(f.server.calls.length, callsBeforeHide);
+
+  // Restore window: immediately triggers status poll + restarts interval and preview loop.
+  f.doc.hidden = false;
+  f.doc.emit("visibilitychange");
+  await Promise.resolve();
+  assert.notEqual(f.app.state.interval, null);
+  assert.notEqual(f.app.state.previewTimer, null);
+  assert.ok(
+    f.server.calls.slice(callsBeforeHide).some(c => c.path === "/api/status"),
+    "expected immediate /api/status refresh on visibilitychange",
+  );
+});
+
+test("version badge has no hardcoded version in index.html and topbar CSS avoids clipping", () => {
+  assert.doesNotMatch(html, /id="version-badge"[^>]*>v2\.6\.2/);
+  assert.match(css, /\.topbar\s*\{[^}]*min-height:\s*64px/);
+  assert.doesNotMatch(css, /@media\s*\(max-width:1050px\)[^{]*\{[^}]*\.preview-switch\s+span\s*\{\s*display:\s*none/);
 });

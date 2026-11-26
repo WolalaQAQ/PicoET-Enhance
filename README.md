@@ -120,22 +120,22 @@ Turn on **Enable broadcast** to expose the headset's three IR cameras (`400×400
 
 ## PC Studio
 
-[`pc-studio`](pc-studio) is a Windows companion app for previewing the headset's LAN camera feeds and forwarding the two eye feeds into **Cymple**.
+[`pc-studio`](pc-studio) is a native Windows desktop app (Rust + Tauri v2, single executable) for previewing the headset's LAN camera feeds and forwarding both eye feeds into **Cymple**. Requires **Windows 10/11 (x64)** and the **Microsoft Edge WebView2 Runtime** (preinstalled on Windows 11 and most updated Windows 10 systems; available from Microsoft if missing on LTSC or minimal installs).
 
-- **Installer (recommended)**: Download `PicoET-PC-Studio-Setup-v2.6.2.exe` from [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases). Installs per-user to `%LOCALAPPDATA%\Programs\PicoET PC Studio` (no admin rights needed), creates a Start Menu shortcut, and opens in an Edge/Chrome app window.
-- **Portable**: Unpack `picoet-pc-studio-v2.6.2.zip` and run `PicoET-PC-Studio.exe`.
-- **From source** (Python 3 + Pillow):
+- **Installer (recommended)**: Download `PicoET-PC-Studio-Setup-v2.6.2.exe` from [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases). Installs per-user to `%LOCALAPPDATA%\Programs\PicoET PC Studio` (no admin rights needed) and creates a Start Menu shortcut.
+- **Portable**: Unpack `picoet-pc-studio-v2.6.2.zip` and run `PicoET-PC-Studio.exe`. Settings are stored in `user-data/` next to the executable (installed copies store settings under `%LOCALAPPDATA%\PicoET-PC-Studio\user-data\`).
+- **From source** (Rust `>= 1.90`, MSVC Build Tools, Edge WebView2 Runtime):
 
   ```powershell
-  pip install -r pc-studio/requirements.txt
-  pc-studio\start.cmd          # opens http://127.0.0.1:8787
+  cargo run --manifest-path pc-studio/src-tauri/Cargo.toml
   ```
 
 Key features:
 - Automatic LAN headset discovery (works even when your default PC route points at a VPN) or manual IP entry.
 - Live camera preview switching between Mouth, Left eye, and Right eye, with copyable MJPEG URLs for VLC, FFmpeg, OBS, or custom scripts.
 - **Cymple eye relay**: Forwards both eye streams (`PTJ1`) to Cymple's native UDP input (`127.0.0.1:23303`) with configurable ports and per-eye rotation/flip.
-- Built-in GitHub Releases update checker (links directly to new PC Studio and headset module packages) and a **Quit** button to stop the background server cleanly.
+- **System tray & clean exit**: Closing the window hides PC Studio to the Windows system tray so an active Cymple eye relay keeps running; right-click the tray icon or click the in-app **Quit** button to stop the relay and exit cleanly.
+- Built-in GitHub Releases update checker (links directly to new PC Studio and headset module packages).
 
 ## Disabling & Uninstalling
 
@@ -275,7 +275,9 @@ Median `X`-arrival-to-OSC latency was **9.1 ms** (P95 **12.5 ms**). Combined gaz
 
 ## Building from Source
 
-Prerequisites: **Python 3**, **JDK 17+** (`JAVA_HOME`), **Android SDK Platform 35** & **Build-Tools 35.0.0** (`ANDROID_HOME`), **NDK 26.1.10909125**, and **CMake 3.22.1 / Ninja**.
+Prerequisites:
+- **Headset module**: **Python 3**, **JDK 17+** (`JAVA_HOME`), **Android SDK Platform 35** & **Build-Tools 35.0.0** (`ANDROID_HOME`), **NDK 26.1.10909125**, and **CMake 3.22.1 / Ninja**.
+- **PC Studio**: **Rust / Cargo `>= 1.90`**, **Visual Studio / MSVC Build Tools** (Windows x64), **Microsoft Edge WebView2 Runtime**, **Node.js** (for frontend JS checks), and **Inno Setup 6** (for the Windows installer).
 
 ```powershell
 # 1. Build injector, hook payload, config helper, and panel worker
@@ -294,7 +296,7 @@ pwsh -File build-picoet-enhance.ps1 -Python python
 The companion APK builds directly with the Android SDK (no Gradle or external Android libraries). Packaging enforces an ELF allowlist and verifies zero PICO binaries are bundled.
 
 - **Signing**: Local builds create and reuse a dev keystore by default. For distributable builds, pass `-PanelKeystore` (or `PICOET_PANEL_KEYSTORE`), optional `-PanelKeyAlias` (default `panel`), and set `PICOET_PANEL_PASSWORD`. Upgrades must preserve the same signing key. GitHub Actions tag builds (`v<version>`) require `PICOET_PANEL_KEYSTORE_BASE64` and `PICOET_PANEL_PASSWORD` repository secrets.
-- **PC Studio tests & packaging**: Run `python pc-studio/check.py` to execute PC Studio unit/UI tests, and `python pc-studio/package_release.py` to build the standalone executable, portable ZIP, and Inno Setup installer.
+- **PC Studio tests & packaging**: Run `python pc-studio/check.py` to execute locked Cargo unit tests and Node.js frontend checks, and `python pc-studio/package_release.py` to build the standalone Rust/Tauri executable, portable ZIP, and Inno Setup 6 installer (pass `--skip-installer` for the portable ZIP only).
 
 ## Roadmap
 
@@ -326,4 +328,4 @@ Join the Pico-Enhance community for help, discussion and release announcements.
 
 ## License
 
-Original code and scripts are licensed under the [MIT License](LICENSE). Vendored **ShadowHook 2.0.1** sources include MIT- and BSD-licensed components, and the camera transport bundles **libjpeg-turbo**; all notices are shipped inside the Magisk ZIP and listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This project contains and distributes no PICO binaries.
+Original code and scripts are licensed under the [MIT License](LICENSE). Vendored **ShadowHook 2.0.1** sources include MIT- and BSD-licensed components, the camera transport bundles **libjpeg-turbo**, and PC Studio statically links Rust/Tauri v2 dependencies (including MIT, Apache-2.0, BSD, Zlib, Unicode-3.0, and unmodified MPL-2.0 crates); all notices are shipped with both the Magisk ZIP and PC Studio packages and listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This project contains and distributes no PICO binaries.

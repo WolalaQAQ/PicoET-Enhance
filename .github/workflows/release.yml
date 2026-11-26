@@ -31,7 +31,7 @@ jobs:
           ctest --test-dir artifacts/host-tests --output-on-failure
 
   build:
-    name: Build Magisk module
+    name: Build Magisk module and PC Studio
     needs: test-native
     runs-on: windows-latest
     timeout-minutes: 45
@@ -53,10 +53,25 @@ jobs:
       - name: Check companion permission boundary
         run: python -B -X utf8 -m unittest discover -s headset/tests -p "test_*.py" -v
 
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: pc-studio/src-tauri
+
       - name: Check PC Studio Rust backend and web UI
         run: |
           $ErrorActionPreference = 'Stop'
-          rustc --version
+          $rustcVer = (rustc --version)
+          Write-Host $rustcVer
+          $m = [regex]::Match($rustcVer, 'rustc (\d+)\.(\d+)\.')
+          if (-not $m.Success -or ([int]$m.Groups[1].Value -lt 1) -or ([int]$m.Groups[1].Value -eq 1 -and [int]$m.Groups[2].Value -lt 90)) {
+            throw "Rust >= 1.90 is required (got: $rustcVer)"
+          }
           cargo --version
           node --version
           python -B -X utf8 pc-studio/check.py
@@ -67,6 +82,17 @@ jobs:
           $props = Get-Content -Raw magisk-picoet-enhance/module.prop
           $version = ([regex]::Match($props, '(?m)^version=(.+)$')).Groups[1].Value.Trim()
           if (-not $version) { throw 'module.prop has no version' }
+          $cargoText = Get-Content -Raw pc-studio/src-tauri/Cargo.toml
+          $pkgSection = ([regex]::Match($cargoText, '(?ms)^\[package\]\r?\n(.*?)(?=^\[|\z)')).Groups[1].Value
+          $cargoVersion = ([regex]::Match($pkgSection, '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value.Trim()
+          if ($cargoVersion -cne $version) {
+            throw "pc-studio/src-tauri/Cargo.toml version ($cargoVersion) must match module.prop ($version)"
+          }
+          $tauriConf = Get-Content -Raw pc-studio/src-tauri/tauri.conf.json | ConvertFrom-Json
+          $tauriVersion = "$($tauriConf.version)".Trim()
+          if ($tauriVersion -cne $version) {
+            throw "pc-studio/src-tauri/tauri.conf.json version ($tauriVersion) must match module.prop ($version)"
+          }
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
             throw "Tag $($env:GITHUB_REF_NAME) must be v$version (module.prop version)"
           }
@@ -121,7 +147,13 @@ jobs:
             $innoTmp = Join-Path $env:RUNNER_TEMP 'inno-setup'
             New-Item -ItemType Directory -Force -Path $innoTmp | Out-Null
             $innoExe = Join-Path $innoTmp 'innosetup-6.7.3.exe'
-            Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $innoExe
+            $innoUrl = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe'
+            $expectedInnoSha = '9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732'
+            Invoke-WebRequest -Uri $innoUrl -OutFile $innoExe
+            $actualInnoSha = (Get-FileHash -LiteralPath $innoExe -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actualInnoSha -cne $expectedInnoSha) {
+              throw "Inno Setup SHA-256 mismatch: expected $expectedInnoSha, got $actualInnoSha"
+            }
             $innoDir = Join-Path $innoTmp 'compiler'
             $proc = Start-Process -FilePath $innoExe -ArgumentList "/PORTABLE=1 /CURRENTUSER /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /NOICONS /DIR=`"$innoDir`"" -Wait -PassThru
             if ($proc.ExitCode -ne 0) { throw "Inno Setup portable extract failed: $($proc.ExitCode)" }
