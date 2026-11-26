@@ -31,7 +31,7 @@ fn read_module_version() -> Option<String> {
 fn main() {
     println!("cargo:rerun-if-env-changed=PICOET_STUDIO_VERSION");
     let version = read_module_version()
-        .unwrap_or_else(|| env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "2.6.2".to_string()));
+        .unwrap_or_else(|| env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "2.7.0".to_string()));
     println!("cargo:rustc-env=PICOET_STUDIO_VERSION={version}");
     tauri_build::build();
 }

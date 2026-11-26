@@ -1,6 +1,6 @@
 [package]
 name = "picoet-pc-studio"
-version = "2.6.2"
+version = "2.7.0"
 description = "PicoET-Enhance PC Studio LAN camera preview and Cymple eye relay"
 license = "MIT"
 edition = "2021"

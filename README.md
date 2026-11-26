@@ -5,7 +5,7 @@
 **Unlock real pupil diameter, independent per-eye expressions, 90/90 Hz tracking, on-headset tuning, and LAN camera streaming on the PICO 4 Pro.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-v2.6.2-green.svg)](https://github.com/WolalaQAQ/PicoET-Enhance/releases)
+[![Version](https://img.shields.io/badge/Version-v2.7.0-green.svg)](https://github.com/WolalaQAQ/PicoET-Enhance/releases)
 [![Platform](https://img.shields.io/badge/PICO%204%20Pro-PICO%20OS%205.13.7-orange.svg)](#requirements)
 [![Releases](https://img.shields.io/github/v/release/WolalaQAQ/PicoET-Enhance)](https://github.com/WolalaQAQ/PicoET-Enhance/releases)
 
@@ -58,12 +58,12 @@ The installer verifies the SHA-256 hashes of the headset's stock eye-tracking li
 
 ## Quick Install
 
-1. Download `magisk-picoet-enhance-v2.6.2.zip` from [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases).
+1. Download `magisk-picoet-enhance-v2.7.0.zip` from [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases).
 2. Flash it in the **Magisk** app (**Modules → Install from storage**), or install over ADB:
 
    ```sh
-   adb push magisk-picoet-enhance-v2.6.2.zip /data/local/tmp/
-   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.2.zip'
+   adb push magisk-picoet-enhance-v2.7.0.zip /data/local/tmp/
+   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.7.0.zip'
    ```
 
 3. **Reboot the headset.**
@@ -122,8 +122,8 @@ Turn on **Enable broadcast** to expose the headset's three IR cameras (`400×400
 
 [`pc-studio`](pc-studio) is a native Windows desktop app (Rust + Tauri v2, single executable) for previewing the headset's LAN camera feeds and forwarding both eye feeds into **Cymple**. Requires **Windows 10/11 (x64)** and the **Microsoft Edge WebView2 Runtime** (preinstalled on Windows 11 and most updated Windows 10 systems; available from Microsoft if missing on LTSC or minimal installs).
 
-- **Installer (recommended)**: Download `PicoET-PC-Studio-Setup-v2.6.2.exe` from [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases). Installs per-user to `%LOCALAPPDATA%\Programs\PicoET PC Studio` (no admin rights needed) and creates a Start Menu shortcut.
-- **Portable**: Unpack `picoet-pc-studio-v2.6.2.zip` and run `PicoET-PC-Studio.exe`. Settings are stored in `user-data/` next to the executable (installed copies store settings under `%LOCALAPPDATA%\PicoET-PC-Studio\user-data\`).
+- **Installer (recommended)**: Download `PicoET-PC-Studio-Setup-v2.7.0.exe` from [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases). Installs per-user to `%LOCALAPPDATA%\Programs\PicoET PC Studio` (no admin rights needed) and creates a Start Menu shortcut.
+- **Portable**: Unpack `picoet-pc-studio-v2.7.0.zip` and run `PicoET-PC-Studio.exe`. Settings are stored in `user-data/` next to the executable (installed copies store settings under `%LOCALAPPDATA%\PicoET-PC-Studio\user-data\`).
 - **From source** (Rust `>= 1.90`, MSVC Build Tools, Edge WebView2 Runtime):
 
   ```powershell

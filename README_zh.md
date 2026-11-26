@@ -5,7 +5,7 @@
 **为 PICO 4 Pro 解锁真实瞳孔直径、左右眼独立表情、90/90 Hz 高频眼嘴追踪、头显端后处理调节与局域网相机广播。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-v2.6.2-green.svg)](https://github.com/WolalaQAQ/PicoET-Enhance/releases)
+[![Version](https://img.shields.io/badge/Version-v2.7.0-green.svg)](https://github.com/WolalaQAQ/PicoET-Enhance/releases)
 [![Platform](https://img.shields.io/badge/PICO%204%20Pro-PICO%20OS%205.13.7-orange.svg)](#环境要求)
 [![Releases](https://img.shields.io/github/v/release/WolalaQAQ/PicoET-Enhance)](https://github.com/WolalaQAQ/PicoET-Enhance/releases)
 
@@ -58,12 +58,12 @@ flowchart LR
 
 ## 快速安装
 
-1. 从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载 `magisk-picoet-enhance-v2.6.2.zip`。
+1. 从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载 `magisk-picoet-enhance-v2.7.0.zip`。
 2. 在头显的 **Magisk** 应用中选择 **模块 → 从本地安装** 刷入，或通过 ADB 安装：
 
    ```sh
-   adb push magisk-picoet-enhance-v2.6.2.zip /data/local/tmp/
-   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.2.zip'
+   adb push magisk-picoet-enhance-v2.7.0.zip /data/local/tmp/
+   adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.7.0.zip'
    ```
 
 3. **重启头显。**
@@ -122,8 +122,8 @@ PICO 原厂固件在表情神经网络输出之后内置了多层后处理（眉
 
 [`pc-studio`](pc-studio) 是原生 Windows 桌面工具（Rust + Tauri v2 单文件可执行程序），用于局域网实时预览头显相机并将双眼画面转发给 **Cymple**。运行环境需 **Windows 10/11（x64）** 与 **Microsoft Edge WebView2 Runtime**（Windows 11 与大多数已更新的 Windows 10 默认内置；LTSC 或精简系统如缺失可从微软官网下载）。
 
-- **安装程序（推荐）**：从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载 `PicoET-PC-Studio-Setup-v2.6.2.exe`。默认装至 `%LOCALAPPDATA%\Programs\PicoET PC Studio`（无需管理员权限），并创建开始菜单快捷方式。
-- **绿色便携包**：解压 `picoet-pc-studio-v2.6.2.zip` 后直接运行 `PicoET-PC-Studio.exe`。便携版配置保存在程序同级的 `user-data/` 目录（安装版保存在 `%LOCALAPPDATA%\PicoET-PC-Studio\user-data\`）。
+- **安装程序（推荐）**：从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载 `PicoET-PC-Studio-Setup-v2.7.0.exe`。默认装至 `%LOCALAPPDATA%\Programs\PicoET PC Studio`（无需管理员权限），并创建开始菜单快捷方式。
+- **绿色便携包**：解压 `picoet-pc-studio-v2.7.0.zip` 后直接运行 `PicoET-PC-Studio.exe`。便携版配置保存在程序同级的 `user-data/` 目录（安装版保存在 `%LOCALAPPDATA%\PicoET-PC-Studio\user-data\`）。
 - **源码运行**（需 Rust `>= 1.90`、MSVC Build Tools 与 Edge WebView2 Runtime）：
 
   ```powershell

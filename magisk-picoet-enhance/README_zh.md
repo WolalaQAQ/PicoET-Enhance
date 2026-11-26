@@ -1,4 +1,4 @@
-# PicoET-Enhance 模块技术参考（`v2.6.2`）
+# PicoET-Enhance 模块技术参考（`v2.7.0`）
 
 [English](README.md) | **简体中文**
 
@@ -14,7 +14,7 @@
 
 | 路径（位于 `/data/adb/modules/picoet-enhance/` 下） | 职责 |
 | --- | --- |
-| `module.prop`、`sepolicy.rule`、`hashes.sh` | 模块元数据（`id=picoet-enhance`、`version=2.6.2`、`versionCode=30`）、SELinux 规则，以及 `picoet-inject` 与 `libpicoet_hook.so` 的 SHA-256 校验钉 |
+| `module.prop`、`sepolicy.rule`、`hashes.sh` | 模块元数据（`id=picoet-enhance`、`version=2.7.0`、`versionCode=31`）、SELinux 规则，以及 `picoet-inject` 与 `libpicoet_hook.so` 的 SHA-256 校验钉 |
 | `customize.sh` | 安装时执行原厂库哈希校验、权限设置、清理 `/data/system/package_cache/*/PicoETEnhance-*` 解析缓存以及模式规范化 |
 | `post-fs-data.sh` | 刻意保持空操作以防阻塞启动；临时属性在重启时自动清空 |
 | `service.sh` | `late_start` 看护进程：等待 `sys.boot_completed=1`，拉起 `picoet-panel`，并循环调用 `picoet.sh ensure` 与 `picoet-camera reconcile` |

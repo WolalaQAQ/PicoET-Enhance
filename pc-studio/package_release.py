@@ -88,7 +88,7 @@ def default_version():
     cargo_toml = TAURI_DIR / 'Cargo.toml'
     if cargo_toml.is_file():
         return _read_cargo_package_version(cargo_toml)
-    return '2.6.2'
+    return '2.7.0'
 
 
 def sha256_file(path):

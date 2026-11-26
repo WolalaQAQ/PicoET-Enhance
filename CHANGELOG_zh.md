@@ -2,6 +2,18 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## [2.7.0] - 2026-11-27
+
+### 变更
+- **PC Studio 使用 Rust + Tauri v2 全面重写**：用单个原生 Windows 可执行文件（约 `4.5 MB`，此前为 `69` 个文件 / 约 `45 MB`）替代原有的 Python + PyInstaller 打包方案与本地 `127.0.0.1:8787` HTTP 服务 / Edge 窗口。画面预览、局域网头显发现、Cymple 双眼 UDP 转发、配置读写与更新检查均通过 Tauri v2 二进制 IPC 完成，不再占用任何本地端口。
+- **原生系统托盘与单实例体验**：点击窗口关闭按钮统一隐藏到系统托盘，Cymple 双眼转发在后台持续以 90 Hz 稳定传输；再次启动程序或点击托盘图标即可无闪烁恢复原窗口；通过托盘菜单、顶栏「退出」或 `--stop` 可干净停止所有流并彻底退出进程。
+- **安装包覆盖升级与绿色便携优化**：在旧版 Python `v2.6.x` 上覆盖安装时，安装程序会自动停止运行中的旧版或新版实例、清理旧 `_internal/` 与 `pc-studio/` 残留目录、完整保留 `%LOCALAPPDATA%\PicoET-PC-Studio\user-data\` 配置，并提示缺失的 Microsoft Edge WebView2 Runtime。绿色便携包内置 `user-data/.portable`，解压即保持便携模式配置。
+- **文档与协议工具同步**：全面更新中英文 `README`、`CAMERA-PROTOCOL`、`magisk-picoet-enhance/README` 与 `THIRD_PARTY_NOTICES.md`（同步 Rust/Tauri 第三方开源声明）；将主机端 Python 协议与发现辅助模块迁入 `camera-source/checks/protocol_client.py`。
+
+### 注意事项
+- `versionCode` 为 31。头显端原生 hook、追踪、后处理、配套应用及局域网相机协议（`PTJ1`/`PTC1`/`PSL1`/`PSE1`）与 `v2.6.2` 完全一致；已装 `v2.6.2` 的头显无需仅为了升级 PC Studio `v2.7.0` 而重刷头显模块。
+- PC Studio 运行需 Windows 10/11（x64）与 Microsoft Edge WebView2 Runtime。
+
 ## [2.6.2] - 2026-11-26
 
 ### 修复

@@ -1,4 +1,4 @@
-# PicoET-Enhance Module Reference (`v2.6.2`)
+# PicoET-Enhance Module Reference (`v2.7.0`)
 
 **English** | [简体中文](README_zh.md)
 
@@ -14,7 +14,7 @@ Technical reference for the installed Magisk module at `/data/adb/modules/picoet
 
 | Path (under `/data/adb/modules/picoet-enhance/`) | Role |
 | --- | --- |
-| `module.prop`, `sepolicy.rule`, `hashes.sh` | Module metadata (`id=picoet-enhance`, `version=2.6.2`, `versionCode=30`), SELinux rules, and SHA-256 verification pins for `picoet-inject` and `libpicoet_hook.so` |
+| `module.prop`, `sepolicy.rule`, `hashes.sh` | Module metadata (`id=picoet-enhance`, `version=2.7.0`, `versionCode=31`), SELinux rules, and SHA-256 verification pins for `picoet-inject` and `libpicoet_hook.so` |
 | `customize.sh` | Install-time library hash check, permission setup, `/data/system/package_cache/*/PicoETEnhance-*` cleanup, and mode normalization |
 | `post-fs-data.sh` | Intentionally a no-op so boot is never blocked; transient properties reset on reboot |
 | `service.sh` | `late_start` supervisor: waits for `sys.boot_completed=1`, launches `picoet-panel`, runs `picoet.sh ensure` and `picoet-camera reconcile` in a loop |

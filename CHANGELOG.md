@@ -2,6 +2,18 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
+## [2.7.0] - 2026-11-27
+
+### Changed
+- **PC Studio rewritten in Rust + Tauri v2**: replaced the Python + PyInstaller bundle and local `127.0.0.1:8787` HTTP server / Edge app window with a single native Windows executable (`~4.5 MB`, down from `69` files / `~45 MB`). Camera preview, headset discovery, Cymple dual-eye UDP relay, settings, and update checks now communicate over Tauri v2 binary IPC with zero bound local ports.
+- **Native system tray & single-instance lifecycle**: closing the PC Studio window minimizes it to the Windows system tray so Cymple eye forwarding keeps streaming uninterrupted at 90 Hz. Launching the app again or clicking the tray icon restores the existing window cleanly without offline/preview error flashes; exiting via the tray menu, top-bar **Quit**, or `--stop` stops all streams and exits immediately.
+- **Installer & portable upgrade polish**: upgrading over legacy Python/PyInstaller `v2.6.x` installs stops any running legacy or Tauri instance, automatically removes old `_internal/` and `pc-studio/` directories, preserves `%LOCALAPPDATA%\PicoET-PC-Studio\user-data\` settings, and checks for the Microsoft Edge WebView2 Runtime. The portable archive includes `user-data/.portable` so portable settings stay next to the executable.
+- **Documentation & protocol helpers**: refreshed EN/ZH `README`, `CAMERA-PROTOCOL`, `magisk-picoet-enhance/README`, and `THIRD_PARTY_NOTICES.md` for the Rust + Tauri v2 desktop app; moved standalone Python protocol/discovery helpers for native host tests into `camera-source/checks/protocol_client.py`.
+
+### Notes & Caveats
+- `versionCode` is 31. Headset native hooks, tracking, post-processing, companion app behavior, and LAN camera wire protocols (`PTJ1`/`PTC1`/`PSL1`/`PSE1`) are unchanged from `v2.6.2`; existing `v2.6.2` headset installs do not need to be reflashed solely for PC Studio `v2.7.0`.
+- PC Studio requires Windows 10/11 (x64) with the Microsoft Edge WebView2 Runtime.
+
 ## [2.6.2] - 2026-11-26
 
 ### Fixed
