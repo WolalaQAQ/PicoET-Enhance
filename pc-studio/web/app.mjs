@@ -73,6 +73,128 @@ const LABELS = {
 const display = x => x == null || x === "" ? "—" : String(x);
 const fixed = (x, n = 1) => x != null && Number.isFinite(Number(x)) ? Number(x).toFixed(n) : "—";
 
+function jsonResponse(data, status = 200) {
+  const payload = data === undefined ? "" : JSON.stringify(data);
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async text() { return payload; },
+    async json() { return payload ? JSON.parse(payload) : null; },
+  };
+}
+
+function invokeWithSignal(tauriCore, command, args, signal) {
+  if (signal?.aborted) {
+    const err = new Error("Aborted");
+    err.name = "AbortError";
+    return Promise.reject(err);
+  }
+  const promise = args === undefined ? tauriCore.invoke(command) : tauriCore.invoke(command, args);
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      const err = new Error("Aborted");
+      err.name = "AbortError";
+      reject(err);
+    };
+    signal.addEventListener("abort", onAbort, {once: true});
+    Promise.resolve(promise).then(
+      value => { signal.removeEventListener("abort", onAbort); resolve(value); },
+      error => { signal.removeEventListener("abort", onAbort); reject(error); },
+    );
+  });
+}
+
+export function createTauriFetcher(tauriCore) {
+  if (!tauriCore || typeof tauriCore.invoke !== "function") {
+    throw new TypeError("tauriCore.invoke is required");
+  }
+  return async function tauriFetch(path, opts = {}) {
+    const method = String(opts.method || "GET").toUpperCase();
+    const url = new URL(path, "http://tauri.local");
+    const pathname = url.pathname;
+    const params = url.searchParams;
+    const parseBody = () => {
+      if (opts.body == null || opts.body === "") return {};
+      return typeof opts.body === "string" ? JSON.parse(opts.body) : opts.body;
+    };
+    const run = async (command, args) => {
+      try {
+        const result = await invokeWithSignal(tauriCore, command, args, opts.signal);
+        return jsonResponse(result, 200);
+      } catch (err) {
+        if (err?.name === "AbortError") throw err;
+        return {
+          ok: false,
+          status: 400,
+          async text() { return JSON.stringify({error: String(err)}); },
+        };
+      }
+    };
+
+    if (method === "GET" && pathname === "/api/status") return run("get_status");
+    if (method === "GET" && pathname === "/api/config") return run("get_config");
+    if (method === "POST" && pathname === "/api/config") return run("set_config", {changes: parseBody()});
+    if (method === "POST" && pathname === "/api/start") return run("start_camera", {payload: parseBody()});
+    if (method === "POST" && pathname === "/api/stop") return run("stop_camera");
+    if (method === "GET" && pathname === "/api/discovery") {
+      const rawHost = params.get("host");
+      const rawPort = params.get("port");
+      const host = rawHost && rawHost.trim() ? rawHost.trim() : null;
+      const parsedPort = rawPort != null && rawPort.trim() !== "" ? Number(rawPort) : null;
+      const port = Number.isInteger(parsedPort) ? parsedPort : null;
+      return run("discover_sources", {host, port});
+    }
+    if (method === "POST" && pathname === "/api/cymple-relay") return run("cymple_relay_action", {payload: parseBody()});
+    if (method === "GET" && pathname === "/api/update-check") {
+      const rawForce = params.get("force");
+      const force = rawForce === "1" || rawForce === "true";
+      return run("check_updates", {force});
+    }
+    if (method === "POST" && pathname === "/api/shutdown") return run("quit_app");
+    if (method === "GET" && pathname === "/api/preview.jpg") {
+      try {
+        const raw = await invokeWithSignal(tauriCore, "get_preview_frame", undefined, opts.signal);
+        const bytes = raw instanceof Uint8Array
+          ? raw
+          : raw instanceof ArrayBuffer
+            ? new Uint8Array(raw)
+            : ArrayBuffer.isView(raw)
+              ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
+              : Array.isArray(raw)
+                ? new Uint8Array(raw)
+                : new Uint8Array(0);
+        if (bytes.byteLength === 0) {
+          return {
+            ok: true,
+            status: 204,
+            async blob() { return new Blob([], {type: "image/jpeg"}); },
+            async text() { return ""; },
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          async blob() { return new Blob([bytes], {type: "image/jpeg"}); },
+          async text() { return ""; },
+        };
+      } catch (err) {
+        if (err?.name === "AbortError") throw err;
+        return {
+          ok: false,
+          status: 400,
+          async text() { return JSON.stringify({error: String(err)}); },
+        };
+      }
+    }
+    return {
+      ok: false,
+      status: 404,
+      async text() { return JSON.stringify({error: `Unknown route: ${method} ${pathname}`}); },
+    };
+  };
+}
+
 export async function requestJson(fetcher, path, body, timeoutMs = 3500) {
   const method = body === undefined ? "GET" : "POST", controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -111,7 +233,23 @@ export function deriveView(status, online, ageMs = 0) {
 export function createApp(doc, options = {}) {
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis), timers = options.timers ?? globalThis;
   const now = options.now ?? Date.now, urls = options.urlApi ?? globalThis.URL, storage = options.storage;
-  const navigation = options.navigation;
+  const navigation = options.navigation, tauriCore = options.tauriCore;
+  function syncTrayLanguage(language) {
+    try {
+      const p = tauriCore?.invoke?.("set_tray_language", {language});
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } catch {}
+  }
+  function wireExternalLink(link, href) {
+    if (!tauriCore?.invoke || !/^https:\/\//i.test(href)) return;
+    link.addEventListener("click", event => {
+      event?.preventDefault?.();
+      try {
+        const p = tauriCore.invoke("open_external_url", {url: href});
+        if (p && typeof p.catch === "function") p.catch(() => {});
+      } catch {}
+    });
+  }
   const get = id => doc.getElementById(id), state = {
     language: initialLanguage(storage, options.languages ?? []),
     config: null,
@@ -234,6 +372,7 @@ export function createApp(doc, options = {}) {
           link.setAttribute("rel", "noopener noreferrer");
           if (primary) link.setAttribute("class", "primary-link");
           link.textContent = t(labelKey);
+          wireExternalLink(link, href);
           linksEl.append(link);
         };
         addLink(info.installer_url, "downloadInstaller", true);
@@ -253,6 +392,7 @@ export function createApp(doc, options = {}) {
       link.setAttribute("target", "_blank");
       link.setAttribute("rel", "noopener noreferrer");
       link.textContent = t("openReleasePage");
+      wireExternalLink(link, info.release_url);
       linksEl.append(link);
     }
     state.updateKey = "";
@@ -722,6 +862,7 @@ export function createApp(doc, options = {}) {
     if (!Object.hasOwn(messages, language)) return;
     state.language = language;
     try { storage?.setItem(LANGUAGE_KEY, language); } catch {}
+    syncTrayLanguage(language);
     render();
   }
 
@@ -780,6 +921,7 @@ export function createApp(doc, options = {}) {
   }
 
   async function init() {
+    syncTrayLanguage(state.language);
     render();
     await pollStatus();
     if (!state.destroyed) {
@@ -807,10 +949,12 @@ export function createApp(doc, options = {}) {
 
 if (typeof document !== "undefined") {
   let storage; try { storage = window.localStorage; } catch {}
+  const tauriCore = window.__TAURI__?.core;
   const app = createApp(document, {
     storage,
     navigation: window,
     languages: navigator.languages ?? [navigator.language],
+    ...(tauriCore?.invoke ? {fetch: createTauriFetcher(tauriCore), tauriCore} : {}),
   });
   void app.init();
   window.addEventListener("pagehide", () => app.destroy(), {once: true});

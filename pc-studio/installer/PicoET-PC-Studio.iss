@@ -30,7 +30,7 @@ WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
 UninstallDisplayIcon={app}\PicoET-PC-Studio.exe
-SetupIconFile={#BundleDir}\pc-studio\web\favicon.ico
+SetupIconFile={#BundleDir}\favicon.ico
 LicenseFile={#BundleDir}\LICENSE
 
 [Languages]
@@ -38,6 +38,10 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\pc-studio"
 
 [Files]
 Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

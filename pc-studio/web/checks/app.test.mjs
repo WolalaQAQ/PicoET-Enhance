@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {createApp, deriveView, requestJson, PAGES, routePage} from "../app.mjs";
+import {createApp, createTauriFetcher, deriveView, requestJson, PAGES, routePage} from "../app.mjs";
 import {messages, preferredLanguage, initialLanguage, errorMessage, LANGUAGE_KEY} from "../i18n.mjs";
 
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
@@ -436,4 +436,172 @@ test("preview-camera selection survives 500ms pollStatus when stopped and previe
   // deriveView tolerates up to 3999ms status age (matching 3500ms /api/status timeout).
   assert.equal(deriveView(f.server.status, true, 2000).current, true);
   assert.equal(deriveView(f.server.status, true, 4000).current, false);
+});
+
+test("index.html uses relative asset paths for Tauri embedded protocol", () => {
+  assert.ok(html.includes('href="./icon.png"'));
+  assert.ok(html.includes('href="./favicon.ico"'));
+  assert.ok(html.includes('href="./styles.css"'));
+  assert.ok(html.includes('src="./app.mjs"'));
+  assert.doesNotMatch(html, /["']\/static\/|["']\/favicon\.ico/);
+});
+
+test("createTauriFetcher maps all REST routes, query params, binary preview 200/204, and errors", async () => {
+  const calls = [];
+  let previewPayload = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer;
+  let nextError = null;
+  const tauriCore = {
+    async invoke(command, args) {
+      calls.push({command, args});
+      if (nextError !== null) {
+        const err = nextError;
+        nextError = null;
+        throw err;
+      }
+      switch (command) {
+        case "get_status": return {running: false, version: "2.6.2"};
+        case "get_config": return {headset_port: 45681};
+        case "set_config": return args.changes;
+        case "start_camera": return {running: true, started: args.payload};
+        case "stop_camera": return {running: false};
+        case "discover_sources": return {devices: [], queried: args};
+        case "cymple_relay_action": return {running: args.payload.action === "start"};
+        case "check_updates": return {update_available: false, forced: args.force};
+        case "quit_app": return undefined;
+        case "get_preview_frame": return previewPayload;
+        default: throw new Error(`unexpected command ${command}`);
+      }
+    },
+  };
+
+  const fetcher = createTauriFetcher(tauriCore);
+
+  assert.deepEqual(await requestJson(fetcher, "/api/status"), {running: false, version: "2.6.2"});
+  assert.deepEqual(await requestJson(fetcher, "/api/config"), {headset_port: 45681});
+  assert.deepEqual(await requestJson(fetcher, "/api/config", {headset_port: 45690}), {headset_port: 45690});
+  assert.deepEqual(await requestJson(fetcher, "/api/start", {mode: "capture", camera: "mouth"}), {
+    running: true,
+    started: {mode: "capture", camera: "mouth"},
+  });
+  assert.deepEqual(await requestJson(fetcher, "/api/stop", {}), {running: false});
+  assert.deepEqual(await requestJson(fetcher, "/api/discovery"), {
+    devices: [],
+    queried: {host: null, port: null},
+  });
+  assert.deepEqual(await requestJson(fetcher, "/api/discovery?host=198.51.100.9&port=45681"), {
+    devices: [],
+    queried: {host: "198.51.100.9", port: 45681},
+  });
+  assert.deepEqual(await requestJson(fetcher, "/api/cymple-relay", {action: "start", cymple_port: 23303}), {
+    running: true,
+  });
+  assert.deepEqual(await requestJson(fetcher, "/api/update-check"), {update_available: false, forced: false});
+  assert.deepEqual(await requestJson(fetcher, "/api/update-check?force=1"), {update_available: false, forced: true});
+  assert.equal(await requestJson(fetcher, "/api/shutdown", {}), null);
+
+  // Verify exact command names and argument shapes.
+  assert.deepEqual(calls.map(c => c.command), [
+    "get_status",
+    "get_config",
+    "set_config",
+    "start_camera",
+    "stop_camera",
+    "discover_sources",
+    "discover_sources",
+    "cymple_relay_action",
+    "check_updates",
+    "check_updates",
+    "quit_app",
+  ]);
+  assert.deepEqual(calls[2].args, {changes: {headset_port: 45690}});
+  assert.deepEqual(calls[3].args, {payload: {mode: "capture", camera: "mouth"}});
+  assert.deepEqual(calls[7].args, {payload: {action: "start", cymple_port: 23303}});
+
+  // Binary preview: ArrayBuffer non-empty -> 200 JPEG blob.
+  const res200Buf = await fetcher("/api/preview.jpg?t=1001");
+  assert.equal(res200Buf.ok, true);
+  assert.equal(res200Buf.status, 200);
+  const blobBuf = await res200Buf.blob();
+  assert.equal(blobBuf.type, "image/jpeg");
+  assert.deepEqual([...new Uint8Array(await blobBuf.arrayBuffer())], [0xff, 0xd8, 0xff, 0xd9]);
+
+  // Binary preview: Uint8Array non-empty -> 200 JPEG blob.
+  previewPayload = new Uint8Array([0xff, 0xd8, 0x01, 0xff, 0xd9]);
+  const res200Arr = await fetcher("/api/preview.jpg?t=1002");
+  assert.equal(res200Arr.ok, true);
+  assert.equal(res200Arr.status, 200);
+  assert.equal((await res200Arr.blob()).size, 5);
+
+  // Binary preview: empty ArrayBuffer & empty Uint8Array -> 204.
+  previewPayload = new ArrayBuffer(0);
+  const res204Buf = await fetcher("/api/preview.jpg?t=1003");
+  assert.equal(res204Buf.ok, true);
+  assert.equal(res204Buf.status, 204);
+
+  previewPayload = new Uint8Array(0);
+  const res204Arr = await fetcher("/api/preview.jpg?t=1004");
+  assert.equal(res204Arr.ok, true);
+  assert.equal(res204Arr.status, 204);
+
+  // Rejected invoke maps to HTTP 400 JSON { error } and integrates with requestJson + errorMessage.
+  nextError = "No PICO camera service found";
+  await assert.rejects(
+    () => requestJson(fetcher, "/api/cymple-relay", {action: "start"}),
+    err => {
+      assert.match(err.message, /HTTP 400: No PICO camera service found/);
+      assert.equal(errorMessage("en", err.message), messages.en.cympleNoDevice);
+      assert.equal(errorMessage("zh-CN", err.message), messages["zh-CN"].cympleNoDevice);
+      return true;
+    },
+  );
+
+  // Unknown route -> 404.
+  const res404 = await fetcher("/api/does-not-exist");
+  assert.equal(res404.ok, false);
+  assert.equal(res404.status, 404);
+});
+
+test("Tauri mode syncs tray language and intercepts external update links", async t => {
+  const invokes = [];
+  const tauriCore = {
+    async invoke(command, args) {
+      invokes.push({command, args});
+      if (command === "set_tray_language" && args.language === "zh-CN") {
+        throw new Error("ignored tray failure");
+      }
+    },
+  };
+  const f = setup(t, {tauriCore});
+  f.server.updateResponse = {
+    current_version: "2.6.2",
+    latest_version: "2.7.0",
+    update_available: true,
+    release_url: "https://github.com/WolalaQAQ/PicoET-Enhance/releases/tag/v2.7.0",
+    installer_url: "https://example.invalid/Setup.exe",
+    portable_url: "",
+    module_url: "",
+    notes: ["Faster startup"],
+    error: null,
+  };
+  await f.app.init();
+  assert.deepEqual(invokes.find(c => c.command === "set_tray_language"), {
+    command: "set_tray_language",
+    args: {language: "en"},
+  });
+
+  f.app.setLanguage("zh-CN");
+  assert.deepEqual(invokes.filter(c => c.command === "set_tray_language").at(-1), {
+    command: "set_tray_language",
+    args: {language: "zh-CN"},
+  });
+
+  await f.app.checkUpdates(true);
+  const firstLink = f.el("update-links").children[0];
+  let prevented = false;
+  firstLink.listeners.click({preventDefault() { prevented = true; }});
+  assert.equal(prevented, true);
+  assert.deepEqual(invokes.find(c => c.command === "open_external_url"), {
+    command: "open_external_url",
+    args: {url: "https://example.invalid/Setup.exe"},
+  });
 });

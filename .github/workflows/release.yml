@@ -53,10 +53,12 @@ jobs:
       - name: Check companion permission boundary
         run: python -B -X utf8 -m unittest discover -s headset/tests -p "test_*.py" -v
 
-      - name: Check PC Studio forwarding and web UI
+      - name: Check PC Studio Rust backend and web UI
         run: |
           $ErrorActionPreference = 'Stop'
-          python -B -X utf8 -m pip install --disable-pip-version-check -r pc-studio/requirements.txt
+          rustc --version
+          cargo --version
+          node --version
           python -B -X utf8 pc-studio/check.py
 
       - name: Verify version
@@ -110,7 +112,6 @@ jobs:
           Copy-Item -LiteralPath $zip -Destination $destination -Force
           $hash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $([IO.Path]::GetFileName($destination))" | Set-Content "$destination.sha256" -Encoding ascii
-          python -B -X utf8 -m pip install --disable-pip-version-check pyinstaller==6.12.0
           $sysIscc = @(
             (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
             (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'),
