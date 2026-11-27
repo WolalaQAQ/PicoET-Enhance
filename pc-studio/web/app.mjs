@@ -1390,7 +1390,13 @@ export function createApp(doc, options = {}) {
       if (state.previewUrl) urls.revokeObjectURL(state.previewUrl); state.previewUrl = urls.createObjectURL(blob); state.previewError = false;
       get("preview").src = state.previewUrl; get("preview").hidden = false; get("placeholder").hidden = true; get("empty-camera").hidden = true;
     } catch { if (generation === state.previewGeneration && !state.destroyed) { state.previewError = true; clearPreview(); render(); } }
-    finally { timers.clearTimeout(timeout); state.previewBusy = false; state.previewAbort = null; }
+    finally {
+      timers.clearTimeout(timeout);
+      if (state.previewAbort === controller) {
+        state.previewBusy = false;
+        state.previewAbort = null;
+      }
+    }
   }
   function isExpressionMonitorLive() {
     return !state.destroyed && !state.busy && !doc.hidden &&
@@ -1433,12 +1439,13 @@ export function createApp(doc, options = {}) {
     return state.exprPromise;
   }
   function scheduleExpressions(delayMs) {
-    if (state.destroyed) return;
+    if (state.destroyed || doc.hidden) return;
     timers.clearTimeout(state.exprTimer);
     state.exprTimer = timers.setTimeout(expressionLoop, delayMs);
   }
   async function expressionLoop() {
-    if (state.destroyed) return;
+    state.exprTimer = null;
+    if (state.destroyed || doc.hidden) return;
     if (isExpressionMonitorLive()) {
       await pollExpressions();
       scheduleExpressions(EXPRESSION_POLL_MS);
@@ -1446,7 +1453,62 @@ export function createApp(doc, options = {}) {
       scheduleExpressions(250);
     }
   }
-  function previewLoop() { void refreshPreview(); if (!state.destroyed) state.previewTimer = timers.setTimeout(previewLoop, 1000/Math.min(30, Math.max(1, state.config?.preview_fps ?? 10))); }
+  function schedulePreview() {
+    if (state.destroyed || doc.hidden || state.previewTimer != null) return;
+    const delay = 1000 / Math.min(30, Math.max(1, state.config?.preview_fps ?? 10));
+    state.previewTimer = timers.setTimeout(previewLoop, delay);
+  }
+  function previewLoop() {
+    state.previewTimer = null;
+    if (state.destroyed || doc.hidden) return;
+    void refreshPreview();
+    schedulePreview();
+  }
+  function startPreviewLoop() {
+    if (state.destroyed || doc.hidden || state.previewTimer != null) return;
+    previewLoop();
+  }
+  function startStatusInterval() {
+    if (state.destroyed || doc.hidden || state.interval != null) return;
+    state.interval = timers.setInterval(() => {
+      if (doc.hidden || state.destroyed) return;
+      render();
+      void pollStatus();
+    }, 500);
+  }
+  function pauseBackgroundLoops() {
+    if (state.interval != null) {
+      timers.clearInterval(state.interval);
+      state.interval = null;
+    }
+    if (state.previewTimer != null) {
+      timers.clearTimeout(state.previewTimer);
+      state.previewTimer = null;
+    }
+    if (state.exprTimer != null) {
+      timers.clearTimeout(state.exprTimer);
+      state.exprTimer = null;
+    }
+    state.previewGeneration++;
+    state.previewAbort?.abort();
+  }
+  const onVisibilityChange = () => {
+    if (state.destroyed) return;
+    if (doc.hidden) {
+      pauseBackgroundLoops();
+      void reportVisual().catch(() => {});
+      return;
+    }
+    if (state.online) state.at = now();
+    return pollStatus().finally(() => {
+      if (!state.destroyed && !doc.hidden) {
+        startStatusInterval();
+        startPreviewLoop();
+        scheduleExpressions(isExpressionMonitorLive() ? EXPRESSION_POLL_MS : 250);
+      }
+    });
+  };
+  doc.addEventListener?.("visibilitychange", onVisibilityChange);
   function setLanguage(language) { if (!Object.hasOwn(messages, language)) return; state.language = language; try { storage?.setItem(LANGUAGE_KEY, language); } catch {} render(); }
   get("settings").addEventListener("submit", event => { event.preventDefault(); return start(); });
   for (const event of ["input", "change"]) {
@@ -1535,8 +1597,29 @@ export function createApp(doc, options = {}) {
   });
   get("reference-play").addEventListener("click", () => { if (!get("reference-play").disabled && !get("reference-play").hidden) { state.referenceAnimated = !state.referenceAnimated; render(); } });
   for (const id of ["reference-image", "reference-neutral-image", "reference-profile-image"]) get(id).addEventListener("error", () => { state.referenceImageError = true; render(); });
-  async function init() { render(); await Promise.all([pollStatus(), loadReference(), loadPresets()]); if (!state.destroyed) { state.interval = timers.setInterval(() => { render(); void pollStatus(); }, 500); state.visualTimer=timers.setInterval(() => {void reportVisual().catch(error => {state.error=error.message;});},200); previewLoop(); void expressionLoop(); await discover(); } }
-  function destroy() { state.destroyed = true; state.generation++; navigation?.removeEventListener("hashchange", hashChanged); speech?.cancel(); timers.clearInterval(state.interval); timers.clearInterval(state.visualTimer); timers.clearTimeout(state.previewTimer); timers.clearTimeout(state.exprTimer); clearPreview(); }
+  async function init() {
+    render();
+    await Promise.all([pollStatus(), loadReference(), loadPresets()]);
+    if (!state.destroyed) {
+      state.visualTimer = timers.setInterval(() => { void reportVisual().catch(error => { state.error = error.message; }); }, 200);
+      if (!doc.hidden) {
+        startStatusInterval();
+        startPreviewLoop();
+        void expressionLoop();
+      }
+      await discover();
+    }
+  }
+  function destroy() {
+    state.destroyed = true;
+    state.generation++;
+    navigation?.removeEventListener("hashchange", hashChanged);
+    doc.removeEventListener?.("visibilitychange", onVisibilityChange);
+    speech?.cancel();
+    pauseBackgroundLoops();
+    timers.clearInterval(state.visualTimer);
+    clearPreview();
+  }
   return {init, destroy, start, stop, save, record, train, cympleRelay, loadReviews, applyReview, readForm, pollStatus, pollExpressions, togglePin, clearPins, resetPins, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs, morphControls, morphGroups, exprGroups};
 }
 if (typeof document !== "undefined") {

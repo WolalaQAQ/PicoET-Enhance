@@ -171,11 +171,23 @@ def connect_cancellable(host, port, timeout=3, *, stop_event=None, on_socket=Non
         return sock
     last_error = None
     infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
-    for family, socktype, proto, _, addr in infos:
+    # Prefer IPv4 addresses before IPv6 so dual-stack hostnames (e.g. localhost)
+    # do not burn the entire timeout on an unreachable IPv6 loopback first.
+    infos = sorted(infos, key=lambda item: (0 if item[0] == socket.AF_INET else 1))
+    deadline = None if timeout is None else time.monotonic() + float(timeout)
+    total_addrs = len(infos)
+    for idx, (family, socktype, proto, _, addr) in enumerate(infos):
         if stop_event is not None and stop_event.is_set():
             raise OSError('Connection cancelled')
+        attempt_timeout = timeout
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            left_addrs = total_addrs - idx
+            attempt_timeout = remaining if left_addrs <= 1 else max(0.2, min(remaining, remaining / left_addrs))
         sock = socket.socket(family, socktype, proto)
-        sock.settimeout(timeout)
+        sock.settimeout(attempt_timeout)
         if on_socket is not None:
             on_socket(sock)
         connected = False

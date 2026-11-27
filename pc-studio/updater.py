@@ -4,24 +4,51 @@ import re
 import threading
 import time
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 APP_VERSION = '2.6.2-dev.1'
 GITHUB_REPO = 'WolalaQAQ/PicoET-Enhance'
 RELEASES_LATEST_API = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
 RELEASES_PAGE_URL = f'https://github.com/{GITHUB_REPO}/releases'
+MAX_RELEASE_RESPONSE_BYTES = 2 * 1024 * 1024
 
-_VERSION_RE = re.compile(r'^[vV]?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$')
+_VERSION_RE = re.compile(r'^[vV]?(\d+)\.(\d+)\.(\d+)(?:-([^+]+))?(?:\+.*)?$')
+
+
+def _safe_http_url(url):
+    text = str(url or '').strip()
+    if not text:
+        return ''
+    parsed = urlsplit(text)
+    if parsed.scheme.lower() in ('http', 'https') and parsed.netloc:
+        return text
+    return ''
+
+
+def _parse_prerelease(suffix):
+    """Parse SemVer 2.0.0 prerelease identifiers for deterministic comparison."""
+    parts = []
+    for ident in suffix.split('.'):
+        ident = ident.strip()
+        if not ident:
+            continue
+        if ident.isdigit():
+            # Numeric identifiers have lower precedence than non-numeric identifiers.
+            parts.append((0, int(ident), ''))
+        else:
+            parts.append((1, 0, ident))
+    return tuple(parts)
 
 
 def parse_version(text):
-    """Parse 'vX.Y.Z' or 'X.Y.Z-dev.N' into a comparable tuple ((X, Y, Z), is_stable, suffix)."""
+    """Parse 'vX.Y.Z' or 'X.Y.Z-dev.N' into a comparable tuple ((X, Y, Z), is_stable, prerelease_parts)."""
     m = _VERSION_RE.match(str(text or '').strip())
     if not m:
         return None
     nums = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
     suffix = (m.group(4) or '').strip()
-    return (nums, suffix == '', suffix)
+    return (nums, suffix == '', _parse_prerelease(suffix))
 
 
 def is_newer_version(candidate, current):
@@ -66,7 +93,7 @@ def classify_assets(assets):
         if not isinstance(item, dict):
             continue
         name = str(item.get('name') or '').strip()
-        url = str(item.get('browser_download_url') or '').strip()
+        url = _safe_http_url(item.get('browser_download_url'))
         lower = name.lower()
         if not name or not url or lower.endswith('.sha256'):
             continue
@@ -134,7 +161,10 @@ class UpdateChecker:
         )
         try:
             with self.opener(req, timeout=4.0) as resp:
-                raw = resp.read().decode('utf-8')
+                raw_bytes = resp.read(MAX_RELEASE_RESPONSE_BYTES + 1)
+                if len(raw_bytes) > MAX_RELEASE_RESPONSE_BYTES:
+                    raise ValueError('GitHub release payload exceeded size limit')
+                raw = raw_bytes.decode('utf-8')
             payload = json.loads(raw)
             if not isinstance(payload, dict):
                 raise ValueError('Unexpected GitHub release payload')
@@ -143,7 +173,7 @@ class UpdateChecker:
             res['tag_name'] = tag_name or (f'v{latest_ver}' if latest_ver else '')
             res['latest_version'] = latest_ver or self.current_version
             res['update_available'] = is_newer_version(res['latest_version'], self.current_version)
-            res['release_url'] = str(payload.get('html_url') or RELEASES_PAGE_URL)
+            res['release_url'] = _safe_http_url(payload.get('html_url')) or RELEASES_PAGE_URL
             res['published_at'] = str(payload.get('published_at') or '')
             res['notes'] = summarize_notes(payload.get('body') or '')
             res.update(classify_assets(payload.get('assets')))

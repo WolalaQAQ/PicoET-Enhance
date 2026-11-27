@@ -444,6 +444,75 @@ class CympleRelayTests(unittest.TestCase):
             end_relay.stop()
         self.assertLessEqual(len(connect_times), 6)
 
+    def test_relay_http_stop_not_blocked_by_discovery_and_close_prevents_restart(self):
+        disc_entered = threading.Event()
+        disc_release = threading.Event()
+
+        def slow_discover(timeout=1.5):
+            disc_entered.set()
+            disc_release.wait(3)
+            return {'devices': [{
+                'host': '127.0.0.1',
+                'streams': [
+                    {'id': 'mouth', 'port': 45681},
+                    {'id': 'eye_left', 'port': 45682},
+                    {'id': 'eye_right', 'port': 45683},
+                ],
+            }]}
+
+        work = ROOT/'tests-work'; work.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=work) as folder:
+            runtime = Runtime(Path(folder)/'config.json')
+            relay = CympleEyeRelay(Path(folder)/'cymple_relay.json', runtime=runtime, discover=slow_discover)
+            server = make_server(runtime, port=0, cymple_relay=relay)
+            thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
+            thread.start()
+            base = f'http://127.0.0.1:{server.server_port}'
+            start_errors = []
+
+            def do_start():
+                req = Request(
+                    base + '/api/cymple-relay',
+                    json.dumps({'action': 'start', 'headset_host': ''}).encode('utf-8'),
+                    {'Content-Type': 'application/json'},
+                )
+                try:
+                    urlopen(req, timeout=5)
+                except HTTPError as exc:
+                    start_errors.append(exc.code)
+                    exc.close()
+
+            try:
+                starter = threading.Thread(target=do_start, daemon=True)
+                starter.start()
+                self.assertTrue(disc_entered.wait(2))
+                stop_req = Request(
+                    base + '/api/cymple-relay',
+                    json.dumps({'action': 'stop'}).encode('utf-8'),
+                    {'Content-Type': 'application/json'},
+                )
+                t0 = time.monotonic()
+                with urlopen(stop_req, timeout=2) as resp:
+                    stopped = json.load(resp)
+                self.assertLess(time.monotonic() - t0, 1.0)
+                self.assertFalse(stopped['running'])
+                disc_release.set()
+                starter.join(2)
+                self.assertEqual(start_errors, [400])
+                self.assertFalse(relay.running)
+            finally:
+                server.shutdown()
+                thread.join(2)
+                server.server_close()
+                relay.close()
+                runtime.stop()
+                runtime.udp.close()
+
+            with self.assertRaises(RuntimeError):
+                relay.start({'headset_host': '127.0.0.1'})
+            with self.assertRaises(RuntimeError):
+                relay.configure({'cymple_port': 23304})
+
 
 def _capture_error(fn, errors):
     try:

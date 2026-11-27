@@ -105,6 +105,55 @@ class DesktopTests(unittest.TestCase):
     def test_no_source_returns_an_empty_result(self):
         self.assertEqual(discover_sources(.01, [])['devices'], [])
 
+    def test_discovery_rejects_invalid_catalog_types_and_ports(self):
+        from discovery import _catalog
+        import wire
+
+        base = {
+            'service': 'pico-camera',
+            'version': 1,
+            'session_id': '123',
+            'service_generation': '456',
+            'streams': [
+                {'id': 'mouth', 'port': 45681, 'path': '/stream.mjpg'},
+                {'id': 'eye_left', 'port': 45682, 'path': '/stream.mjpg'},
+                {'id': 'eye_right', 'port': 45683, 'path': '/stream.mjpg'},
+            ],
+        }
+        self.assertEqual(_catalog(json.dumps(base).encode())['service'], 'pico-camera')
+        for bad in (
+            dict(base, version=True),
+            dict(base, session_id=True),
+            dict(base, streams=[dict(base['streams'][0], port=True), base['streams'][1], base['streams'][2]]),
+            dict(base, streams=[dict(base['streams'][0], port=0), base['streams'][1], base['streams'][2]]),
+        ):
+            with self.assertRaises(ValueError):
+                _catalog(json.dumps(bad).encode())
+        self.assertEqual(discover_sources(.01, [('127.0.0.1', 0), ('127.0.0.1', 70000)])['devices'], [])
+
+        attempted = []
+        fake_infos = [
+            (socket.AF_INET6, socket.SOCK_STREAM, 0, '', ('::1', 45681, 0, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, '', ('127.0.0.1', 45681)),
+        ]
+
+        class _FakeSock:
+            def __init__(self, family, *_):
+                self.family = family
+            def settimeout(self, t): pass
+            def connect(self, addr):
+                attempted.append((self.family, addr[0]))
+                if self.family == socket.AF_INET:
+                    return
+                raise OSError('v6 refused')
+            def close(self): pass
+
+        with patch('wire.socket.getaddrinfo', return_value=fake_infos), \
+             patch('wire.socket.socket', side_effect=_FakeSock):
+            sock = wire.connect_cancellable('localhost', 45681, timeout=1.0)
+            self.assertEqual(sock.family, socket.AF_INET)
+            self.assertEqual(attempted, [(socket.AF_INET, '127.0.0.1')])
+
     def test_picker_cancel_does_not_return_a_fake_path(self):
         with patch('file_dialog.subprocess.run', return_value=subprocess.CompletedProcess([], 0, b'""')) as run:
             self.assertEqual(select_model('old.onnx'), dict(cancelled=True))

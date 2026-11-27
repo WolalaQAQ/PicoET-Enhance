@@ -1521,3 +1521,75 @@ test("Windows socket errors, previewError reset, relay error isolation, and poll
   const exprCall = f.server.calls.findLast(c => c.path === "/api/expressions");
   assert.ok(exprCall?.signal instanceof AbortSignal);
 });
+
+test("visibilitychange pauses background polling when hidden and resumes without offline flash", async t => {
+  const listeners = new Map();
+  const f = setup(t);
+  f.doc.addEventListener = (type, fn) => listeners.set(type, fn);
+  f.doc.removeEventListener = (type, fn) => { if (listeners.get(type) === fn) listeners.delete(type); };
+
+  // Recreate app with visibilitychange-capable doc.
+  const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [id, f.el(id)]));
+  const visDoc = {
+    documentElement: {}, hidden: false, title: "",
+    createElement: () => f.doc.createElement(),
+    getElementById: id => elements.get(id),
+    addEventListener(type, fn) { listeners.set(type, fn); },
+    removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); },
+  };
+  let nowMs = 10000;
+  let clearedIntervals = 0, clearedTimeouts = 0;
+  const activeTimers = {
+    nextId: 1,
+    setInterval(fn, ms) { return this.nextId++; },
+    setTimeout(fn, ms) { return this.nextId++; },
+    clearInterval(id) { if (id != null) clearedIntervals++; },
+    clearTimeout(id) { if (id != null) clearedTimeouts++; },
+  };
+  let resolveSlowStatus;
+  let blockNextStatus = false;
+  const app = createApp(visDoc, {
+    fetch: async (path, opts = {}) => {
+      if (path === "/api/status" && blockNextStatus) {
+        blockNextStatus = false;
+        await new Promise(resolve => { resolveSlowStatus = resolve; });
+      }
+      if (path === "/api/status") return Response.json(f.server.status);
+      if (path === "/api/presets") return Response.json({presets: f.server.presets, default: "complete"});
+      if (path === "/api/discovery") return Response.json({devices: []});
+      if (path === "/static/guide-reference/manifest.json") return Response.json(f.server.reference);
+      if (path === "/api/display" || path === "/api/recording/display") return Response.json({accepted: true});
+      return new Response(null, {status: 204});
+    },
+    timers: activeTimers,
+    urlApi: f.urls,
+    languages: ["en-US"],
+    now: () => nowMs,
+  });
+  t.after(() => app.destroy());
+
+  await app.init();
+  assert.ok(listeners.has("visibilitychange"));
+  assert.notEqual(app.state.interval, null);
+  assert.notEqual(app.state.previewTimer, null);
+
+  // Hide tab -> pauses status/preview/expression loops.
+  visDoc.hidden = true;
+  listeners.get("visibilitychange")();
+  assert.equal(app.state.interval, null);
+  assert.equal(app.state.previewTimer, null);
+  assert.equal(app.state.exprTimer, null);
+  assert.ok(clearedIntervals >= 1);
+  assert.ok(clearedTimeouts >= 1);
+
+  // Advance clock > 4s while hidden, then show tab with a slow /api/status response.
+  nowMs += 5000;
+  blockNextStatus = true;
+  visDoc.hidden = false;
+  const resumePromise = listeners.get("visibilitychange")();
+  assert.notEqual(deriveView(app.state.status, app.state.online, nowMs - app.state.at).key, "offline");
+  resolveSlowStatus();
+  await resumePromise;
+  assert.notEqual(app.state.interval, null);
+  assert.notEqual(app.state.previewTimer, null);
+});

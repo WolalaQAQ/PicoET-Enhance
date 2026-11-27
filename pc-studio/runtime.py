@@ -138,6 +138,7 @@ class Runtime:
         self.model_factory = model_factory
         self.run_root = Path(run_root or self.config_path.parent/'runs')
         self.lock = threading.RLock()
+        self._config_io_lock = threading.Lock()
         self.condition = threading.Condition(self.lock)
         self._clock_cond = threading.Condition()
         self._clock_resync_requested = False
@@ -340,11 +341,11 @@ class Runtime:
                     fresh=bool(mask), override=bool(mask),
                     state='valid' if mask else prediction['state'])
 
-    def configure(self, changes):
+    def _build_updated_config(self, base_config, changes):
         unknown = set(changes)-set(DEFAULT_CONFIG)
         if unknown:
             raise ValueError('Unknown configuration fields: '+', '.join(sorted(unknown)))
-        updated = dict(self.config, **changes)
+        updated = dict(base_config, **changes)
         if updated['model_kind'] not in ('face50', 'segmentation', 'mouthlink'):
             raise ValueError('Unknown model kind')
         if updated['mouth_mode'] not in MOUTH_MODES:
@@ -366,10 +367,10 @@ class Runtime:
                 if 'mouth_mode' in changes and changes['mouth_mode'] in PRESET_MODES:
                     base = resolve_channel_sources(changes['mouth_mode'], None, None)
                 elif 'mouth_mode' in changes and changes['mouth_mode'] == 'custom':
-                    base = resolve_channel_sources('curated', None, self.config.get('channel_sources'))
+                    base = resolve_channel_sources('curated', None, base_config.get('channel_sources'))
                 else:
                     base = resolve_channel_sources(
-                        self.config['mouth_mode'], self.config.get('hybrid_channels'), self.config.get('channel_sources'))
+                        base_config['mouth_mode'], base_config.get('hybrid_channels'), base_config.get('channel_sources'))
                 base.update(validated)
                 full = {name: base[name] for name in ROUTABLE_CHANNELS}
                 detected = matching_preset(full)
@@ -378,9 +379,9 @@ class Runtime:
                 updated['hybrid_channels'] = None
         elif 'mouth_mode' in changes:
             if updated['mouth_mode'] == 'custom':
-                if not self.config.get('channel_sources'):
+                if not base_config.get('channel_sources'):
                     raise ValueError("mouth_mode 'custom' requires channel_sources")
-                updated['channel_sources'] = dict(self.config['channel_sources'])
+                updated['channel_sources'] = dict(base_config['channel_sources'])
                 updated['hybrid_channels'] = None
             else:
                 updated['channel_sources'] = None
@@ -412,23 +413,36 @@ class Runtime:
                 updated['filter_min_cutoff'] = round(1000. / (2. * math.pi * sm), 2)
         if not 1 <= int(updated['preview_fps']) <= 30:
             raise ValueError('preview_fps must be 1–30')
-        if self.running and any(updated[k] != self.config[k] for k in
-                                ('headset_host', 'headset_port', 'model_path', 'model_kind', 'device',
-                                 'output_enabled', 'output_host', 'output_port')):
-            self.stop()
-            updated['enabled'] = False
-        if not updated['enabled']:
+        return updated
+
+    def configure(self, changes):
+        restart_keys = ('headset_host', 'headset_port', 'model_path', 'model_kind', 'device',
+                        'output_enabled', 'output_host', 'output_port')
+        with self.lock:
+            preview = self._build_updated_config(self.config, changes)
+            needs_stop = (not preview['enabled']) or (
+                self.running and any(preview[k] != self.config[k] for k in restart_keys)
+            )
+        if needs_stop:
             self.stop()
         with self.lock:
+            updated = self._build_updated_config(self.config, changes)
+            if needs_stop:
+                updated['enabled'] = False
+            else:
+                updated['enabled'] = bool(updated['enabled'] and self.running)
             self.config = updated
             self.personal.set_checkpoint(updated['model_path'])
             saved = dict(updated)
             if self.legacy_configuration:
                 saved['legacy_configuration'] = self.legacy_configuration
+            result = dict(self.config)
+            sync_psl = bool(updated['enabled'] and self.running)
+        with self._config_io_lock:
             _write_json_atomic(self.config_path, saved)
-        if updated['enabled'] and self.running:
+        if sync_psl:
             self._sync_psl_worker()
-        return dict(self.config)
+        return result
 
     def prepare(self):
         if self.running:
@@ -539,7 +553,8 @@ class Runtime:
         with self.condition:
             if generation != self.lifecycle:
                 raise RuntimeError('Startup was cancelled by stop/shutdown')
-            self.stop_event.clear()
+            session_stop = threading.Event()
+            self.stop_event = session_stop
             with self._clock_cond:
                 self._clock_resync_requested = False
             self.inference_ready.clear()
@@ -581,11 +596,28 @@ class Runtime:
             (self.run_dir/'config.json').write_text(json.dumps(self.config, indent=2), encoding='utf-8')
             self.replay = {'active': mode == 'replay', 'path': str(path) if mode == 'replay' else None,
                            'position': 0, 'total': None, 'finished': False}
-        source = (lambda: self._replay(path)) if mode == 'replay' else self._receive
-        self.threads = [threading.Thread(target=self._inference, name='tongue-inference', daemon=True),
-                        threading.Thread(target=source, name='camera-source', daemon=True)]
+        inf_target = (
+            (lambda: self._inference(session_stop=session_stop, generation=generation))
+            if type(self)._inference is Runtime._inference else self._inference
+        )
+        if mode == 'replay':
+            source_target = (
+                (lambda: self._replay(path, session_stop=session_stop, generation=generation))
+                if type(self)._replay is Runtime._replay else (lambda: self._replay(path))
+            )
+        else:
+            source_target = (
+                (lambda: self._receive(session_stop=session_stop, generation=generation))
+                if type(self)._receive is Runtime._receive else self._receive
+            )
+        self.threads = [threading.Thread(target=inf_target, name='tongue-inference', daemon=True),
+                        threading.Thread(target=source_target, name='camera-source', daemon=True)]
         if mode == 'live':
-            self.threads.append(threading.Thread(target=self._clock_refresh, name='tongue-clock', daemon=True))
+            clock_target = (
+                (lambda: self._clock_refresh(session_stop=session_stop, generation=generation))
+                if type(self)._clock_refresh is Runtime._clock_refresh else self._clock_refresh
+            )
+            self.threads.append(threading.Thread(target=clock_target, name='tongue-clock', daemon=True))
         for thread in self.threads:
             thread.start()
         self._sync_psl_worker()
@@ -621,12 +653,13 @@ class Runtime:
         self._record_enqueue('frame', (header, payload))
         return True
 
-    def _track_pending_socket(self, sock):
+    def _track_pending_socket(self, sock, stop_event=None):
+        stop_ev = self.stop_event if stop_event is None else stop_event
         with self.lock:
             if sock is None:
                 return
             self._pending_sockets.add(sock)
-            if self.stop_event.is_set():
+            if stop_ev.is_set():
                 try:
                     sock.close()
                 except OSError:
@@ -638,17 +671,18 @@ class Runtime:
         with self.lock:
             self._pending_sockets.discard(sock)
 
-    def _connect(self, host, port, timeout=3, *, keep_tracked=False):
+    def _connect(self, host, port, timeout=3, *, keep_tracked=False, stop_event=None):
+        stop_ev = self.stop_event if stop_event is None else stop_event
         holder = [None]
         def on_socket(sock):
             if sock is not None:
                 holder[0] = sock
-                self._track_pending_socket(sock)
+                self._track_pending_socket(sock, stop_ev)
             elif holder[0] is not None:
                 self._untrack_pending_socket(holder[0])
                 holder[0] = None
         return connect_cancellable(
-            host, port, timeout=timeout, stop_event=self.stop_event,
+            host, port, timeout=timeout, stop_event=stop_ev,
             on_socket=on_socket, keep_tracked=keep_tracked,
         )
 
@@ -1080,11 +1114,13 @@ class Runtime:
         finally:
             process.stdout.close()
 
-    def _receive(self):
+    def _receive(self, *, session_stop=None, generation=None):
+        stop_ev = self.stop_event if session_stop is None else session_stop
+        gen = self.lifecycle if generation is None else generation
         config = dict(self.config)
         try:
             self.inference_ready.wait()
-            if self.stop_event.is_set():
+            if stop_ev.is_set():
                 return
             host = config['headset_host'].strip()
             port = int(config['headset_port'])
@@ -1092,28 +1128,36 @@ class Runtime:
             def on_sock(sock):
                 if sock is not None:
                     holder[0] = sock
-                    self._track_pending_socket(sock)
+                    self._track_pending_socket(sock, stop_ev)
                 elif holder[0] is not None:
                     self._untrack_pending_socket(holder[0])
                     holder[0] = None
-            calibrated = sync_clock(host, port, stop_event=self.stop_event, on_socket=on_sock)
-            self._set_clock(calibrated)
-            if self.stop_event.is_set():
+            calibrated = sync_clock(host, port, stop_event=stop_ev, on_socket=on_sock)
+            if stop_ev.is_set():
                 return
+            with self.lock:
+                if gen != self.lifecycle or stop_ev.is_set():
+                    return
+                self._set_clock(calibrated)
             context = None
             if config['model_kind'] == 'face50':
                 from stock import read_capture_context
-                control = self._connect(host, port, timeout=3, keep_tracked=True)
+                control = self._connect(host, port, timeout=3, keep_tracked=True, stop_event=stop_ev)
                 try:
                     with control:
                         context = read_capture_context(control)
                 finally:
                     self._untrack_pending_socket(control)
+                if stop_ev.is_set():
+                    return
+                with self.lock:
+                    if gen != self.lifecycle or stop_ev.is_set():
+                        return
                 self.bind_capture(context.capture_session_id, context.service_generation, evidence=context.evidence)
                 self.capture_context = context.evidence
-            if self.stop_event.is_set():
+            if stop_ev.is_set():
                 return
-            sock = self._connect(host, port, timeout=3, keep_tracked=True)
+            sock = self._connect(host, port, timeout=3, keep_tracked=True, stop_event=stop_ev)
             try:
                 enable_keepalive(sock)
                 try:
@@ -1122,7 +1166,7 @@ class Runtime:
                     pass
                 sock.settimeout(10)  # The first subscription may cold-start the native camera.
                 with self.lock:
-                    if self.stop_event.is_set():
+                    if gen != self.lifecycle or stop_ev.is_set():
                         sock.close()
                         return
                     self.socket = sock
@@ -1133,7 +1177,7 @@ class Runtime:
             with sock:
                 first_frame = True
                 was_idle = False
-                while not self.stop_event.is_set():
+                while not stop_ev.is_set():
                     try:
                         header, payload = read_frame(sock)
                     except IdleStreamTimeout:
@@ -1153,62 +1197,75 @@ class Runtime:
                         context.require_session(header.session_id)
                     if header.flags & END:
                         with self.lock:
-                            self.replay['finished'] = True
+                            if gen == self.lifecycle:
+                                self.replay['finished'] = True
                         break
                     if not header.flags & JPEG:
                         raise ValueError('JPEG subscription returned a non-JPEG frame')
-                    if self.input_stream:
-                        self.input_stream.write(header.pack()+payload)
+                    with self.lock:
+                        if gen != self.lifecycle or stop_ev.is_set():
+                            break
+                        if self.input_stream:
+                            self.input_stream.write(header.pack()+payload)
                     self._publish(header, payload, received_ns)
         except (OSError, EOFError, ValueError) as error:
-            if not self.stop_event.is_set():
+            if not stop_ev.is_set():
                 with self.lock:
-                    self.last_error = str(error)
+                    if gen == self.lifecycle:
+                        self.last_error = str(error)
         finally:
-            self.stop_event.set()
+            stop_ev.set()
             self._wake_clock_thread()
+            should_stop_recording = False
             with self.condition:
-                if self.input_stream:
-                    try:
-                        self.input_stream.close()
-                    except OSError:
-                        pass
-                    self.input_stream = None
-                self.running = False
-                self.connected = False
-                self.mode = 'idle'
-                self.config['enabled'] = False
-                self.source_closed = True
-                self.socket = None
-                self.model_version += 1
-                self.pending = None
-                self.prediction = self._invalid('disconnected')
-                self.preview = None
-                if self.last_header is not None:
-                    self._send_result(self.last_header, self.prediction, 0.)
-                self.condition.notify_all()
-            self._stop_recording()
+                if gen == self.lifecycle:
+                    should_stop_recording = True
+                    if self.input_stream:
+                        try:
+                            self.input_stream.close()
+                        except OSError:
+                            pass
+                        self.input_stream = None
+                    self.running = False
+                    self.connected = False
+                    self.mode = 'idle'
+                    self.config['enabled'] = False
+                    self.source_closed = True
+                    self.socket = None
+                    self.model_version += 1
+                    self.pending = None
+                    self.prediction = self._invalid('disconnected')
+                    self.preview = None
+                    if self.last_header is not None:
+                        self._send_result(self.last_header, self.prediction, 0.)
+                    self.condition.notify_all()
+            if should_stop_recording:
+                self._stop_recording()
 
-    def _clock_refresh(self):
+    def _clock_refresh(self, *, session_stop=None, generation=None):
+        stop_ev = self.stop_event if session_stop is None else session_stop
+        gen = self.lifecycle if generation is None else generation
         last_sync_mono = 0.0
         try:
-            while not self.stop_event.is_set():
+            while not stop_ev.is_set():
                 with self._clock_cond:
                     self._clock_cond.wait_for(
-                        lambda: self.stop_event.is_set() or self._clock_resync_requested,
+                        lambda: stop_ev.is_set() or self._clock_resync_requested,
                         timeout=10.0,
                     )
                     forced = self._clock_resync_requested
                     self._clock_resync_requested = False
-                if self.stop_event.is_set():
+                if stop_ev.is_set():
                     break
                 if forced:
                     since = time.monotonic() - last_sync_mono
-                    if since < 0.5 and self.stop_event.wait(0.5 - since):
+                    if since < 0.5 and stop_ev.wait(0.5 - since):
                         break
                 last_sync_mono = time.monotonic()
                 try:
                     with self.lock:
+                        if gen != self.lifecycle or stop_ev.is_set():
+                            break
                         host = self.config['headset_host'].strip()
                         port = int(self.config['headset_port'])
                     if not host:
@@ -1217,29 +1274,34 @@ class Runtime:
                     def on_sock(sock):
                         if sock is not None:
                             holder[0] = sock
-                            self._track_pending_socket(sock)
+                            self._track_pending_socket(sock, stop_ev)
                         elif holder[0] is not None:
                             self._untrack_pending_socket(holder[0])
                             holder[0] = None
                     calibrated = sync_clock(host, port, 3,
-                                            stop_event=self.stop_event, on_socket=on_sock)
-                    self._set_clock(calibrated)
+                                            stop_event=stop_ev, on_socket=on_sock)
+                    with self.lock:
+                        if gen == self.lifecycle and not stop_ev.is_set():
+                            self._set_clock(calibrated)
                 except (OSError, EOFError, ValueError) as error:
                     with self.lock:
-                        self.description['clock_error'] = str(error)
+                        if gen == self.lifecycle and not stop_ev.is_set():
+                            self.description['clock_error'] = str(error)
         finally:
             with self.lock:
-                if self.clock_log and self.stop_event.is_set():
+                if gen == self.lifecycle and self.clock_log and stop_ev.is_set():
                     try:
                         self.clock_log.close()
                     except OSError:
                         pass
                     self.clock_log = None
 
-    def _replay(self, path):
+    def _replay(self, path, *, session_stop=None, generation=None):
+        stop_ev = self.stop_event if session_stop is None else session_stop
+        gen = self.lifecycle if generation is None else generation
         try:
             self.inference_ready.wait()
-            if self.stop_event.is_set():
+            if stop_ev.is_set():
                 return
             with np.load(path, allow_pickle=False) as data:
                 images = data['images']
@@ -1252,6 +1314,8 @@ class Runtime:
             epoch = time.perf_counter_ns()+100_000_000
             session = time.time_ns() & ((1 << 64)-1)
             with self.lock:
+                if gen != self.lifecycle or stop_ev.is_set():
+                    return
                 self._set_clock({'offset_ns': 0., 'uncertainty_ms': 0.,
                                  'calibrated_pc_ns': time.perf_counter_ns(), 'domain': 'pc-replay'})
                 self.connected = True
@@ -1261,11 +1325,13 @@ class Runtime:
                 wait = (due-time.perf_counter_ns())/1e9
                 if wait > 0:
                     time.sleep(wait)  # Python's high-resolution Windows waitable timer.
-                if self.stop_event.is_set():
+                if stop_ev.is_set():
                     break
                 copied = time.perf_counter_ns()
                 if copied-due > 11_111_111:
                     with self.lock:
+                        if gen != self.lifecycle:
+                            break
                         self.counts.setdefault('replay_late_skipped', 0)
                         self.counts['replay_late_skipped'] += 1
                     continue
@@ -1277,18 +1343,24 @@ class Runtime:
                 h = FrameHeader(len(payload), JPEG|REPLAY, session, int(seq), int(stamps[2]), int(vendor),
                                 copied, begin, encoded, encoded, *(int(t) for t in stamps), int(identities[index]),
                                 raw_crc32=zlib.crc32(image.tobytes()))
+                if gen != self.lifecycle or stop_ev.is_set():
+                    break
                 self._publish(h, payload, encoded)
                 with self.lock:
-                    self.replay['position'] = index+1
+                    if gen == self.lifecycle:
+                        self.replay['position'] = index+1
             with self.lock:
-                self.replay['finished'] = not self.stop_event.is_set()
+                if gen == self.lifecycle:
+                    self.replay['finished'] = not stop_ev.is_set()
         except Exception as error:
             with self.lock:
-                self.last_error = str(error)
+                if gen == self.lifecycle:
+                    self.last_error = str(error)
         finally:
             with self.condition:
-                self.connected = False
-                self.condition.notify_all()
+                if gen == self.lifecycle:
+                    self.connected = False
+                    self.condition.notify_all()
 
     def _set_clock(self, calibrated):
         with self.lock:
@@ -1341,7 +1413,9 @@ class Runtime:
             self._reset_model_state()
             self._send_result(self.last_header, self.prediction, upper)
 
-    def _inference(self):
+    def _inference(self, *, session_stop=None, generation=None):
+        stop_ev = self.stop_event if session_stop is None else session_stop
+        gen = self.lifecycle if generation is None else generation
         try:
             # CUDA's first call is per-thread. Finish warmup before subscribing,
             # so the native producer can choose its fixed epoch afterwards.
@@ -1356,13 +1430,17 @@ class Runtime:
             warm_picture.save(warm_jpeg, format='JPEG', quality=95)
             Image.open(io.BytesIO(warm_jpeg.getvalue())).load()
             self.inference_ready.set()
-            while not self.stop_event.is_set():
+            while not stop_ev.is_set():
                 if self.config['model_kind'] == 'segmentation':
                     self._activate_personal_profile()
                 with self.condition:
+                    if gen != self.lifecycle or stop_ev.is_set():
+                        break
                     self._expire()
                     if self.pending is None:
                         self.condition.wait(.05)
+                    if gen != self.lifecycle or stop_ev.is_set():
+                        break
                     if self.pending is None:
                         self._expire()
                         continue
@@ -1378,7 +1456,8 @@ class Runtime:
                     if self.mode == 'live' and (begin - received) / 1e6 <= config['stale_ms']:
                         self._request_clock_resync()
                     with self.lock:
-                        self.counts['stale'] += 1
+                        if gen == self.lifecycle:
+                            self.counts['stale'] += 1
                     continue
                 try:
                     image = np.asarray(Image.open(io.BytesIO(payload)).convert('L'))
@@ -1394,16 +1473,18 @@ class Runtime:
                         raw = self.model.predict(image, config)
                 except Exception:
                     with self.lock:
-                        if self.stop_event.is_set() or header.session_id != self.order.session or model_version != self.model_version:
-                            self.counts['superseded'] += 1
+                        if gen != self.lifecycle or stop_ev.is_set() or header.session_id != self.order.session or model_version != self.model_version:
+                            if gen == self.lifecycle:
+                                self.counts['superseded'] += 1
                             continue
                         self.counts['decode_errors'] += 1
                     raise
                 finished = time.perf_counter_ns()
                 age, upper = self._age(header, finished)
                 with self.lock:
-                    if self.stop_event.is_set() or header.session_id != self.order.session or model_version != self.model_version:
-                        self.counts['superseded'] += 1
+                    if gen != self.lifecycle or stop_ev.is_set() or header.session_id != self.order.session or model_version != self.model_version:
+                        if gen == self.lifecycle:
+                            self.counts['superseded'] += 1
                         continue
                     self.counts['decoded'] += 1
                     if not self.capture_only:
@@ -1443,7 +1524,7 @@ class Runtime:
                 if finished-self.last_preview_ns >= 1e9/config['preview_fps']:
                     preview = self._preview_image(image, raw.get('mask'), prediction)
                     with self.lock:
-                        if (header.session_id == self.order.session and not self.stop_event.is_set()
+                        if (gen == self.lifecycle and header.session_id == self.order.session and not stop_ev.is_set()
                                 and preview_version == self.model_version):
                             self.preview = preview
                             self.last_preview_ns = finished
@@ -1451,29 +1532,36 @@ class Runtime:
                              decoded_pc_ns=decoded, inferred_pc_ns=finished, published_pc_ns=published,
                              source_age_ms=age, source_age_upper_ms=upper if math.isfinite(upper) else None,
                              output_session_id=output_session_id, prediction=frame_prediction)
-                self.log.write(json.dumps(entry, ensure_ascii=False, allow_nan=False)+'\n')
+                with self.lock:
+                    if gen == self.lifecycle and self.log:
+                        self.log.write(json.dumps(entry, ensure_ascii=False, allow_nan=False)+'\n')
         except Exception as error:
             self.inference_ready.set()
-            with self.lock:
-                self.last_error = type(error).__name__+': '+str(error)
-            self.stop_event.set()
+            stop_ev.set()
             self._wake_clock_thread()
-            self._interrupt_sockets()
+            should_sync = False
             with self.lock:
-                self.prediction = self._invalid('error')
-                self.running = False
-                self.connected = False
-                self.mode = 'idle'
-                self.config['enabled'] = False
-                if self.last_header is not None:
-                    self._send_result(self.last_header, self.prediction, 0.)
-            try:
-                self._sync_psl_worker()
-            except RuntimeError:
-                pass
+                if gen == self.lifecycle:
+                    should_sync = True
+                    self.last_error = type(error).__name__+': '+str(error)
+            if should_sync:
+                self._interrupt_sockets()
+                with self.lock:
+                    if gen == self.lifecycle:
+                        self.prediction = self._invalid('error')
+                        self.running = False
+                        self.connected = False
+                        self.mode = 'idle'
+                        self.config['enabled'] = False
+                        if self.last_header is not None:
+                            self._send_result(self.last_header, self.prediction, 0.)
+                try:
+                    self._sync_psl_worker()
+                except RuntimeError:
+                    pass
         finally:
             with self.lock:
-                if self.log and self.stop_event.is_set():
+                if gen == self.lifecycle and self.log and stop_ev.is_set():
                     try:
                         self.log.flush()
                         self.log.close()

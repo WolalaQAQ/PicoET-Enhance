@@ -269,17 +269,16 @@ def make_server(runtime, host='127.0.0.1', port=8787, *, discover=discover_sourc
                         result = runtime.train(body.get('action'), body.get('operation'), body.get('args'))
                     return self.respond(200, result)
                 if path == '/api/cymple-relay':
-                    with control:
-                        action = body.get('action')
-                        payload = {k: v for k, v in body.items() if k != 'action'}
-                        if action == 'start':
-                            result = relay.start(payload)
-                        elif action == 'stop':
-                            result = relay.stop()
-                        elif action == 'configure':
-                            result = relay.configure(payload)
-                        else:
-                            raise ValueError('Unknown Cymple relay action')
+                    action = body.get('action')
+                    payload = {k: v for k, v in body.items() if k != 'action'}
+                    if action == 'start':
+                        result = relay.start(payload)
+                    elif action == 'stop':
+                        result = relay.stop()
+                    elif action == 'configure':
+                        result = relay.configure(payload)
+                    else:
+                        raise ValueError('Unknown Cymple relay action')
                     return self.respond(200, result)
                 if path == '/api/stop':
                     with control:
