@@ -8,11 +8,26 @@ import re
 import shutil
 import subprocess
 import tempfile
+import urllib.request
 import zipfile
 
 STUDIO_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = STUDIO_ROOT.parent
 TAURI_DIR = STUDIO_ROOT / 'src-tauri'
+
+DEFAULT_ORT_NUPKG_VERSION = '1.24.4'
+DEFAULT_ORT_NUPKG_URL = (
+    'https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/'
+    f'{DEFAULT_ORT_NUPKG_VERSION}/'
+    f'microsoft.ml.onnxruntime.directml.{DEFAULT_ORT_NUPKG_VERSION}.nupkg'
+)
+DEFAULT_ORT_NUPKG_SHA256 = '57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681'
+DEFAULT_ORT_NUPKG_ENTRIES = (
+    ('runtimes/win-x64/native/onnxruntime.dll', 'onnxruntime.dll'),
+    ('runtimes/win-x64/native/onnxruntime_providers_shared.dll', 'onnxruntime_providers_shared.dll'),
+    ('LICENSE', 'ONNXRUNTIME-LICENSE.txt'),
+    ('ThirdPartyNotices.txt', 'ONNXRUNTIME-THIRD-PARTY-NOTICES.txt'),
+)
 
 REPO_DOCS = (
     'LICENSE',
@@ -200,6 +215,45 @@ def collect_ort_dlls(ort_dll=None, ort_dir=None):
     return []
 
 
+def fetch_default_ort_directml(extract_dir, cache_dir=None):
+    """Download (or reuse cached), SHA-256 verify, and extract official ORT DirectML DLLs."""
+    cache_root = Path(cache_dir) if cache_dir is not None else (Path(tempfile.gettempdir()) / 'picoet-ort-cache')
+    cache_root.mkdir(parents=True, exist_ok=True)
+    nupkg_path = cache_root / f'microsoft.ml.onnxruntime.directml.{DEFAULT_ORT_NUPKG_VERSION}.nupkg'
+
+    if not nupkg_path.is_file() or sha256_file(nupkg_path) != DEFAULT_ORT_NUPKG_SHA256:
+        tmp_path = nupkg_path.with_suffix('.nupkg.tmp')
+        try:
+            with urllib.request.urlopen(DEFAULT_ORT_NUPKG_URL, timeout=60) as resp, open(tmp_path, 'wb') as out:
+                shutil.copyfileobj(resp, out)
+            actual = sha256_file(tmp_path)
+            if actual != DEFAULT_ORT_NUPKG_SHA256:
+                raise RuntimeError(
+                    f'ONNX Runtime DirectML {DEFAULT_ORT_NUPKG_VERSION} SHA-256 mismatch: '
+                    f'expected {DEFAULT_ORT_NUPKG_SHA256}, got {actual}'
+                )
+            os.replace(tmp_path, nupkg_path)
+        except Exception:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+            raise
+
+    extract_root = Path(extract_dir)
+    extract_root.mkdir(parents=True, exist_ok=True)
+    extracted = []
+    with zipfile.ZipFile(nupkg_path, 'r') as zf:
+        for member, dest_name in DEFAULT_ORT_NUPKG_ENTRIES:
+            if member not in zf.namelist():
+                raise FileNotFoundError(
+                    f'Missing {member!r} inside Microsoft.ML.OnnxRuntime.DirectML {DEFAULT_ORT_NUPKG_VERSION}'
+                )
+            dest_path = extract_root / dest_name
+            with zf.open(member, 'r') as src, open(dest_path, 'wb') as dst:
+                shutil.copyfileobj(src, dst)
+            extracted.append((dest_path, dest_name))
+    return extracted
+
+
 def smoke_test_executable(exe_path, expected_version):
     ver_proc = subprocess.run(
         [str(exe_path), '--version'],
@@ -244,10 +298,14 @@ def build_packages(
     skip_installer=False,
     ort_dll=None,
     ort_dir=None,
+    no_ort=False,
 ):
     version = version or default_version()
     verify_version_parity(version)
-    ort_entries = collect_ort_dlls(ort_dll=ort_dll, ort_dir=ort_dir)
+    if no_ort and (ort_dll is not None or ort_dir is not None):
+        raise ValueError('Cannot combine --no-ort with --ort-dll or --ort-dir')
+    ort_entries = [] if no_ort else collect_ort_dlls(ort_dll=ort_dll, ort_dir=ort_dir)
+    ort_source = 'none' if no_ort else ('local' if ort_entries else f'default-directml-{DEFAULT_ORT_NUPKG_VERSION}')
 
     out_dir = Path(output_dir or (REPO_ROOT / 'artifacts' / 'pc-studio-release')).resolve()
     auto_work_dir = work_dir is None
@@ -260,6 +318,9 @@ def build_packages(
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        if not no_ort and not ort_entries:
+            ort_entries = fetch_default_ort_directml(wk_dir / 'ort-directml')
+
         cargo_exe = find_cargo()
         env = dict(os.environ)
         env['PICOET_STUDIO_VERSION'] = version
@@ -308,6 +369,7 @@ def build_packages(
             'installer_exe': None,
             'installer_sha256': None,
             'ort_dll_bundled': bool(ort_files),
+            'ort_source': ort_source,
             'ort_files': ort_files,
         }
 
@@ -355,6 +417,11 @@ def main(argv=None):
         type=Path,
         help='Optional directory containing onnxruntime.dll and sibling DirectML.dll / onnxruntime_providers_*.dll (or set PICOET_ORT_DIR)',
     )
+    parser.add_argument(
+        '--no-ort',
+        action='store_true',
+        help='Skip bundling ONNX Runtime (default downloads and verifies official Microsoft.ML.OnnxRuntime.DirectML)',
+    )
     args = parser.parse_args(argv)
     info = build_packages(
         args.version,
@@ -364,6 +431,7 @@ def main(argv=None):
         skip_installer=args.skip_installer,
         ort_dll=args.ort_dll,
         ort_dir=args.ort_dir,
+        no_ort=args.no_ort,
     )
     print(json.dumps(info, indent=2))
 

@@ -47,28 +47,29 @@ cargo run --release --manifest-path pc-studio/src-tauri/Cargo.toml
 
 ### ONNX Runtime DLL 与推理后端
 
-`PicoET-PC-Studio.exe` 通过 `ort`（`load-dynamic`，要求 ORT C API `>= 1.17`）在运行时动态加载 ONNX Runtime。相机预览、Cymple 眼动转发、引导录制与图像审核不依赖 ORT DLL；需要开启实时 `.onnx` 整嘴推理时，只需提供对应后端的 Windows x64 `onnxruntime.dll`（及配套提供器 DLL，如 `DirectML.dll` 或 `onnxruntime_providers_*.dll`；请勿把不同发行包的 DLL 混放在同一目录）。
+**Windows 安装包与绿色便携 ZIP 默认已自带官方 `Microsoft.ML.OnnxRuntime.DirectML`（`1.24.4`，含 `onnxruntime.dll` 与 `onnxruntime_providers_shared.dll`）**，开箱即可在所有 Windows 10/11 DirectX 12 显卡上运行 DirectML GPU 推理并自动回退 CPU，无需用户额外下载依赖。
 
-运行时按以下顺序查找 `onnxruntime.dll`：
+`PicoET-PC-Studio.exe` 通过 `ort`（`load-dynamic`，要求 ORT C API `>= 1.17`）动态加载 `onnxruntime.dll`，因此你也可以在不重新编译的情况下替换为 CUDA / OpenVINO / CPU 后端，或通过 `cargo run` 从源码运行时按以下顺序查找 `onnxruntime.dll`（请勿把不同 ORT 发行包的 DLL 混放在同一目录）：
 
 1. 环境变量 `ORT_DYLIB_PATH`（指向 `onnxruntime.dll` 的完整路径）
-2. `PicoET-PC-Studio.exe` 同级目录中的 `onnxruntime.dll`
+2. `PicoET-PC-Studio.exe` 同级目录中的 `onnxruntime.dll`（安装包与便携包默认位置）
 3. 可执行文件上一级目录中的 `../onnxruntime.dll`
 4. Windows 开发环境回退：`%CONDA_PREFIX%\Lib\site-packages\onnxruntime\capi\onnxruntime.dll`
 5. 标准 Windows `PATH` 与系统 DLL 搜索路径
 
-| 推理后端 | 放到 `PicoET-PC-Studio.exe` 同级目录（或通过 `ORT_DYLIB_PATH` 指定） |
+| 推理后端 | 说明 / 替换方式 |
 |---|---|
-| Windows DirectML（DirectX 12 显卡） | ORT DirectML 版 `onnxruntime.dll`（必要时附带配套 `DirectML.dll`） |
-| 仅 CPU | ORT CPU 版 `onnxruntime.dll` |
-| NVIDIA CUDA 12 | `onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `onnxruntime_providers_cuda.dll`（CUDA 12 / cuDNN 需在 `PATH` 中） |
-| Intel OpenVINO GPU | `onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `onnxruntime_providers_openvino.dll`（OpenVINO 运行库需在 `PATH` 中） |
+| Windows DirectML（默认自带，所有 DX12 显卡 + CPU 回退） | 安装包与便携 ZIP 已内置 `Microsoft.ML.OnnxRuntime.DirectML 1.24.4`（配合 Windows 系统自带 `DirectML.dll`），开箱即用 |
+| 仅 CPU | 可替换为 ORT CPU 版 `onnxruntime.dll`（或直接在设置中将设备选为 `cpu`） |
+| NVIDIA CUDA 12 | 替换为 CUDA 版 `onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `onnxruntime_providers_cuda.dll`（CUDA 12 / cuDNN 需在 `PATH` 中） |
+| Intel OpenVINO GPU | 替换为 OpenVINO 版 `onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `onnxruntime_providers_openvino.dll`（OpenVINO 运行库需在 `PATH` 中） |
 
-自行从源码打包便携 ZIP 或 Windows 安装包时，也可用参数把本地 ORT DLL 一并打包到 `PicoET-PC-Studio.exe` 旁：
+从源码运行打包脚本时，默认会自动下载、校验 SHA-256 并打包官方 `Microsoft.ML.OnnxRuntime.DirectML 1.24.4`；离线构建或需换用自定义 ORT 目录时可传参覆盖：
 
 ```powershell
-python -B -X utf8 pc-studio/package_release.py --ort-dir <ORT-DLL所在目录>
-# 或 --ort-dll <onnxruntime.dll路径>；也支持环境变量 PICOET_ORT_DIR / PICOET_ORT_DLL
+python -B -X utf8 pc-studio/package_release.py
+# 覆盖为本地 ORT 目录/DLL：--ort-dir <目录> 或 --ort-dll <路径>（也支持 PICOET_ORT_DIR / PICOET_ORT_DLL）
+# 跳过 ORT 打包：--no-ort
 ```
 
 推理设备设为 `auto` 时，按 **CUDA Graph → CUDA → OpenVINO GPU → DirectML → CPU** 的顺序探测并做首次推理校验；手动指定具体设备时不会回退到其他后端。实际生效的执行提供器与报错信息可在 **诊断 → 连接诊断** 查看。

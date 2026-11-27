@@ -47,28 +47,29 @@ Click **Choose file** to select a whole-mouth `.onnx` model; place its same-name
 
 ### ONNX Runtime DLL & inference backends
 
-`PicoET-PC-Studio.exe` loads ONNX Runtime dynamically (`ort` `load-dynamic`, ORT C API `>= 1.17`). Camera preview, Cymple eye relay, guided recording, and image review work without an ONNX Runtime DLL. To run live `.onnx` mouth inference, provide a matching Windows x64 `onnxruntime.dll` (and its companion provider DLLs if applicable, such as `DirectML.dll` or `onnxruntime_providers_*.dll` — do not mix DLLs from different ORT builds in the same folder).
+**The Windows installer and portable ZIP bundle official `Microsoft.ML.OnnxRuntime.DirectML` (`1.24.4`, `onnxruntime.dll` + `onnxruntime_providers_shared.dll`) by default**, so DirectML GPU inference (any DirectX 12 GPU) with CPU fallback works out of the box on Windows 10/11 with zero extra downloads.
 
-At runtime, PC Studio searches for `onnxruntime.dll` in this order:
+`PicoET-PC-Studio.exe` loads ONNX Runtime dynamically (`ort` `load-dynamic`, ORT C API `>= 1.17`), so you can still swap in CUDA or OpenVINO DLLs without rebuilding, or point `cargo run` from source at a local DLL. PC Studio searches for `onnxruntime.dll` in this order (do not mix DLLs from different ORT builds in the same folder):
 
 1. `ORT_DYLIB_PATH` environment variable (full path to `onnxruntime.dll`)
-2. `onnxruntime.dll` placed directly next to `PicoET-PC-Studio.exe`
+2. `onnxruntime.dll` placed directly next to `PicoET-PC-Studio.exe` (default in installer & portable ZIP)
 3. `../onnxruntime.dll` (parent directory of the executable)
 4. Windows dev fallback: `%CONDA_PREFIX%\Lib\site-packages\onnxruntime\capi\onnxruntime.dll`
 5. Standard Windows `PATH` / OS DLL loader search
 
-| Backend | Drop-in DLLs next to `PicoET-PC-Studio.exe` (or via `ORT_DYLIB_PATH`) |
+| Backend | Default / override |
 |---|---|
-| Windows DirectML (DirectX 12 GPUs) | `onnxruntime.dll` from an ORT DirectML build (plus matching `DirectML.dll` if needed) |
-| CPU only | `onnxruntime.dll` from an ORT CPU build |
-| NVIDIA CUDA 12 | `onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `onnxruntime_providers_cuda.dll` (with CUDA 12 / cuDNN on `PATH`) |
-| Intel OpenVINO GPU | `onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `onnxruntime_providers_openvino.dll` (with OpenVINO runtime on `PATH`) |
+| Windows DirectML (bundled by default; DX12 GPUs + CPU fallback) | Official `Microsoft.ML.OnnxRuntime.DirectML 1.24.4` is included beside `PicoET-PC-Studio.exe` (uses Windows' built-in `DirectML.dll`) |
+| CPU only | Select `cpu` in Settings, or replace with an ORT CPU `onnxruntime.dll` |
+| NVIDIA CUDA 12 | Replace with CUDA `onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `onnxruntime_providers_cuda.dll` (with CUDA 12 / cuDNN on `PATH`) |
+| Intel OpenVINO GPU | Replace with OpenVINO `onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `onnxruntime_providers_openvino.dll` (with OpenVINO runtime on `PATH`) |
 
-When building your own portable ZIP or Windows installer from source, you can optionally bundle a local ORT directory or DLL beside `PicoET-PC-Studio.exe`:
+Running `package_release.py` from source automatically downloads, SHA-256 verifies, and bundles `Microsoft.ML.OnnxRuntime.DirectML 1.24.4` by default; pass `--ort-dir`, `--ort-dll`, or `--no-ort` to override:
 
 ```powershell
-python -B -X utf8 pc-studio/package_release.py --ort-dir <path-to-ort-dll-folder>
-# or --ort-dll <path-to-onnxruntime.dll> / env vars PICOET_ORT_DIR or PICOET_ORT_DLL
+python -B -X utf8 pc-studio/package_release.py
+# Override with local ORT DLLs: --ort-dir <folder> or --ort-dll <path> (or PICOET_ORT_DIR / PICOET_ORT_DLL)
+# Skip bundling ORT: --no-ort
 ```
 
 When inference device is set to `auto`, the runtime probes **CUDA Graph → CUDA → OpenVINO GPU → DirectML → CPU** with a first-run check. Choosing a specific device disables automatic fallback. Check **Diagnostics → Connection diagnostics** to see the active provider or any initialization error.

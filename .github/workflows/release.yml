@@ -159,8 +159,9 @@ jobs:
             if ($proc.ExitCode -ne 0) { throw "Inno Setup portable extract failed: $($proc.ExitCode)" }
             $sysIscc = Join-Path $innoDir 'ISCC.exe'
           }
-          # Optional: if PICOET_ORT_DIR or PICOET_ORT_DLL is set in the environment,
-          # package_release.py copies onnxruntime.dll (and sibling provider DLLs) beside PicoET-PC-Studio.exe.
+          # By default, package_release.py downloads, SHA-256 verifies, and bundles
+          # official Microsoft.ML.OnnxRuntime.DirectML (onnxruntime.dll + onnxruntime_providers_shared.dll)
+          # beside PicoET-PC-Studio.exe so DirectML GPU + CPU inference works out of the box.
           python -B -X utf8 pc-studio/package_release.py --version $env:MODULE_VERSION --output-dir $directory.FullName --iscc $sysIscc
           Copy-Item LICENSE, THIRD_PARTY_NOTICES.md $directory.FullName -Force
           function Get-VersionNotes([string]$path, [string]$fallbackHeading) {

@@ -255,13 +255,17 @@ licenses:
 `PicoET-PC-Studio.exe` links the MIT/Apache-2.0 `ort` crate with dynamic loading
 (`load-dynamic`) and loads [ONNX Runtime](https://github.com/microsoft/onnxruntime)
 (MIT License, Copyright (c) Microsoft Corporation) dynamically at runtime when
-performing whole-mouth `.onnx` inference. No ONNX Runtime binaries or execution
-provider libraries (DirectML, CUDA, OpenVINO) are committed to this repository.
-Optional side-by-side DLLs supplied via `ORT_DYLIB_PATH`, placed next to
-`PicoET-PC-Studio.exe`, or bundled locally with `pc-studio/package_release.py`
-remain subject to their respective upstream licenses (MIT for ONNX Runtime;
-Apache-2.0 for OpenVINO; Microsoft DirectML and NVIDIA CUDA terms for their
-respective runtime components).
+performing whole-mouth `.onnx` inference. No ONNX Runtime binaries are committed
+to this Git repository; release builds (`pc-studio/package_release.py`) fetch,
+SHA-256 verify, and bundle the official `Microsoft.ML.OnnxRuntime.DirectML`
+(`1.24.4`, `onnxruntime.dll` and `onnxruntime_providers_shared.dll`) along with
+its upstream `ONNXRUNTIME-LICENSE.txt` and `ONNXRUNTIME-THIRD-PARTY-NOTICES.txt`
+beside `PicoET-PC-Studio.exe` (relying on Windows' system `DirectML.dll`).
+Alternative side-by-side DLLs supplied via `ORT_DYLIB_PATH`, placed next to
+`PicoET-PC-Studio.exe`, or passed to `package_release.py` remain subject to
+their respective upstream licenses (MIT for ONNX Runtime; Apache-2.0 for
+OpenVINO; Microsoft DirectML and NVIDIA CUDA terms for their respective runtime
+components).
 
 ### Microsoft Edge WebView2 Runtime
 
