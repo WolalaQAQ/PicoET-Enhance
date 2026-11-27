@@ -16,7 +16,6 @@ from PIL import Image
 import torch
 
 import face_schema
-from face_model import FaceModel
 import mouth50_trainer as trainer
 from mouth50_trainer import augment, eval_continuous, label_rules, pipeline
 from mouth50_trainer.losses import (
@@ -268,19 +267,19 @@ class V3LossAndGRUTests(unittest.TestCase):
             if "CUDAExecutionProvider" in ort.get_available_providers():
                 self.assertIn("cuda_graph_ms", bench, msg=f"CUDA Graph failed: {bench}")
 
-            loaded = FaceModel(out_onnx, device="onnx:cpu")
-            self.assertTrue(loaded.is_temporal)
+            session = ort.InferenceSession(str(out_onnx), providers=["CPUExecutionProvider"])
+            self.assertEqual([i.name for i in session.get_inputs()], ["frame", "h_in"])
+            self.assertEqual([o.name for o in session.get_outputs()], ["blendshapes", "h_out"])
             frame = np.full((400, 400), 127, dtype=np.uint8)
-            loaded.predict(frame, session_id="one", source_ns=100)
+            x_np = frame[None, None].astype(np.float32) / 255.0
             with torch.inference_mode():
-                x = torch.from_numpy(frame)[None, None].float() / 255.0
+                x = torch.from_numpy(x_np)
                 _, h = gru.forward_step(x, torch.zeros(1, 256))
                 _, h_next = gru.forward_step(x, h)
-            np.testing.assert_allclose(loaded._state, h.numpy(), rtol=0, atol=1e-5)
-            loaded.predict(frame, session_id="one", source_ns=200)
-            np.testing.assert_allclose(loaded._state, h_next.numpy(), rtol=0, atol=1e-5)
-            loaded.predict(frame, session_id="two", source_ns=300)
-            np.testing.assert_allclose(loaded._state, h.numpy(), rtol=0, atol=1e-5)
+            _, h1 = session.run(["blendshapes", "h_out"], {"frame": x_np, "h_in": np.zeros((1, 256), np.float32)})
+            np.testing.assert_allclose(h1, h.numpy(), rtol=0, atol=1e-5)
+            _, h2 = session.run(["blendshapes", "h_out"], {"frame": x_np, "h_in": h1})
+            np.testing.assert_allclose(h2, h_next.numpy(), rtol=0, atol=1e-5)
 
     def test_pipeline_cli_and_clip_augmentation(self):
         parser = pipeline.build_parser()
@@ -355,19 +354,11 @@ class PortableTrainerTests(unittest.TestCase):
             self.assertLess(manifest["max_onnx_abs_diff"], 1e-5)
             np.testing.assert_allclose(eval_continuous.predict_paths(path, "onnx", [image_path])[0],
                                        expected, rtol=0, atol=1e-5)
-            quarantined = FaceModel(path, device="onnx:cpu").predict(pixels)
-            self.assertEqual(quarantined["values"], [0.0] * 50)
-            self.assertEqual(quarantined["channels"], {})
-
-            # Change only this synthetic fixture's manifest to exercise an enabled output.
-            index = face_schema.INDEX["TongueOut"]
-            manifest.update(validated_channels=["TongueOut"], valid_mask=1 << index)
-            path.with_suffix(".json").write_text(json.dumps(manifest), encoding="utf-8")
-            result = FaceModel(path, device="onnx:cpu").predict(pixels)
-            self.assertEqual(result["valid_mask"], 1 << index)
-            self.assertEqual(set(result["channels"]), {"TongueOut"})
-            self.assertAlmostEqual(result["channels"]["TongueOut"], expected[index], delta=1e-5)
-            self.assertEqual(result["values"][:index] + result["values"][index + 1:], [0.0] * 49)
+            session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+            self.assertEqual([i.name for i in session.get_inputs()], ["frame"])
+            self.assertEqual([o.name for o in session.get_outputs()], ["blendshapes"])
+            ort_out = session.run(["blendshapes"], {"frame": pixels[None, None].astype(np.float32) / 255.0})[0][0]
+            np.testing.assert_allclose(ort_out, expected, rtol=0, atol=1e-5)
 
     def test_ir_augment_and_teacher_full_roi(self):
         torch.manual_seed(157)

@@ -30,7 +30,7 @@ WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
 UninstallDisplayIcon={app}\PicoET-PC-Studio.exe
-SetupIconFile={#BundleDir}\pc-studio\web\favicon.ico
+SetupIconFile=..\src-tauri\icons\icon.ico
 LicenseFile={#BundleDir}\LICENSE
 
 [Languages]
@@ -39,8 +39,13 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\pc-studio"
+
 [Files]
-Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#BundleDir}\PicoET-PC-Studio.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BundleDir}\*"; DestDir: "{app}"; Excludes: "PicoET-PC-Studio.exe"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\PicoET PC Studio"; Filename: "{app}\PicoET-PC-Studio.exe"; WorkingDir: "{app}"; IconFilename: "{app}\PicoET-PC-Studio.exe"
@@ -50,26 +55,78 @@ Name: "{autodesktop}\PicoET PC Studio"; Filename: "{app}\PicoET-PC-Studio.exe"; 
 Filename: "{app}\PicoET-PC-Studio.exe"; Description: "{cm:LaunchProgram,PicoET PC Studio}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-procedure StopRunningStudio();
+const
+  WV2KeyWow64 = 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  WV2KeyNative = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  WV2KeyUser = 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+
+function HasValidWebView2Version(const RootKey: Integer; const SubKey: String): Boolean;
 var
-  ExePath: String;
-  ResultCode: Integer;
+  Ver: String;
 begin
-  ExePath := ExpandConstant('{app}\PicoET-PC-Studio.exe');
-  if FileExists(ExePath) then
+  Result := RegQueryStringValue(RootKey, SubKey, 'pv', Ver) and
+            (Trim(Ver) <> '') and (Trim(Ver) <> '0.0.0.0');
+end;
+
+function IsWebView2Installed(): Boolean;
+begin
+  Result := HasValidWebView2Version(HKLM, WV2KeyWow64) or
+            HasValidWebView2Version(HKLM, WV2KeyNative) or
+            HasValidWebView2Version(HKCU, WV2KeyUser);
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  Result := True;
+  if (not WizardSilent()) and (not IsWebView2Installed()) then
   begin
-    Exec(ExePath, '--stop', ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    if MsgBox(
+      'Microsoft Edge WebView2 Runtime was not detected on this PC.' + #13#10 + #13#10 +
+      'PicoET PC Studio requires the Evergreen Microsoft Edge WebView2 Runtime to run.' + #13#10 +
+      'Download it from: https://developer.microsoft.com/en-us/microsoft-edge/webview2/' + #13#10 + #13#10 +
+      'Continue installing PicoET PC Studio anyway?',
+      mbConfirmation, MB_YESNO) = IDNO then
+    begin
+      Result := False;
+    end;
   end;
 end;
 
-function PrepareToInstall(var NeedsRestart: Boolean): String;
+function RunStopCommand(const ExePath, WorkDir: String; const WaitMs: Integer): Boolean;
+var
+  ResultCode: Integer;
 begin
-  StopRunningStudio();
+  Result := FileExists(ExePath) and
+            Exec(ExePath, '--stop', WorkDir, SW_HIDE, ewWaitUntilTerminated, ResultCode) and
+            (ResultCode = 0);
+  if Result and (WaitMs > 0) then
+    Sleep(WaitMs);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  TempExe: String;
+  StoppedViaTemp: Boolean;
+begin
+  StoppedViaTemp := False;
+  try
+    ExtractTemporaryFile('PicoET-PC-Studio.exe');
+    TempExe := ExpandConstant('{tmp}\PicoET-PC-Studio.exe');
+    StoppedViaTemp := RunStopCommand(TempExe, ExpandConstant('{tmp}'), 500);
+  except
+    StoppedViaTemp := False;
+  end;
+
+  if not StoppedViaTemp then
+    RunStopCommand(ExpandConstant('{app}\PicoET-PC-Studio.exe'), ExpandConstant('{app}'), 500);
+
   Result := '';
 end;
 
-function InitializeUninstall(): Boolean;
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  StopRunningStudio();
-  Result := True;
+  if CurUninstallStep = usUninstall then
+  begin
+    RunStopCommand(ExpandConstant('{app}\PicoET-PC-Studio.exe'), ExpandConstant('{app}'), 300);
+  end;
 end;

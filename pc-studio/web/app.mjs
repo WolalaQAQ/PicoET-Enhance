@@ -111,11 +111,159 @@ const LABELS = {title: "title", "host-label": "host", "model-label": "model", "m
   "preset-hybrid-title": "presetHybridTitle", "preset-hybrid-desc": "presetHybridDesc",
   "preset-model-title": "presetModelTitle", "preset-model-desc": "presetModelDesc",
   "hybrid-channels-title": "hybridChannelsTitle", "hybrid-channels-help": "hybridChannelsHelp",
-  "filter-all": "filterAll", "filter-stock": "filterStock", "filter-model": "filterModel", "filter-good": "filterGood"};
+  "filter-all": "filterAll", "filter-stock": "filterStock", "filter-model": "filterModel", "filter-good": "filterGood",
+  "quit-service": "quitService", "update-dismiss": "updateDismiss"};
 const MOVING_STEPS = new Set(["tongue_sweep", "negative_pucker_release", "negative_speech"]);
 const display = x => x == null || x === "" ? "—" : String(x);
 const fixed = (x, n = 1) => x != null && Number.isFinite(Number(x)) ? Number(x).toFixed(n) : "—";
 const percentile = x => x ? `${fixed(x.p50)} / ${fixed(x.p95)} ms` : "—";
+function jsonResponse(data, status = 200) {
+  const payload = data === undefined ? "" : JSON.stringify(data);
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async text() { return payload; },
+    async json() { return payload ? JSON.parse(payload) : null; },
+  };
+}
+function invokeWithSignal(tauriCore, command, args, signal) {
+  if (signal?.aborted) {
+    const err = new Error("Aborted");
+    err.name = "AbortError";
+    return Promise.reject(err);
+  }
+  const promise = args === undefined ? tauriCore.invoke(command) : tauriCore.invoke(command, args);
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      const err = new Error("Aborted");
+      err.name = "AbortError";
+      reject(err);
+    };
+    signal.addEventListener("abort", onAbort, {once: true});
+    Promise.resolve(promise).then(
+      value => { signal.removeEventListener("abort", onAbort); resolve(value); },
+      error => { signal.removeEventListener("abort", onAbort); reject(error); },
+    );
+  });
+}
+function toBytes(raw) {
+  if (raw instanceof Uint8Array) return raw;
+  if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  if (ArrayBuffer.isView(raw)) return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+  if (Array.isArray(raw)) return new Uint8Array(raw);
+  return new Uint8Array(0);
+}
+export function createTauriFetcher(tauriCore, fallbackFetch = null) {
+  if (!tauriCore || typeof tauriCore.invoke !== "function") {
+    throw new TypeError("tauriCore.invoke is required");
+  }
+  return async function tauriFetch(path, opts = {}) {
+    const method = String(opts.method || "GET").toUpperCase();
+    const url = new URL(path, "http://tauri.local");
+    const pathname = url.pathname;
+    const params = url.searchParams;
+    const parseBody = () => {
+      if (opts.body == null || opts.body === "") return {};
+      return typeof opts.body === "string" ? JSON.parse(opts.body) : opts.body;
+    };
+    const run = async (command, args) => {
+      try {
+        const result = await invokeWithSignal(tauriCore, command, args, opts.signal);
+        return jsonResponse(result, 200);
+      } catch (err) {
+        if (err?.name === "AbortError") throw err;
+        return {
+          ok: false,
+          status: 400,
+          async text() { return JSON.stringify({error: String(err)}); },
+          async json() { return {error: String(err)}; },
+        };
+      }
+    };
+    const runJpeg = async (command, args, emptyStatus) => {
+      try {
+        const bytes = toBytes(await invokeWithSignal(tauriCore, command, args, opts.signal));
+        if (bytes.byteLength === 0) {
+          return {
+            ok: emptyStatus >= 200 && emptyStatus < 300,
+            status: emptyStatus,
+            async blob() { return new Blob([], {type: "image/jpeg"}); },
+            async text() { return ""; },
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          async blob() { return new Blob([bytes], {type: "image/jpeg"}); },
+          async text() { return ""; },
+        };
+      } catch (err) {
+        if (err?.name === "AbortError") throw err;
+        return {
+          ok: false,
+          status: 400,
+          async text() { return JSON.stringify({error: String(err)}); },
+        };
+      }
+    };
+
+    if (method === "GET" && pathname === "/api/status") return run("get_status");
+    if (method === "GET" && pathname === "/api/expressions") return run("get_expressions");
+    if (method === "GET" && pathname === "/api/config") return run("get_config");
+    if (method === "GET" && pathname === "/api/presets") return run("get_presets");
+    if (method === "GET" && pathname === "/api/discovery") {
+      const rawHost = params.get("host");
+      const rawPort = params.get("port");
+      if (rawHost == null && rawPort == null) return run("discover_sources");
+      const host = rawHost && rawHost.trim() ? rawHost.trim() : null;
+      const parsedPort = rawPort != null && rawPort.trim() !== "" ? Number(rawPort) : null;
+      const port = Number.isInteger(parsedPort) ? parsedPort : null;
+      return run("discover_sources", {host, port});
+    }
+    if (method === "GET" && pathname === "/api/update-check") {
+      const rawForce = params.get("force");
+      const force = rawForce === "1" || rawForce === "true";
+      return run("check_updates", {force});
+    }
+    if (method === "GET" && pathname === "/api/preview.jpg") return runJpeg("get_preview_frame", undefined, 204);
+    if (method === "GET" && pathname === "/api/recording/review") {
+      const rawOffset = params.get("offset");
+      const rawLimit = params.get("limit");
+      const rawAll = params.get("all");
+      const offset = rawOffset != null && rawOffset !== "" && Number.isFinite(Number(rawOffset)) ? Math.max(0, Math.trunc(Number(rawOffset))) : 0;
+      const limit = rawLimit != null && rawLimit !== "" && Number.isFinite(Number(rawLimit)) ? Math.max(1, Math.trunc(Number(rawLimit))) : 24;
+      const all = rawAll === "true" || rawAll === "1";
+      return run("get_review_samples", {offset, limit, all});
+    }
+    if (method === "GET" && pathname === "/api/recording/image") {
+      const session = params.get("session") ?? "";
+      const sample = params.get("sample") ?? "";
+      return runJpeg("get_review_image", {session, sample}, 404);
+    }
+    if (method === "POST" && pathname === "/api/model/select") {
+      const body = parseBody();
+      return run("select_model", {initial: typeof body.initial === "string" ? body.initial : ""});
+    }
+    if (method === "POST" && pathname === "/api/config") return run("set_config", {changes: parseBody()});
+    if (method === "POST" && pathname === "/api/start") return run("start_runtime", {payload: parseBody()});
+    if (method === "POST" && pathname === "/api/prepare") return run("prepare_model");
+    if (method === "POST" && pathname === "/api/personalization") return run("personalization_action", {payload: parseBody()});
+    if (method === "POST" && pathname === "/api/recording") return run("recording_action", {payload: parseBody()});
+    if (method === "POST" && pathname === "/api/recording/display") return run("recording_display", {payload: parseBody()});
+    if (method === "POST" && pathname === "/api/recording/review") return run("recording_review", {payload: parseBody()});
+    if (method === "POST" && pathname === "/api/training") return run("training_action", {payload: parseBody()});
+    if (method === "POST" && pathname === "/api/cymple-relay") return run("cymple_relay_action", {payload: parseBody()});
+    if (method === "POST" && pathname === "/api/stop") return run("stop_runtime");
+    if (method === "POST" && pathname === "/api/shutdown") return run("quit_app");
+    if (!pathname.startsWith("/api/") && typeof fallbackFetch === "function") return fallbackFetch(path, opts);
+    return {
+      ok: false,
+      status: 404,
+      async text() { return JSON.stringify({error: `Unknown route: ${method} ${pathname}`}); },
+    };
+  };
+}
 export async function requestJson(fetcher, path, body, timeoutMs = 3500) {
   const method = body === undefined ? "GET" : "POST", controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -195,11 +343,39 @@ export function createApp(doc, options = {}) {
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis), timers = options.timers ?? globalThis;
   const now = options.now ?? Date.now, urls = options.urlApi ?? globalThis.URL, storage = options.storage;
   const speech = options.speech ?? globalThis.speechSynthesis, Utterance = options.Utterance ?? globalThis.SpeechSynthesisUtterance;
-  const navigation = options.navigation;
+  const navigation = options.navigation, tauriCore = options.tauriCore;
+  function syncTrayLanguage(language) {
+    try {
+      const p = tauriCore?.invoke?.("set_tray_language", {language});
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } catch {}
+  }
+  function isSafeExternalUrl(href) {
+    if (typeof href !== "string") return false;
+    const trimmed = href.trim();
+    if (!/^https:\/\//i.test(trimmed) || trimmed.length <= 8 || trimmed[8] === "/") return false;
+    if (/[\u0000-\u001f\u007f\s"\\]/.test(trimmed)) return false;
+    return true;
+  }
+  function wireExternalLink(link, href) {
+    if (!tauriCore?.invoke || !isSafeExternalUrl(href)) return;
+    const open = event => {
+      event?.preventDefault?.();
+      try {
+        const p = tauriCore.invoke("open_external_url", {url: href});
+        if (p && typeof p.catch === "function") p.catch(() => {});
+      } catch {}
+    };
+    link.addEventListener("click", open);
+    link.addEventListener("auxclick", event => {
+      if (event?.button === 1) open(event);
+    });
+  }
   const get = id => doc.getElementById(id), state = {language: initialLanguage(storage, options.languages ?? []), config: null, status: null,
-    online: false, at: 0, busy: "", dirty: false, error: "", errorKey: "", polling: false, pollError: "", destroyed: false, generation: 0,
+    online: false, at: 0, busy: "", dirty: false, error: "", errorKey: "", polling: false, pollError: "", destroyed: false, stoppedByUser: false, generation: 0,
     previewGeneration: 0, previewBusy: false, previewAbort: null, previewUrl: null, previewError: false, previewOwner: null, spoken: null,
-    reviews: null, reviewFocus: null, reviewSelected: new Set(), reference: null, referenceLoading: true, referenceSelected: "neutral",
+    reviews: null, reviewFocus: null, reviewSelected: new Set(), reviewThumbUrls: new Map(), reviewFocusUrl: null, reviewGeneration: 0, reviewFocusGeneration: 0,
+    reference: null, referenceLoading: true, referenceSelected: "neutral",
     referenceKey: "", referencePose: null, referenceAnimated: false, referenceImageError: false,
     discovering: false, discovered: [], discoveryError: "", discoveryDone: false, discoveryKey: "", pickingModel: false,
     page: routePage(navigation?.location.hash), cameraPage: "", referencePaintedKey: "", visualReporting: false,
@@ -207,7 +383,8 @@ export function createApp(doc, options = {}) {
     startStep: 0, archiveKey: "", relayDirty: false, relayPortsManual: false, relayPortsAuto: false, relayError: "", relayErrorKey: "",
     channelSources: {...MOUTH_PRESETS.curated}, channelFilter: "all", channelQuery: "",
     diagView: "expressions", exprRegion: "all", exprActiveOnly: false, exprCompare: true, exprSourceFilter: "all", exprQuery: "", exprFrozen: false, frozenSnapshot: null,
-    pinnedChannels: initialPinnedChannels(storage), exprPolling: false, exprEndpointMissing: false};
+    pinnedChannels: initialPinnedChannels(storage), exprPolling: false, exprEndpointMissing: false,
+    updateInfo: null, checkingUpdate: false, updateManual: false, updateDismissed: false, updateKey: ""};
   const t = key => messages[state.language][key] ?? key, view = () => deriveView(state.status, state.online, now()-state.at);
   const choiceLabel = value => messages[state.language][`choice-${value}`] ?? value;
   const fieldLabel = name => t(name === "device" ? "trainDevice" : name === "split" ? "splitPath" : name);
@@ -430,8 +607,8 @@ export function createApp(doc, options = {}) {
     for (const option of get("train-action").children) option.textContent = t(option.value);
     for (const [name, item] of trainInputs) { item.label.textContent = fieldLabel(name); for (const option of item.input.children ?? []) option.textContent = choiceLabel(option.value); }
     const active = training?.running === true;
-    get("train-start").disabled = !current.current || !Object.keys(spec).length || active || Boolean(state.busy);
-    get("train-cancel").disabled = !current.current || !active || Boolean(state.busy);
+    get("train-start").disabled = !current.current || !Object.keys(spec).length || active || Boolean(state.busy) || state.stoppedByUser;
+    get("train-cancel").disabled = !current.current || !active || Boolean(state.busy) || state.stoppedByUser;
     get("train-state").textContent = !Object.keys(spec).length ? t("trainUnavailable") : t(training?.state ?? "idle");
     get("train-error").hidden = !training?.error; get("train-error").textContent = training?.error ? errorMessage(state.language, training.error) : "";
     get("train-result").textContent = training?.result ? JSON.stringify(training.result) : "";
@@ -556,9 +733,9 @@ export function createApp(doc, options = {}) {
     const prepare=Number(get("guide-prepare").value || 7);
     get("guide-setup").hidden=active || pending || !guided || state.status?.read_only===true;
     get("guide-prepare-field").hidden=!automatic;
-    get("record-start").disabled = !current.current || incompatibleInput || !managed && (!current.running || state.status?.connected !== true || state.status?.source_mode !== "live") || active || pending || Boolean(state.busy) || state.dirty && !managed || !get("record-consent").checked || !get("person_id").value.trim() || guided && automatic && !(prepare>=3 && prepare<=30);
+    get("record-start").disabled = !current.current || state.stoppedByUser || incompatibleInput || !managed && (!current.running || state.status?.connected !== true || state.status?.source_mode !== "live") || active || pending || Boolean(state.busy) || state.dirty && !managed || !get("record-consent").checked || !get("person_id").value.trim() || guided && automatic && !(prepare>=3 && prepare<=30);
     if (sealed && (spent || state.selectedPreset!==control.preset_id)) get("record-start").disabled = true;
-    get("record-stop").disabled = !current.current || !(active || pending) || control?.state==="stopping" || Boolean(state.busy); get("record-cancel").disabled = get("record-stop").disabled;
+    get("record-stop").disabled = !current.current || state.stoppedByUser || !(active || pending) || control?.state==="stopping" || Boolean(state.busy); get("record-cancel").disabled = get("record-stop").disabled;
     get("record-start").hidden = active || pending; get("record-stop").hidden = !(active || pending); get("record-cancel").hidden = !(active || pending);
     get("record-consent").disabled = active || pending || spent || Boolean(state.busy); get("person_id").disabled = get("record-consent").disabled;
     get("guide-enabled").disabled = sealed || active || pending || Boolean(state.busy);
@@ -654,7 +831,7 @@ export function createApp(doc, options = {}) {
       state.referenceKey = key; state.referenceImageError = false;
       for (const id of ["reference-image", "reference-neutral-image", "reference-profile-image"]) get(id).removeAttribute("src");
       if (hasImage) {
-        const asset = file => `/static/guide-reference/${encodeURIComponent(file)}`;
+        const asset = file => `./guide-reference/${encodeURIComponent(file)}`;
         get("reference-image").src = asset(animated && pose.animation ? pose.animation : pose.front);
         get("reference-neutral-image").src = asset(anchor);
         if (pose.profile) get("reference-profile-image").src = asset(pose.profile);
@@ -683,7 +860,7 @@ export function createApp(doc, options = {}) {
     state.referenceSelected = id; state.referenceAnimated = false; render();
   }
   async function loadReference() {
-    try { const manifest = await requestJson(fetcher, "/static/guide-reference/manifest.json"); if (!state.destroyed) state.reference = manifest; }
+    try { const manifest = await requestJson(fetcher, "./guide-reference/manifest.json"); if (!state.destroyed) state.reference = manifest; }
     catch { if (!state.destroyed) state.reference = null; }
     finally { state.referenceLoading = false; if (!state.destroyed) render(); }
   }
@@ -720,18 +897,75 @@ export function createApp(doc, options = {}) {
     } finally { state.visualReporting = false; }
   }
   function reviewImageUrl(sample) { return `/api/recording/image?session=${encodeURIComponent(state.reviews.session_id)}&sample=${encodeURIComponent(sample.sample_id)}`; }
+  function revokeReviewFocusUrl() {
+    state.reviewFocusGeneration++;
+    if (state.reviewFocusUrl) {
+      urls.revokeObjectURL(state.reviewFocusUrl);
+      state.reviewFocusUrl = null;
+    }
+  }
+  function revokeReviewUrls() {
+    state.reviewGeneration++;
+    revokeReviewFocusUrl();
+    for (const url of state.reviewThumbUrls.values()) urls.revokeObjectURL(url);
+    state.reviewThumbUrls.clear();
+  }
+  async function fetchReviewObjectUrl(url) {
+    const response = await fetcher(url, {cache: "no-store"});
+    if (!response.ok || response.status === 204) return null;
+    const blob = await response.blob();
+    return urls.createObjectURL(blob);
+  }
+  async function showReviewFocusImage(sample) {
+    state.reviewFocus = sample;
+    const focusImg = get("review-image");
+    if (!tauriCore) {
+      focusImg.src = reviewImageUrl(sample);
+      focusImg.hidden = false;
+      render();
+      return;
+    }
+    revokeReviewFocusUrl();
+    const focusGen = state.reviewFocusGeneration;
+    focusImg.hidden = true;
+    focusImg.removeAttribute("src");
+    render();
+    try {
+      const objectUrl = await fetchReviewObjectUrl(reviewImageUrl(sample));
+      if (!objectUrl) {
+        if (focusGen === state.reviewFocusGeneration && !state.destroyed) {
+          focusImg.hidden = true;
+          focusImg.removeAttribute("src");
+        }
+        return;
+      }
+      if (focusGen !== state.reviewFocusGeneration || state.destroyed) {
+        urls.revokeObjectURL(objectUrl);
+        return;
+      }
+      state.reviewFocusUrl = objectUrl;
+      focusImg.src = objectUrl;
+      focusImg.hidden = false;
+    } catch {
+      if (focusGen === state.reviewFocusGeneration && !state.destroyed) {
+        focusImg.hidden = true;
+        focusImg.removeAttribute("src");
+      }
+    }
+  }
   function renderReview(current) {
     const active = state.status?.recording?.state === "recording", available = Boolean(state.status?.recording?.path);
     if (state.reviews && state.reviews.session_id !== state.status?.recording?.session_id) {
+      revokeReviewUrls();
       state.reviews = null; state.reviewFocus = null; state.reviewSelected.clear(); get("review-grid").replaceChildren();
       get("review-image").hidden = true; get("review-image").removeAttribute("src"); get("review-confirmed").checked = false;
     }
-    get("review-load").disabled = !current.current || !available || active || Boolean(state.busy);
+    get("review-load").disabled = !current.current || !available || active || Boolean(state.busy) || state.stoppedByUser;
     get("review-prev").disabled = get("review-load").disabled || !state.reviews || state.reviews.offset <= 0;
     get("review-next").disabled = get("review-load").disabled || !state.reviews || state.reviews.offset+state.reviews.samples.length >= state.reviews.total;
-    get("review-select-page").disabled = !state.reviews?.samples.length || Boolean(state.busy);
-    get("review-proposal").disabled = !state.reviewFocus?.prompt_candidate || Boolean(state.busy);
-    get("review-apply").disabled = !current.current || active || !state.reviewSelected.size || !get("review-confirmed").checked || !get("reviewer").value.trim() || Boolean(state.busy);
+    get("review-select-page").disabled = !state.reviews?.samples.length || Boolean(state.busy) || state.stoppedByUser;
+    get("review-proposal").disabled = !state.reviewFocus?.prompt_candidate || Boolean(state.busy) || state.stoppedByUser;
+    get("review-apply").disabled = !current.current || active || !state.reviewSelected.size || !get("review-confirmed").checked || !get("reviewer").value.trim() || Boolean(state.busy) || state.stoppedByUser;
     get("review-count").textContent = state.reviews ? `${state.reviews.offset+1}–${state.reviews.offset+state.reviews.samples.length} / ${state.reviews.total} · ${state.reviewSelected.size} ${t("selected")}` : "";
     get("review-focus").textContent = state.reviewFocus ? `${state.reviewFocus.sample_id} · ${JSON.stringify(state.reviewFocus.prompt_candidate?.labels ?? {})}` : "";
     get("review-image").setAttribute("alt", t("reviewImage"));
@@ -741,15 +975,37 @@ export function createApp(doc, options = {}) {
     if (get("review-load").disabled) return;
     await control("working", async () => {
       const result = await requestJson(fetcher, `/api/recording/review?offset=${offset}&limit=24&all=${get("review-all").checked}`);
-      state.reviews = result; state.reviewFocus = null; state.reviewSelected.clear(); get("review-grid").replaceChildren(); get("review-image").hidden = true;
+      revokeReviewUrls();
+      const reviewGen = state.reviewGeneration;
+      state.reviews = result; state.reviewFocus = null; state.reviewSelected.clear(); get("review-grid").replaceChildren();
+      get("review-image").hidden = true; get("review-image").removeAttribute("src");
       get("review-confirmed").checked = false;
+      const thumbTasks = [];
       for (const sample of result.samples) {
         const wrapper = doc.createElement("label"), checkbox = doc.createElement("input"), image = doc.createElement("img"), text = doc.createElement("span");
-        checkbox.type = "checkbox"; image.src = reviewImageUrl(sample); image.setAttribute("alt", t("reviewImage")); text.textContent = sample.sample_id;
+        checkbox.type = "checkbox";
+        const imgUrl = reviewImageUrl(sample);
+        if (!tauriCore) image.src = imgUrl;
+        image.setAttribute("alt", t("reviewImage")); text.textContent = sample.sample_id;
         checkbox.addEventListener("change", () => { if (checkbox.checked) state.reviewSelected.add(sample.sample_id); else state.reviewSelected.delete(sample.sample_id); render(); });
-        image.addEventListener("click", () => { state.reviewFocus = sample; get("review-image").src = reviewImageUrl(sample); get("review-image").hidden = false; render(); });
+        image.addEventListener("click", () => showReviewFocusImage(sample));
         wrapper.append(checkbox, image, text); get("review-grid").append(wrapper);
+        if (tauriCore) {
+          thumbTasks.push((async () => {
+            try {
+              const objectUrl = await fetchReviewObjectUrl(imgUrl);
+              if (!objectUrl) return;
+              if (reviewGen !== state.reviewGeneration || state.destroyed) {
+                urls.revokeObjectURL(objectUrl);
+                return;
+              }
+              state.reviewThumbUrls.set(sample.sample_id, objectUrl);
+              image.src = objectUrl;
+            } catch {}
+          })());
+        }
       }
+      if (thumbTasks.length) await Promise.all(thumbTasks);
     });
   }
   async function applyReview() {
@@ -761,27 +1017,92 @@ export function createApp(doc, options = {}) {
       get("review-confirmed").checked = false;
     });
   }
+  function renderUpdateBanner() {
+    get("check-update").textContent = t(state.checkingUpdate ? "checkingUpdate" : "checkUpdate");
+    get("check-update").disabled = state.checkingUpdate || state.stoppedByUser;
+    const banner = get("update-banner"), info = state.updateInfo;
+    const show = Boolean(info && !state.updateDismissed && (info.update_available || state.updateManual));
+    banner.hidden = !show;
+    if (!show) return;
+    const notesEl = get("update-notes"), linksEl = get("update-links");
+    if (info.error) {
+      get("update-message").textContent = `${t("updateFailed")} ${info.error}`;
+      if (state.updateKey !== "error") {
+        state.updateKey = "error";
+        notesEl.hidden = true;
+        notesEl.replaceChildren();
+        linksEl.replaceChildren();
+      }
+      return;
+    }
+    const addLink = (href, labelKey, primary = false) => {
+      if (!isSafeExternalUrl(href)) return;
+      const safeHref = href.trim();
+      const link = doc.createElement("a");
+      link.setAttribute("href", safeHref);
+      link.setAttribute("target", "_blank");
+      link.setAttribute("rel", "noopener noreferrer");
+      if (primary) link.setAttribute("class", "primary-link");
+      link.textContent = t(labelKey);
+      wireExternalLink(link, safeHref);
+      linksEl.append(link);
+    };
+    if (info.update_available) {
+      get("update-message").textContent = `${t("updateAvailable")} v${info.latest_version} (${t("updateCurrent")}: v${info.current_version})`;
+      const key = JSON.stringify(["available", state.language, info.latest_version, info.notes, info.installer_url, info.portable_url, info.module_url, info.release_url]);
+      if (key !== state.updateKey) {
+        state.updateKey = key;
+        notesEl.replaceChildren();
+        for (const line of info.notes ?? []) {
+          const li = doc.createElement("li");
+          li.textContent = line;
+          notesEl.append(li);
+        }
+        notesEl.hidden = !(info.notes?.length);
+        linksEl.replaceChildren();
+        addLink(info.installer_url, "downloadInstaller", true);
+        addLink(info.portable_url, "downloadPortable");
+        addLink(info.module_url, "downloadModule");
+        addLink(info.release_url, "openReleasePage");
+      }
+      return;
+    }
+    get("update-message").textContent = `${t("updateUpToDate")} v${info.current_version}`;
+    const key = JSON.stringify(["uptodate", state.language, info.release_url]);
+    if (key !== state.updateKey) {
+      state.updateKey = key;
+      notesEl.hidden = true;
+      notesEl.replaceChildren();
+      linksEl.replaceChildren();
+      addLink(info.release_url, "openReleasePage");
+    }
+  }
   function render() {
     const current = view(); doc.documentElement.lang = state.language; doc.title = t("title");
     for (const [id, key] of Object.entries(LABELS)) get(id).textContent = t(key);
     get("language").value = state.language; get("language").setAttribute("aria-label", t("language")); get("preview").setAttribute("alt", t("previewAlt"));
-    get("status").textContent = t(state.busy || (!state.config && !state.pollError ? "loading" : current.key === "running" && state.status?.source_mode === "replay" ? "replaying" : current.key));
-    get("status").setAttribute("data-state", current.key);
+    get("status").textContent = state.stoppedByUser ? t("serviceStopped") :
+      t(state.busy || (!state.config && !state.pollError ? "loading" : current.key === "running" && state.status?.source_mode === "replay" ? "replaying" : current.key));
+    get("status").setAttribute("data-state", state.stoppedByUser ? "offline" : current.key);
+    const versionText = state.status?.version ? `v${state.status.version}` : "";
+    get("version-badge").textContent = versionText;
+    get("version-badge").hidden = !versionText;
     get("camera-panel").setAttribute("data-live", String(current.video));
-    get("service-state").textContent = t(current.current ? "serviceOnline" : "serviceOffline");
-    get("service-state").setAttribute("data-online", String(current.current));
-    get("start").disabled = !state.config || !current.current || Boolean(state.busy) || current.running;
+    get("service-state").textContent = t(current.current && !state.stoppedByUser ? "serviceOnline" : "serviceOffline");
+    get("service-state").setAttribute("data-online", String(current.current && !state.stoppedByUser));
+    get("start").disabled = !state.config || !current.current || Boolean(state.busy) || current.running || state.stoppedByUser;
     get("capture").disabled = get("start").disabled;
-    get("stop").disabled = Boolean(state.busy) || !current.running; get("replay").disabled = get("start").disabled;
+    get("stop").disabled = Boolean(state.busy) || !current.running || state.stoppedByUser; get("replay").disabled = get("start").disabled;
     get("start").hidden = current.running; get("stop").hidden = !current.running;
     get("capture").hidden = current.running; get("capture-stop").hidden = !current.running;
-    get("save").disabled = !state.config || Boolean(state.busy) || !state.dirty;
-    for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, ...CHECK_FIELDS]) get(id).disabled = Boolean(state.busy) || !state.config;
+    get("save").disabled = !state.config || Boolean(state.busy) || !state.dirty || state.stoppedByUser;
+    for (const id of [...TEXT_FIELDS, ...NUMBER_FIELDS, ...CHECK_FIELDS]) get(id).disabled = Boolean(state.busy) || !state.config || state.stoppedByUser;
     if (!get("filter_enabled").checked) for (const id of FILTER_NUMBER_FIELDS) get(id).disabled = true;
+    get("quit-service").disabled = Boolean(state.busy) || state.stoppedByUser;
     get("config-state").textContent = state.config ? t(state.dirty ? "unsaved" : "saved") : "";
-    renderConnection(current); renderPages();
+    renderConnection(current); renderPages(); renderUpdateBanner();
     const error = state.error || state.pollError || state.status?.last_error;
-    get("error").hidden = !error && !state.errorKey; get("error").textContent = state.errorKey ? t(state.errorKey) : error ? errorMessage(state.language, error) : "";
+    get("error").hidden = state.stoppedByUser || (!error && !state.errorKey); get("error").textContent = state.errorKey ? t(state.errorKey) : error ? errorMessage(state.language, error) : "";
     const relayEyeErrors = ["eye_left", "eye_right"].map(k => state.status?.cymple_relay?.eyes?.[k]?.error).filter(Boolean);
     const technicalParts = [...new Set([error, state.discoveryError, state.relayError, state.status?.cymple_relay?.error, ...relayEyeErrors, state.status?.recording?.error, state.status?.training?.error].filter(Boolean))];
     get("technical-error").textContent = technicalParts.join("\n\n") || "—";
@@ -789,7 +1110,7 @@ export function createApp(doc, options = {}) {
     const owner = `${state.status?.source?.session_id}/${state.status?.output_session_id}`;
     if (owner !== state.previewOwner) { state.previewError = false; clearPreview(); state.previewOwner = owner; }
     if (!current.running) state.previewError = false;
-    if (!current.video || state.busy || !get("preview-enabled").checked) clearPreview();
+    if (!current.video || state.busy || !get("preview-enabled").checked || state.stoppedByUser) clearPreview();
     get("placeholder").textContent = t(!get("preview-enabled").checked ? "previewOff" : state.previewError ? "previewError" : "noVideo");
     renderDiagnostics(current, technicalParts);
     const replay = state.status?.replay; get("replay-info").textContent = replay?.path ? `${replay.path} · ${display(replay.position)} / ${display(replay.total)} ${t("frames")}${replay.finished ? ` · ${t("replayDone")}` : ""}` : t("replayReady");
@@ -1175,7 +1496,7 @@ export function createApp(doc, options = {}) {
     const relay = state.status?.cymple_relay;
     const relayRunning = relay?.running === true;
     const capturePending = ["starting", "recording", "stopping"].includes(state.status?.capture_control?.state);
-    const blocked = !current.current || Boolean(state.busy) || sealed || readOnly || capturePending;
+    const blocked = !current.current || Boolean(state.busy) || sealed || readOnly || capturePending || state.stoppedByUser;
     const relayState = current.current ? (relay?.state ?? "idle") : "offline";
     const statusKey = {idle: "cympleStateIdle", connecting: "cympleStateConnecting", running: "cympleStateRunning",
       reconnecting: "cympleStateReconnecting", offline: "offline"}[relayState] ?? "cympleStateIdle";
@@ -1224,7 +1545,20 @@ export function createApp(doc, options = {}) {
   }
   function navigate(page, updateHash = true) {
     if (!PAGES.includes(page) || state.destroyed) return;
-    state.page = page; render();
+    const prevPage = state.page;
+    state.page = page;
+    if (prevPage === "recording" && page !== "recording") {
+      revokeReviewUrls();
+      if (tauriCore || state.reviewThumbUrls.size > 0 || state.reviewFocusUrl) {
+        state.reviews = null;
+        state.reviewFocus = null;
+        state.reviewSelected.clear();
+        get("review-grid").replaceChildren();
+        get("review-image").hidden = true;
+        get("review-image").removeAttribute("src");
+      }
+    }
+    render();
     if (updateHash && navigation && navigation.location.hash !== `#/${page}`) navigation.location.hash = `#/${page}`;
     if (updateHash) { navigation?.scrollTo?.({top: 0, behavior: "auto"}); get("title").focus?.({preventScroll: true}); }
   }
@@ -1242,8 +1576,8 @@ export function createApp(doc, options = {}) {
     }
     const verified = state.discovered.some(item => item.host === host && item.port === port);
     get("discover").textContent = t(state.discovering ? "discovering" : "discover");
-    get("discover").disabled = state.discovering || !current.current || Boolean(state.busy) || current.running;
-    get("headset-select").disabled = state.discovering || Boolean(state.busy) || current.running || !current.current;
+    get("discover").disabled = state.discovering || !current.current || Boolean(state.busy) || current.running || state.stoppedByUser;
+    get("headset-select").disabled = state.discovering || Boolean(state.busy) || current.running || !current.current || state.stoppedByUser;
     get("discovery-badge").textContent = t(verified ? "headsetFound" : host ? "manualHeadset" : "autoDiscovery");
     get("discovery-info").textContent = state.discoveryError ? errorMessage(state.language, state.discoveryError) :
       t(state.discovering ? "discoverySearching" : state.discovered.length ? "discoveryFound" : state.discoveryDone ? "discoveryEmpty" : "discoveryHelp");
@@ -1252,7 +1586,7 @@ export function createApp(doc, options = {}) {
     get("model-location").textContent = path || t("modelOptional");
     get("model-location").setAttribute("title", path);
     get("model-browse").textContent = t(state.pickingModel ? "choosingModel" : "browseModel");
-    get("model-browse").disabled = state.pickingModel || !current.current || Boolean(state.busy) || current.running;
+    get("model-browse").disabled = state.pickingModel || !current.current || Boolean(state.busy) || current.running || state.stoppedByUser;
   }
   async function discover() {
     if (state.discovering || state.destroyed || view().running || state.status?.read_only) return;
@@ -1377,6 +1711,44 @@ export function createApp(doc, options = {}) {
     if (get(action === "cancel" ? "train-cancel" : "train-start").disabled) return;
     const args = Object.fromEntries([...trainInputs].map(([name, {input}]) => [name, input.type === "number" ? Number(input.value) : input.value.trim()]));
     await control("working", () => requestJson(fetcher, "/api/training", {action, operation: get("train-action").value, args}, 20000));
+  }
+  async function checkUpdates(manual = false) {
+    if (state.checkingUpdate || state.destroyed) return;
+    state.checkingUpdate = true;
+    state.updateManual = manual;
+    if (manual) state.updateDismissed = false;
+    render();
+    try {
+      const info = await requestJson(fetcher, manual ? "/api/update-check?force=1" : "/api/update-check", undefined, 8000);
+      if (!state.destroyed) state.updateInfo = info;
+    } catch (error) {
+      if (!state.destroyed && manual) {
+        state.updateInfo = {update_available: false, error: error.message};
+      }
+    } finally {
+      state.checkingUpdate = false;
+      if (!state.destroyed) render();
+    }
+  }
+  async function quitService() {
+    if (get("quit-service").disabled || state.destroyed) return;
+    state.busy = "quittingService";
+    state.generation++;
+    state.error = "";
+    state.errorKey = "";
+    render();
+    try {
+      await requestJson(fetcher, "/api/shutdown", {}, 5000);
+      state.busy = "";
+      state.online = false;
+      state.stoppedByUser = true;
+      destroy();
+      render();
+    } catch (error) {
+      state.busy = "";
+      state.error = error.message;
+      if (!state.destroyed) render();
+    }
   }
   async function refreshPreview() {
     if (state.destroyed || state.busy || state.previewBusy || doc.hidden || !["tracking", "recording"].includes(state.page) || !get("preview-enabled").checked || !view().video) return;
@@ -1509,7 +1881,7 @@ export function createApp(doc, options = {}) {
     });
   };
   doc.addEventListener?.("visibilitychange", onVisibilityChange);
-  function setLanguage(language) { if (!Object.hasOwn(messages, language)) return; state.language = language; try { storage?.setItem(LANGUAGE_KEY, language); } catch {} render(); }
+  function setLanguage(language) { if (!Object.hasOwn(messages, language)) return; state.language = language; try { storage?.setItem(LANGUAGE_KEY, language); } catch {} syncTrayLanguage(language); render(); }
   get("settings").addEventListener("submit", event => { event.preventDefault(); return start(); });
   for (const event of ["input", "change"]) {
     const changed = () => { state.dirty = true; state.errorKey = ""; render(); };
@@ -1569,7 +1941,9 @@ export function createApp(doc, options = {}) {
   for (const [id, delta] of [["guide-prev",-1],["guide-next",1]]) get(id).addEventListener("click",()=>{
     if (!get(id).disabled) return selectStep(Number(get("guide-select").value)+delta);
   });
-  for (const [id, fn] of [["save", save], ["stop", stop], ["capture-stop", stop], ["cymple-relay-start", () => cympleRelay("start")], ["cymple-relay-stop", () => cympleRelay("stop")], ["capture", () => start("capture")], ["replay", () => start("replay")], ["record-start", () => record("begin")], ["record-stop", () => record("stop")], ["record-cancel", () => record("cancel")], ["train-start", () => train()], ["train-cancel", () => train("cancel")], ...["ready", "finish", "confirm", "skip"].map(action => [`guide-${action}`, () => record(action)])]) get(id).addEventListener("click", fn);
+  for (const [id, fn] of [["save", save], ["stop", stop], ["capture-stop", stop], ["check-update", () => checkUpdates(true)], ["update-dismiss", () => { state.updateDismissed = true; render(); }], ["quit-service", quitService], ["cymple-relay-start", () => cympleRelay("start")], ["cymple-relay-stop", () => cympleRelay("stop")], ["capture", () => start("capture")], ["replay", () => start("replay")], ["record-start", () => record("begin")], ["record-stop", () => record("stop")], ["record-cancel", () => record("cancel")], ["train-start", () => train()], ["train-cancel", () => train("cancel")], ...["ready", "finish", "confirm", "skip"].map(action => [`guide-${action}`, () => record(action)])]) get(id).addEventListener("click", fn);
+  const licenseLink = get("reference-license");
+  wireExternalLink(licenseLink, licenseLink.getAttribute?.("href") || "https://developers.meta.com/horizon/licenses/oculussdk/");
   for (const id of RELAY_OPTION_IDS) {
     for (const event of ["input", "change"]) {
       get(id).addEventListener(event, () => {
@@ -1598,6 +1972,7 @@ export function createApp(doc, options = {}) {
   get("reference-play").addEventListener("click", () => { if (!get("reference-play").disabled && !get("reference-play").hidden) { state.referenceAnimated = !state.referenceAnimated; render(); } });
   for (const id of ["reference-image", "reference-neutral-image", "reference-profile-image"]) get(id).addEventListener("error", () => { state.referenceImageError = true; render(); });
   async function init() {
+    syncTrayLanguage(state.language);
     render();
     await Promise.all([pollStatus(), loadReference(), loadPresets()]);
     if (!state.destroyed) {
@@ -1607,6 +1982,7 @@ export function createApp(doc, options = {}) {
         startPreviewLoop();
         void expressionLoop();
       }
+      void checkUpdates(false);
       await discover();
     }
   }
@@ -1619,11 +1995,20 @@ export function createApp(doc, options = {}) {
     pauseBackgroundLoops();
     timers.clearInterval(state.visualTimer);
     clearPreview();
+    revokeReviewUrls();
   }
-  return {init, destroy, start, stop, save, record, train, cympleRelay, loadReviews, applyReview, readForm, pollStatus, pollExpressions, togglePin, clearPins, resetPins, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs, morphControls, morphGroups, exprGroups};
+  return {init, destroy, start, stop, save, record, train, cympleRelay, loadReviews, applyReview, checkUpdates, quitService, readForm, pollStatus, pollExpressions, togglePin, clearPins, resetPins, refreshPreview, reportVisual, setLanguage, selectReference, selectPreset, discover, chooseModel, navigate, state, rows, trainInputs, morphControls, morphGroups, exprGroups};
 }
 if (typeof document !== "undefined") {
   let storage; try { storage = window.localStorage; } catch {}
-  const app = createApp(document, {storage, navigation: window, viewer: new URLSearchParams(location.search).get("viewer"),
-    languages: navigator.languages ?? [navigator.language]}); void app.init(); window.addEventListener("pagehide", () => app.destroy(), {once: true});
+  const tauriCore = window.__TAURI__?.core;
+  const app = createApp(document, {
+    storage,
+    navigation: window,
+    viewer: new URLSearchParams(location.search).get("viewer"),
+    languages: navigator.languages ?? [navigator.language],
+    ...(tauriCore?.invoke ? {fetch: createTauriFetcher(tauriCore, window.fetch.bind(window)), tauriCore} : {}),
+  });
+  void app.init();
+  window.addEventListener("pagehide", () => app.destroy(), {once: true});
 }

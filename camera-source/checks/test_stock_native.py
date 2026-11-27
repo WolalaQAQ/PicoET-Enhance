@@ -3,7 +3,6 @@ import ctypes as C
 import json
 import math
 import mmap
-import pathlib
 import struct
 import subprocess
 import sys
@@ -12,10 +11,19 @@ import unittest
 import test_ipc as ipc
 import test_camera as camera
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'pc-studio'))
-from stock import (StockRecord, STOCK_BYTES, EYE_WIRE, read_eye, read_stock, CaptureContext,
-                    CaptureContextUnavailable, read_capture_context)
-from discovery import DISCOVER, discover_cameras, discover_sources
+from protocol_client import (
+    CaptureContext,
+    CaptureContextUnavailable,
+    DISCOVER,
+    EYE_WIRE,
+    STOCK_BYTES,
+    StockRecord,
+    discover_cameras,
+    discover_sources,
+    read_capture_context,
+    read_eye,
+    read_stock,
+)
 
 Record = C.c_ubyte * STOCK_BYTES
 LIB = C.CDLL(str(ipc.BUILD / 'stock_test.dll'))

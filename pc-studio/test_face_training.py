@@ -114,23 +114,39 @@ class DataAndSplitTests(unittest.TestCase):
                 ft.load_corpus(root)
 
     def test_actual_capture_raw_only_all_unknown_can_be_pseudo_labelled_after_stop(self):
-        from face_capture import WholeMouthRecording
-        from wire import FrameHeader, JPEG
+        from face_dataset import write_json, write_samples
+        from face_schema import CHANNELS, SCHEMA, STOCK_CHANNELS
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             stream = io.BytesIO()
             Image.new('L', (400, 400), 100).save(stream, 'JPEG', quality=95)
             jpeg = stream.getvalue()
             for index, person in enumerate(('alice', 'bob', 'carol')):
-                recorder = WholeMouthRecording(root/'recordings')
-                recorder.begin(person, confirmed=True, guide=False)
-                recorder.bind_capture(100+index, 'synthetic-boot:pid1', evidence='Synthetic contract fixture')
-                header = FrameHeader(len(jpeg), JPEG, 100+index, 1, 1000, 1001, 1002, 1003, 1004,
-                                     1005, 1000, 1000, 1000, 1234)
-                recorder.on_frame(header, jpeg)
+                session_id = uuid.uuid4().hex
+                rec = root/'recordings'/session_id
+                (rec/'images').mkdir(parents=True)
+                (rec/'images'/'f000000000.jpg').write_bytes(jpeg)
+                row = dict(
+                    sample_id='f000000000', image='images/f000000000.jpg',
+                    person_id=person, session_id=session_id, fit_id=session_id,
+                    source_group_id=f'recording:{session_id}:fit:{session_id}',
+                    capture_session_id=100+index, source_seq=1, mouth_sensor_ns=1000,
+                    source_identity=1234, service_generation='synthetic-boot:pid1',
+                    label_stage='raw_only', targets=[None]*50, target_sources=[None]*50,
+                    pairing_status='missing_stock', trainable=False,
+                )
+                manifest = dict(
+                    schema=SCHEMA, channels=list(CHANNELS), stock_channels=list(STOCK_CHANNELS),
+                    person_id=person, session_id=session_id, fit_id=session_id,
+                    source_group_id=row['source_group_id'], label_stage='raw_only',
+                    state='recording', samples_complete=False,
+                )
+                write_json(rec/'manifest.json', manifest)
+                write_samples(rec/'samples.jsonl', [row])
                 with self.assertRaisesRegex(ValueError, 'Stop recording'):
-                    ft.load_corpus(recorder.path)
-                recorder.stop()
+                    ft.load_corpus(rec)
+                manifest.update(state='stopped', samples_complete=True)
+                write_json(rec/'manifest.json', manifest)
             dm, rows = ft.load_corpus(root/'recordings')
             self.assertEqual(len(rows), 3)
             self.assertTrue(all(row['targets'] == [None]*50 for row in rows))
@@ -152,26 +168,43 @@ class DataAndSplitTests(unittest.TestCase):
                     self.assertNotIn('teacher_targets', row)
 
     def test_actual_review_exclusions_cannot_be_revived_by_pseudo_or_online_offline_kd(self):
-        from face_capture import WholeMouthRecording
-        from wire import FrameHeader, JPEG
+        from face_dataset import write_json, write_samples
+        from face_schema import CHANNELS, SCHEMA, STOCK_CHANNELS
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             stream = io.BytesIO()
             Image.new('L', (400, 400), 100).save(stream, 'JPEG', quality=95)
             jpeg = stream.getvalue()
+            excluded_obs = ('uncertain', 'occluded', 'no_mouth')
             for index, person in enumerate(('alice', 'bob', 'carol')):
-                recorder = WholeMouthRecording(root/'recordings')
-                recorder.begin(person, confirmed=True, guide=False)
-                recorder.bind_capture(100+index, 'synthetic-boot:pid1', evidence='Synthetic contract fixture')
+                session_id = uuid.uuid4().hex
+                rec = root/'recordings'/session_id
+                (rec/'images').mkdir(parents=True)
+                rows_to_write = []
                 for seq in range(1, 5):
-                    header = FrameHeader(len(jpeg), JPEG, 100+index, seq, seq*1000, seq*1000+1,
-                                         1002, 1003, 1004, 1005, seq*1000, seq*1000, seq*1000, seq+1234)
-                    recorder.on_frame(header, jpeg)
-                if person == 'alice':
-                    for sample_index, observation in enumerate(('uncertain', 'occluded', 'no_mouth')):
-                        recorder.review([f'f{sample_index:09d}'], {}, confirmed=True,
-                                        reviewer='synthetic-reviewer', observation=observation)
-                recorder.stop()
+                    sid = f'f{seq-1:09d}'
+                    (rec/'images'/f'{sid}.jpg').write_bytes(jpeg)
+                    row = dict(
+                        sample_id=sid, image=f'images/{sid}.jpg',
+                        person_id=person, session_id=session_id, fit_id=session_id,
+                        source_group_id=f'recording:{session_id}:fit:{session_id}',
+                        capture_session_id=100+index, source_seq=seq, mouth_sensor_ns=seq*1000,
+                        source_identity=seq+1234, service_generation='synthetic-boot:pid1',
+                        label_stage='raw_only', targets=[None]*50, target_sources=[None]*50,
+                        pairing_status='missing_stock', trainable=False,
+                    )
+                    if person == 'alice' and seq - 1 < len(excluded_obs):
+                        row['observation'] = excluded_obs[seq - 1]
+                        row['review_excluded'] = True
+                    rows_to_write.append(row)
+                manifest = dict(
+                    schema=SCHEMA, channels=list(CHANNELS), stock_channels=list(STOCK_CHANNELS),
+                    person_id=person, session_id=session_id, fit_id=session_id,
+                    source_group_id=f'recording:{session_id}:fit:{session_id}',
+                    label_stage='raw_only', state='stopped', samples_complete=True,
+                )
+                write_json(rec/'manifest.json', manifest)
+                write_samples(rec/'samples.jsonl', rows_to_write)
             dm, rows = ft.load_corpus(root/'recordings')
             split = ft.make_split(rows, validation_groups=['bob'], test_groups=['carol'])
             teacher = ft.Teacher50(TinyBackbone(), embed_dim=8)
@@ -706,7 +739,7 @@ class TeacherTests(unittest.TestCase):
 
 class EndToEndSyntheticTests(unittest.TestCase):
     def test_student224_checkpoint_export_and_runtime_keep_input_size(self):
-        from face_model import FaceModel
+        import onnxruntime as ort
         torch.set_num_threads(1)
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -717,9 +750,11 @@ class EndToEndSyntheticTests(unittest.TestCase):
             self.assertEqual(loaded.width,224)
             manifest = ft.export_onnx(loaded,loaded_meta,root/'student.onnx')
             self.assertEqual((manifest['width'],manifest['height']),(224,224))
-            runtime = FaceModel(str(root/'student.onnx'),'cpu')
-            self.assertEqual(runtime.input_shape,(1,1,224,224))
-            self.assertEqual(runtime.predict(np.zeros((400,400),np.uint8))['valid_mask'],0)
+            self.assertEqual(manifest['valid_mask'], 0)
+            session = ort.InferenceSession(str(root/'student.onnx'), providers=['CPUExecutionProvider'])
+            self.assertEqual(session.get_inputs()[0].shape[1:], [1, 224, 224])
+            out = session.run(['blendshapes'], {'frame': np.zeros((1, 1, 224, 224), np.float32)})[0]
+            self.assertEqual(out.shape, (1, 50))
 
     def test_export_preserves_existing_model_or_manifest(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -852,7 +887,7 @@ class EndToEndSyntheticTests(unittest.TestCase):
                                     export=manifest, sealed_synthetic_test=sealed_metrics))
 
     def test_export_output_permission_requires_exact_model_approval(self):
-        from face_model import FaceModel
+        import onnxruntime as ort
         torch.set_num_threads(1)
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -865,8 +900,10 @@ class EndToEndSyntheticTests(unittest.TestCase):
             self.assertEqual(manifest['trained_channels'], ['JawOpen', 'TongueOut'])
             self.assertEqual(manifest['validated_channels'], ['JawOpen'])
             self.assertEqual(manifest['valid_mask'], 1 << 5)
-            runtime = FaceModel(str(root/'approved.onnx'), 'cpu')
-            self.assertEqual(set(runtime.predict(np.zeros((400, 400), np.uint8))['channels']), {'JawOpen'})
+            session = ort.InferenceSession(str(root/'approved.onnx'), providers=['CPUExecutionProvider'])
+            out = session.run(['blendshapes'], {'frame': np.zeros((1, 1, manifest['height'], manifest['width']), np.float32)})[0]
+            self.assertEqual(out.shape, (1, 50))
+            self.assertTrue(np.isfinite(out).all())
 
 
 if __name__ == '__main__':

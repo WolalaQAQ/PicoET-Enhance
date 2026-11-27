@@ -2,12 +2,12 @@
 
 [English](TONGUE.md) | 简体中文
 
-本分支（`feat/tongue-pc`）配合同名分支的 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule/tree/feat/tongue-pc) 使用，将 PICO 4 Pro 的嘴部相机画面通过局域网传到 PC，在本地完成 50 通道整嘴推理与原厂结果融合，再送入 VRCFaceTracking（VRCFT）。
+本分支（`feat/tongue-pc`）配合同名分支的 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule/tree/feat/tongue-pc) 使用，将 PICO 4 Pro 的嘴部相机画面通过局域网传到原生 Windows PC 工作台桌面应用，在本地完成 50 通道整嘴推理与原厂结果融合，再送入 VRCFaceTracking（VRCFT）。
 
 ```text
 PICO 嘴部相机（400×400 灰度，90 Hz）
   → 头显独立后台服务编码（JPEG 95，TCP 45681 / PTJ1）
-  → PC 工作台解码与整嘴 ONNX 推理，按通道与原厂结果融合
+  → PC 工作台（Rust + Tauri v2）：解码、整嘴 ONNX 推理、按通道与原厂结果融合
   → 本机 UDP 45682 / MFR1 → UnifiedPicoModule → VRCFT
 ```
 
@@ -17,46 +17,58 @@ PICO 嘴部相机（400×400 灰度，90 Hz）
 
 ## 1. 准备 PC 工作台
 
-已在 Windows、Python 3.12 与 .NET 10 上验证。在仓库根目录创建虚拟环境并启动：
+PC 工作台现已升级为 **原生 Windows 桌面应用**（`PicoET-PC-Studio.exe`，基于 Rust + Tauri v2 与系统 Microsoft Edge WebView2 Runtime）。**无需 Python 虚拟环境**即可直接运行整套工作台功能，包括实时整嘴 ONNX 推理、`PSL1` 原厂嘴部合流、`MFR1` VRCFT UDP 输出、Cymple 双眼相机转发、引导录制、图像审核以及 `.npz` 本地回放。
+
+任选以下方式启动：
+
+- **Windows 安装包（推荐）**：运行 `PicoET-PC-Studio-Setup-v<版本>.exe`，默认安装到 `%LOCALAPPDATA%\Programs\PicoET PC Studio`，配置、素材与日志保存在 `%LOCALAPPDATA%\PicoET-PC-Studio\user-data\`。
+- **绿色便携 ZIP**：解压 `picoet-pc-studio-v<版本>.zip` 并直接运行 `PicoET-PC-Studio.exe`。便携包自带 `user-data/.portable` 标记，配置与录制数据均保留在程序同级 `user-data/` 目录内。
+- **从源码运行**（需 Rust `>= 1.92` 与系统 WebView2 Runtime）：
 
 ```powershell
-python -m venv pc-studio/.venv
-pc-studio/.venv/Scripts/python.exe -m pip install -r pc-studio/requirements.txt
-pc-studio/start.cmd
+cargo run --release --manifest-path pc-studio/src-tauri/Cargo.toml
 ```
 
-启动后在浏览器打开 `http://127.0.0.1:8787`。默认依赖使用 ONNX Runtime DirectML，兼容各类 DirectX 12 显卡；工作台启动后处于空闲状态，发往 VRCFT 的 UDP 输出默认关闭。
+工作台以单实例桌面应用运行，支持最小化到系统托盘，不再监听本机 HTTP 端口（支持 `--version` 查看版本、`--stop` 优雅退出运行中的实例）。启动后默认处于空闲状态，发往 VRCFT 的 UDP 输出默认关闭。
 
 ### 界面概览
 
 | 页面 | 用途 |
 |---|---|
-| **追踪** | 自动发现并选择头显、选取整嘴模型（`.onnx`），启停实时追踪与画面预览 |
+| **追踪** | 自动发现并选择头显、选取整嘴模型（`.onnx`）、启停实时追踪与画面预览，以及开关 Cymple 双眼转发 |
 | **采集** | 对照 71 组动作示范练习、录制本地素材，并逐帧审核可见标签 |
-| **训练** | 引导数据准备流程，并调用本机训练与导出工具 |
+| **训练** | 引导数据准备流程，并调用可选的本机 Python 训练与导出工具 |
 | **诊断** | 分为 **表情诊断**（实时 50 通道监控、置顶卡片与双源对照）与 **连接诊断**（帧率、延迟、提供器、队列与原厂流状态） |
-| **设置** | 配置发往 VRCFT 的开关、通道分流预设、One-Euro 滤波、模型与推理后端、头显地址端口及本地回放 |
+| **设置** | 配置发往 VRCFT 的开关、通道分流预设、One-Euro 滤波、模型与推理后端、头显地址端口及本地 `.npz` 回放 |
 
 工作台会自动在局域网（UDP `45681`）搜索头显：仅发现一台时自动选中，发现多台时从下拉列表选择；若局域网隔离广播，可在 **设置 → 头显与端口连接** 手动填写地址与端口。
 
 点击 **选择文件** 选取整嘴 `.onnx` 模型，同名 `.json` 描述文件需放在同一目录。本分支不附带现成的通用整嘴或教师权重；还没有模型时，可以直接前往 **采集** 页录制自己的素材。
 
-### 切换推理后端
+### ONNX Runtime DLL 与推理后端
 
-不同 ONNX Runtime 发行包会互相冲突，请为每种后端创建独立的 venv，只安装对应的一份依赖：
+`PicoET-PC-Studio.exe` 通过 `ort`（`load-dynamic`，要求 ORT C API `>= 1.17`）在运行时动态加载 ONNX Runtime。相机预览、Cymple 眼动转发、引导录制与图像审核不依赖 ORT DLL；需要开启实时 `.onnx` 整嘴推理时，只需提供对应后端的 Windows x64 `onnxruntime.dll`（及配套提供器 DLL，如 `DirectML.dll` 或 `onnxruntime_providers_*.dll`；请勿把不同发行包的 DLL 混放在同一目录）。
 
-| 推理后端 | 依赖文件 |
+运行时按以下顺序查找 `onnxruntime.dll`：
+
+1. 环境变量 `ORT_DYLIB_PATH`（指向 `onnxruntime.dll` 的完整路径）
+2. `PicoET-PC-Studio.exe` 同级目录中的 `onnxruntime.dll`
+3. 可执行文件上一级目录中的 `../onnxruntime.dll`
+4. Windows 开发环境回退：`%CONDA_PREFIX%\Lib\site-packages\onnxruntime\capi\onnxruntime.dll`
+5. 标准 Windows `PATH` 与系统 DLL 搜索路径
+
+| 推理后端 | 放到 `PicoET-PC-Studio.exe` 同级目录（或通过 `ORT_DYLIB_PATH` 指定） |
 |---|---|
-| Windows 默认（DirectML） | `pc-studio/requirements.txt` |
-| 仅 CPU | `pc-studio/requirements-cpu.txt` |
-| NVIDIA CUDA 12 | `pc-studio/requirements-cuda.txt` |
-| Intel OpenVINO GPU | `pc-studio/requirements-openvino.txt` |
+| Windows DirectML（DirectX 12 显卡） | ORT DirectML 版 `onnxruntime.dll`（必要时附带配套 `DirectML.dll`） |
+| 仅 CPU | ORT CPU 版 `onnxruntime.dll` |
+| NVIDIA CUDA 12 | `onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `onnxruntime_providers_cuda.dll`（CUDA 12 / cuDNN 需在 `PATH` 中） |
+| Intel OpenVINO GPU | `onnxruntime.dll` + `onnxruntime_providers_shared.dll` + `onnxruntime_providers_openvino.dll`（OpenVINO 运行库需在 `PATH` 中） |
 
-例如在 CUDA 12.6 环境下，先在新 venv 中安装匹配的 PyTorch，再安装 CUDA 版依赖并用该环境的 Python 启动 `pc-studio/backend.py`：
+自行从源码打包便携 ZIP 或 Windows 安装包时，也可用参数把本地 ORT DLL 一并打包到 `PicoET-PC-Studio.exe` 旁：
 
 ```powershell
-python -m pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu126
-python -m pip install -r pc-studio/requirements-cuda.txt
+python -B -X utf8 pc-studio/package_release.py --ort-dir <ORT-DLL所在目录>
+# 或 --ort-dll <onnxruntime.dll路径>；也支持环境变量 PICOET_ORT_DIR / PICOET_ORT_DLL
 ```
 
 推理设备设为 `auto` 时，按 **CUDA Graph → CUDA → OpenVINO GPU → DirectML → CPU** 的顺序探测并做首次推理校验；手动指定具体设备时不会回退到其他后端。实际生效的执行提供器与报错信息可在 **诊断 → 连接诊断** 查看。
@@ -104,7 +116,7 @@ python camera-source/device.py stop   --serial <serial> --state pc-studio/user-d
 3. 打开 PC 工作台，选中头显和整嘴 `.onnx` 模型，点击 **开始追踪**；确认画面与读数正常后，在 **设置** 中开启 **把表情发送给 VRCFaceTracking**（默认本机 UDP `45682`）。
 4. 在 **追踪** 页查看实时画面，在 **诊断** 页检查通道响应与链路延迟。
 
-当 `UnifiedPicoModule` 在 UDP `45682` 收到活跃的 `MFR1` 流时，会按 `valid_mask` 写入收到的通道：完整覆盖全部 33 个原厂嘴部通道时自动将 Bridge 订阅切换为仅眼动（`PXR_SUB` 掩码 `3 → 1`，眼动不断流）；若模型仅覆盖部分通道（如仅 6 路舌头模型）或头显 `PSL1` 暂时断流，未覆盖通道的 `valid_mask` 为 0，`UnifiedPicoModule` 会保留 Bridge 面部订阅（`mask=3`）以维持原厂下巴与嘴唇驱动；用户在设置页显式设为 **关闭**（`off`）的通道则以 `valid_mask=1, value=0.0` 明确归零。停止发送或超时后自动恢复 Bridge 直连面捕。若日常采用「Cymple 嘴＋PICO 眼」混搭，保持本工作台停止即可，工作台不会争抢嘴部所有权。
+当 `UnifiedPicoModule` 在 UDP `45682` 收到活跃的 `MFR1` 流时，会按 `valid_mask` 写入收到的通道：完整覆盖全部 33 个原厂嘴部通道时自动将 Bridge 订阅切换为仅眼动（`PXR_SUB` 掩码 `3 → 1`，眼动不断流）；若模型仅覆盖部分通道（如仅 6 路舌头模型）或头显 `PSL1` 暂时断流，未覆盖通道的 `valid_mask` 为 0，`UnifiedPicoModule` 会保留 Bridge 面部订阅（`mask=3`）以维持原厂下巴与嘴唇驱动；用户在设置页显式设为 **关闭**（`off`）的通道则以 `valid_mask=1, value=0.0` 明确归零。停止发送或超时后自动恢复 Bridge 直连面捕。若日常采用「Cymple 嘴＋PICO 眼」混搭，保持嘴部追踪停止即可（如需把头显双眼相机转发给 Cymple，可单独开启内置的 Cymple 眼动转发）。
 
 ### 通道分流预设
 
@@ -125,7 +137,7 @@ python camera-source/device.py stop   --serial <serial> --state pc-studio/user-d
 
 ### 滤波与常用设置
 
-**设置 → 滤波与平滑** 提供标准 One-Euro 滤波参数，保存后即时热生效：
+**设置 → 滤波与平滑** 提供标准 One-Euro 滤波参数及结果有效期（`stale_ms`），保存后即时热生效：
 
 | 参数 | 字段名 | 默认值 | 作用 |
 |---|---|---:|---|
@@ -133,11 +145,12 @@ python camera-source/device.py stop   --serial <serial> --state pc-studio/user-d
 | 最小截止频率（Hz） | `filter_min_cutoff` | `8.0` | 越低静止越稳，越高对微动作越敏感 |
 | 速度系数 | `filter_beta` | `4.0` | 越大快速说话和大幅动作越跟手、延迟越低 |
 | 导数截止频率（Hz） | `filter_d_cutoff` | `1.0` | 平滑速度估计，抑制尖峰抖动 |
+| 结果有效期（ms） | `stale_ms` | `350` | 帧间隔超过该阈值时重置过期输出与滤波状态 |
 
 滤波按真实相机时间戳（`mouth_sensor_ns`）逐通道计算，并在**模型推理之后、原厂合流之前**执行——因此交给原厂的通道直通头显 `final33`，不会叠加二次滤波。新会话、更换模型、无效输出、掩码变更或帧间隔超过 `stale_ms` 时会自动重置滤波状态。旧配置文件中的 `smoothing_ms` 仍自动换算兼容（`min_cutoff = 1000 / (2π × smoothing_ms)` Hz，`0` 为关闭）。运行日志会同时保留滤波前的 `raw_values` / `raw_channels`、滤波值与发布时间。
 
 其余设置分为两组：
-- **设置 → 模型与推理**：模型路径、推理设备、结果有效期（`stale_ms`）与预览帧率；更改模型路径或设备保存时会停止当前追踪，预览帧率实时生效。
+- **设置 → 模型与推理**：模型路径、推理设备与预览帧率；更改模型路径或设备保存时会停止当前追踪，预览帧率实时生效。
 - **设置 → 头显与端口连接**：手动头显地址、视频端口与本机 UDP 端口；更改后保存时会停止当前追踪。
 
 ### 表情诊断与连接诊断
@@ -170,13 +183,17 @@ python camera-source/device.py stop   --serial <serial> --state pc-studio/user-d
 
 示范图包基于 [Unity-Movement HighFidelity 角色](https://github.com/oculus-samples/Unity-Movement/tree/v71.0.0/Samples~/BodyTrackingSamples/HighFidelity) 制作，涵盖 71 组静图、70 段动画与 25 个侧视图，其中 48 组使用原版形态键与修正规则，23 组在原网格上添加了舌头与独立上下唇示范控制。
 
-### 教师 / 学生训练流程
+### 可选的离线 PyTorch 训练（`face_train.py`）
 
-本机训练支持命令行与工作台 **训练** 页表单（两者共用同一套参数）。若需要独立训练环境，可另建 venv 安装 `pc-studio/requirements-training.txt`（避免将其中的 CPU 版 ORT 与推理环境混装）。查看全部参数：
+离线 PyTorch 训练为**可选的 Python 工具**——仅当需要自行训练或导出个人模型时才需安装 Python。使用 `pc-studio/requirements-training.txt` 创建独立训练环境（如需 GPU 训练请先安装对应 CUDA 版本的 PyTorch）：
 
 ```powershell
+python -m venv pc-studio/.venv
+pc-studio/.venv/Scripts/python.exe -m pip install -r pc-studio/requirements-training.txt
 pc-studio/.venv/Scripts/python.exe pc-studio/face_train.py --help
 ```
+
+本机训练支持直接命令行调用，也可通过工作台 **训练** 页表单发起（两者共用同一套参数）。从 **训练** 页直接启动训练需要仓库源码目录（或将 `face_train.py` 及其训练模块放在 `PicoET-PC-Studio.exe` 同级目录）并准备好 Python 训练虚拟环境；工作台按以下顺序解析 Python 解释器：`PICOET_PYTHON` 环境变量 → `pc-studio/.venv/Scripts/python.exe` → `PATH` 中的 `python`。
 
 标准流程按顺序使用以下子命令：
 
@@ -194,7 +211,7 @@ pc-studio/.venv/Scripts/python.exe pc-studio/face_train.py --help
 
 ### 进阶全分辨率连续训练流水线（`mouth50_trainer`）
 
-如果需要训练全 400×400 输入的 50 通道连续回归模型（支持空间金字塔学生 `VFTStudent50`、解二值化连续损失 `debinarized_continuous_loss`、5-TTA 置信度软蒸馏、近红外物理域增强与可选因果 GRU-256 时序微调），可直接调用独立的离线训练包 `pc-studio/mouth50_trainer/`：
+如果需要训练全 400×400 输入的 50 通道连续回归模型（支持空间金字塔学生 `VFTStudent50`、解二值化连续损失 `debinarized_continuous_loss`、5-TTA 置信度软蒸馏、近红外物理域增强与可选因果 GRU-256 时序微调），可直接调用独立的离线 Python 训练包 `pc-studio/mouth50_trainer/`：
 
 ```powershell
 pc-studio/.venv/Scripts/python.exe pc-studio/mouth50_trainer/pipeline.py --help
@@ -221,17 +238,24 @@ pc-studio/.venv/Scripts/python.exe pc-studio/mouth50_trainer/pipeline.py --help
 
 ### 整嘴模型契约
 
-- **通道顺序（`pico-mouth50-v1`）**：定义于 `pc-studio/face_schema.py`，包含 MouthLink 原 44 项，外加 4 项独立上下唇横移与 2 项上下漏斗共 50 项。
+- **通道顺序（`pico-mouth50-v1`）**：定义于 `pc-studio/src-tauri/src/face_schema.rs`（离线训练同步镜像于 `pc-studio/face_schema.py`），包含 MouthLink 原 44 项，外加 4 项独立上下唇横移与 2 项上下漏斗共 50 项。
 - **同名 `.json` 清单**：需声明 `schema`、`channels`、输入 `width` / `height`、`trained_channels`、`validated_channels` 与 `valid_mask`。运行端严格按 `valid_mask` 输出有效位；未传 `--approval` 导出的候选模型掩码为 `0`。
-- **输入预处理与时序支持**：将 400×400 完整灰度图经 Pillow `BILINEAR` 缩放到模型输入尺寸后除以 `255`（不做水平镜像，归一化放在模型内）。除标准单帧 ONNX（`frame → blendshapes`）外，也支持带 `[1, H]` 隐藏状态（`h_in` / `h_out`）的有状态 ONNX，并在新会话、换模型、无效输出或断流超过 `stale_ms` 时自动清零隐藏状态。
+- **输入预处理与时序支持**：将 400×400 完整灰度图通过 Rust 原生复刻的 Pillow 22 位定点 `BILINEAR` 算法（`pc-studio/src-tauri/src/face_model.rs`）缩放到模型输入尺寸后除以 `255`（不做水平镜像，归一化放在模型内）。除标准单帧 ONNX（`frame → blendshapes`）外，也支持带 `[1, H]` 隐藏状态（`h_in` / `h_out`）的有状态 ONNX，并在新会话、换模型、无效输出或断流超过 `stale_ms` 时自动清零隐藏状态。
 - **输出协议**：`MFR1` 直接发送 0–1 连续控制值与逐字段有效位掩码。
 
 ### 离线测试
 
-PC 端 Python 单元测试与双语网页测试（需安装 Node.js）：
+运行 PC 工作台 Rust 后端单元测试与双语界面回归测试（需安装 Rust `>= 1.92`、Node.js 与系统 Python，无需虚拟环境）：
 
 ```powershell
-pc-studio/.venv/Scripts/python.exe pc-studio/check.py
+python -B -X utf8 pc-studio/check.py
+```
+
+本地执行 Rust 测试与打包验证（若已安装 Inno Setup 6 可省略 `--skip-installer`；如需附带 `onnxruntime.dll` 可加 `--ort-dir <目录>` 或 `--ort-dll <路径>`）：
+
+```powershell
+cargo test --locked --manifest-path pc-studio/src-tauri/Cargo.toml
+python -B -X utf8 pc-studio/package_release.py --skip-installer
 ```
 
 头显相机服务的本机合成测试（从 x64 Visual Studio 开发终端运行，或传 `--vcvars <vcvars64.bat>`，无需连接 ADB）：

@@ -17,6 +17,8 @@ pc-studio/assets/
 pc-studio/user-data/
 pc-studio/tests-work/
 pc-studio/__pycache__/
+pc-studio/src-tauri/target/
+pc-studio/src-tauri/gen/
 camera-source/.deps/
 camera-source/build-*/
 camera-source/checks/__pycache__/

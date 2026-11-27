@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {createApp, captureProgress, deriveView, channelValue, requestJson, PRIMARY_CHANNELS, ROUTABLE_CHANNELS, MOUTH_PRESETS, PAGES, routePage, EXPRESSION_POLL_MS} from "../app.mjs";
+import {createApp, createTauriFetcher, captureProgress, deriveView, channelValue, requestJson, PRIMARY_CHANNELS, ROUTABLE_CHANNELS, MOUTH_PRESETS, PAGES, routePage, EXPRESSION_POLL_MS} from "../app.mjs";
 import {DIAGNOSTIC_GROUPS, messages, preferredLanguage, initialLanguage, errorMessage, LANGUAGE_KEY, PINNED_CHANNELS_KEY} from "../i18n.mjs";
 
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
@@ -25,7 +25,14 @@ function setup(t, options = {}) {
   const config = {headset_host: "headset.example", headset_port: 45681, model_path: "D:/models/student.onnx", model_kind: "face50", device: "auto", stale_ms: 350, preview_fps: 10, smoothing_ms: 20,
     replay_path: "D:/data/reference.npz", mouth_mode: "curated", hybrid_channels: null, channel_sources: null, enabled: false, output_enabled: false, output_host: "127.0.0.1", output_port: 45682};
   const trained = ["JawOpen", "TongueOut", "TongueLeft"];
-  const server = {config, calls: [], before: null, failStatus: false, failStart: false, previewStatus: 200, status: {
+  const server = {config, calls: [], before: null, failStatus: false, failStart: false, previewStatus: 200,
+    updateResponse: {
+      current_version: "2.6.2", latest_version: "2.6.2", update_available: false,
+      release_url: "https://github.com/WolalaQAQ/PicoET-Enhance/releases",
+      installer_url: "", portable_url: "", module_url: "", notes: [], error: null,
+    },
+    status: {
+    version: "2.6.2",
     running: false, connected: false, config, source: {session_id: "18446744073709551000", source_seq: "9007199254740993"},
     contract: {schema: "pico-mouth50-v1", channels}, model: {trained_channels: trained}, output_session_id: "test-output",
     prediction: {fresh: false, state: "stopped", valid_mask: 0, channels: {JawOpen: .3, TongueOut: .1, TongueLeft: .2}},
@@ -57,10 +64,12 @@ function setup(t, options = {}) {
   const fetcher = async (path, opts = {}) => {
     server.calls.push({path, ...opts}); const custom = await server.before?.(path, opts); if (custom) return custom;
     if (path === "/api/discovery") return Response.json({devices: server.discovered ?? []});
+    if (path.startsWith("/api/update-check")) return Response.json(server.updateResponse);
+    if (path === "/api/shutdown") return Response.json({stopping: true});
     if (path === "/api/presets") return Response.json({presets:server.presets,default:"complete"});
     if (path === "/api/display" || path === "/api/recording/display") return Response.json({accepted:true});
     if (path === "/api/model/select") return Response.json(server.selectedModel ?? {cancelled: true});
-    if (path === "/static/guide-reference/manifest.json") return server.reference ? Response.json(server.reference) : Response.json({error: "Not found"}, {status: 404});
+    if (path === "./guide-reference/manifest.json") return server.reference ? Response.json(server.reference) : Response.json({error: "Not found"}, {status: 404});
     if (path === "/api/expressions") {
       if (server.failExpressions) return Response.json({error: "Not found"}, {status: 404});
       return Response.json({
@@ -114,6 +123,7 @@ function setup(t, options = {}) {
     if (path.startsWith("/api/recording/review?")) return Response.json({session_id: "local", offset: 0, total: 2, samples: [
       {sample_id: "f000000000", prompt_candidate: {labels: {TongueOut: .5}}}, {sample_id: "f000000001", prompt_candidate: {labels: {TongueOut: .5}}}]});
     if (path === "/api/recording/review") return Response.json({samples: 2});
+    if (path.startsWith("/api/recording/image")) return new Response(new Uint8Array([255, 216, 255, 217]), {status: 200, headers: {"Content-Type": "image/jpeg"}});
     if (path.startsWith("/api/preview.jpg")) return server.previewStatus === 204 ? new Response(null, {status: 204}) : new Response(new Uint8Array([255, 216, 255, 217]), {status: server.previewStatus});
     throw Error(path);
   };
@@ -153,7 +163,7 @@ test("preset selection previews its exact action order and count without startin
   assert.equal(f.el("capture-progress-count").textContent,"0 / 2");
   assert.equal(f.el("capture-action-list").children[0].textContent,"Jaw forward");
   assert.equal(f.el("capture-action-list").children[1].textContent,"Relax");
-  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward.webp");
+  assert.equal(f.el("reference-image").src,"./guide-reference/JawForward.webp");
   assert.equal(f.server.calls.length,before);
   assert.equal(f.el("record-consent").checked,false);
   f.app.setLanguage("zh-CN");
@@ -200,7 +210,7 @@ test("sealed JawOpen C requires a recording click, shows reference media and doe
   f.server.status.capture_control.state="recording";
   Object.assign(f.server.status.recording.guide,{step,automatic:true,phase:"prepare",frame:"jaw-frame"});
   await f.app.pollStatus();
-  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward-motion.webp");
+  assert.equal(f.el("reference-image").src,"./guide-reference/JawForward-motion.webp");
   for(const id of ["reference-image","reference-neutral-image","reference-profile-image"])
     Object.assign(f.el(id),{complete:true,naturalWidth:512});
   await f.app.reportVisual();
@@ -257,9 +267,9 @@ test("unguided recording is distinct from a preset that has not started",async t
 });
 test("external 31-step state uses the original reference renderer without a second page or local recording",async t=>{
   const f=setup(t); externalGuide(f); await f.app.init(); f.app.navigate("recording");
-  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward-motion.webp");
-  assert.equal(f.el("reference-profile-image").src,"/static/guide-reference/JawForward-profile.webp");
-  assert.equal(f.el("reference-neutral-image").src,"/static/guide-reference/LipFunnelUpper.webp");
+  assert.equal(f.el("reference-image").src,"./guide-reference/JawForward-motion.webp");
+  assert.equal(f.el("reference-profile-image").src,"./guide-reference/JawForward-profile.webp");
+  assert.equal(f.el("reference-neutral-image").src,"./guide-reference/LipFunnelUpper.webp");
   assert.equal(f.el("reference-neutral-caption").textContent,messages.en.referenceOpening);
   assert.match(f.el("reference-instruction").textContent,/Keep the current opening/);
   assert.equal(f.el("reference-select").disabled,true);
@@ -269,7 +279,7 @@ test("external 31-step state uses the original reference renderer without a seco
 test("external hold freezes the existing image and read-only mode blocks all capture and training controls",async t=>{
   const f=setup(t); externalGuide(f); await f.app.init();
   f.server.status.external_guide.phase="hold"; await f.app.pollStatus();
-  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward.webp");
+  assert.equal(f.el("reference-image").src,"./guide-reference/JawForward.webp");
   for(const id of ["start","capture","save","record-start","train-start","model-browse","output_enabled"])
     assert.equal(f.el(id).disabled,true,id);
   await f.app.start(); await f.app.record("begin"); await f.app.train();
@@ -491,7 +501,7 @@ test("automatic capture shows countdown and animated preparation, then a still h
   await f.app.init();f.app.navigate("recording");
   assert.equal(f.el("guide-countdown").textContent,"3 s");
   assert.equal(f.el("guide-ready").hidden,true);
-  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward-motion.webp");
+  assert.equal(f.el("reference-image").src,"./guide-reference/JawForward-motion.webp");
   await f.app.reportVisual();
   assert.equal(JSON.parse(f.server.calls.at(-1).body).media_ready,false);
   for(const id of ["reference-image","reference-neutral-image","reference-profile-image"])
@@ -503,7 +513,7 @@ test("automatic capture shows countdown and animated preparation, then a still h
   assert.equal(paints,2);
   Object.assign(f.server.status.recording.guide,{phase:"hold",frame:"hold-frame"});
   await f.app.pollStatus();
-  assert.equal(f.el("reference-image").src,"/static/guide-reference/JawForward.webp");
+  assert.equal(f.el("reference-image").src,"./guide-reference/JawForward.webp");
   f.app.navigate("preferences");await f.app.reportVisual();
   assert.equal(JSON.parse(f.server.calls.at(-1).body).visible,false);
 });
@@ -659,13 +669,13 @@ test("changing recording session clears review thumbnails and old selections", a
 test("reference images are available for practice without a headset, model, consent or recording", async t => {
   const {app, server, el} = setup(t); server.config.headset_host = ""; server.config.model_path = ""; await app.init();
   assert.equal(el("reference-views").hidden, false); assert.equal(el("reference-select").disabled, false);
-  assert.equal(el("reference-image").src, "/static/guide-reference/neutral.webp");
+  assert.equal(el("reference-image").src, "./guide-reference/neutral.webp");
   assert.equal(el("reference-mode").textContent, messages.en.referencePractice);
   assert.ok(server.calls.every(call => call.method === "GET")); assert.equal(server.status.running, false);
 });
 test("practice selection changes images and optional side view without sending controls or targets", async t => {
   const {app, server, el} = setup(t); await app.init(); const count = server.calls.length;
-  app.selectReference("JawForward"); assert.equal(el("reference-image").src, "/static/guide-reference/JawForward.webp");
+  app.selectReference("JawForward"); assert.equal(el("reference-image").src, "./guide-reference/JawForward.webp");
   assert.equal(el("reference-profile").hidden, false); assert.match(el("reference-profile-image").src, /JawForward-profile/);
   assert.equal(el("reference-origin").textContent, messages.en.referenceOriginal);
   assert.equal(server.calls.length, count); assert.equal(el("record-consent").checked, false);
@@ -812,9 +822,9 @@ test("moving steps keep their animation during the hold and still steps show the
     remaining_seconds: 2, step: {id: "tongue_sweep", kind: "continuous", title: {en: "Sweep", zh: "往返"}}};
   f.server.status.recording = {state: "recording", session_id: "auto", guide};
   await f.app.init(); f.app.navigate("recording");
-  assert.equal(f.el("reference-image").src, "/static/guide-reference/tongue_sweep-motion.webp");
+  assert.equal(f.el("reference-image").src, "./guide-reference/tongue_sweep-motion.webp");
   guide.step = {id: "JawForward", kind: "pose", title: {en: "Jaw forward", zh: "下颌前伸"}}; guide.frame = "f2"; await f.app.pollStatus();
-  assert.equal(f.el("reference-image").src, "/static/guide-reference/JawForward.webp");
+  assert.equal(f.el("reference-image").src, "./guide-reference/JawForward.webp");
 });
 test("the optional refit suggestion appears only after a recording is saved", async t => {
   const f = setup(t); await f.app.init(); f.app.navigate("recording");
@@ -1557,7 +1567,7 @@ test("visibilitychange pauses background polling when hidden and resumes without
       if (path === "/api/status") return Response.json(f.server.status);
       if (path === "/api/presets") return Response.json({presets: f.server.presets, default: "complete"});
       if (path === "/api/discovery") return Response.json({devices: []});
-      if (path === "/static/guide-reference/manifest.json") return Response.json(f.server.reference);
+      if (path === "./guide-reference/manifest.json") return Response.json(f.server.reference);
       if (path === "/api/display" || path === "/api/recording/display") return Response.json({accepted: true});
       return new Response(null, {status: 204});
     },
@@ -1592,4 +1602,477 @@ test("visibilitychange pauses background polling when hidden and resumes without
   await resumePromise;
   assert.notEqual(app.state.interval, null);
   assert.notEqual(app.state.previewTimer, null);
+});
+
+test("index.html uses relative asset paths for Tauri embedded protocol and includes update/quit controls", () => {
+  assert.ok(html.includes('href="./icon.png"'));
+  assert.ok(html.includes('href="./favicon.ico"'));
+  assert.ok(html.includes('href="./styles.css"'));
+  assert.ok(html.includes('src="./app.mjs"'));
+  assert.doesNotMatch(html, /["']\/static\/|["']\/favicon\.ico/);
+  for (const id of ["version-badge", "check-update", "quit-service", "update-banner", "update-message", "update-dismiss", "update-notes", "update-links"]) {
+    assert.ok(html.includes(`id="${id}"`), `Missing #${id}`);
+  }
+});
+
+test("createTauriFetcher maps every tongue-pc REST route, query params, binary preview/review images, and errors", async () => {
+  const calls = [];
+  let previewPayload = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer;
+  let reviewImgPayload = new Uint8Array([0xff, 0xd8, 0xaa, 0xff, 0xd9]).buffer;
+  let nextError = null;
+  const tauriCore = {
+    async invoke(command, args) {
+      calls.push({command, args});
+      if (nextError !== null) {
+        const err = nextError;
+        nextError = null;
+        throw err;
+      }
+      switch (command) {
+        case "get_status": return {running: false, version: "2.6.2"};
+        case "get_expressions": return {running: true, prediction: {channels: {JawOpen: 0.5}}};
+        case "get_config": return {headset_port: 45681};
+        case "get_presets": return {presets: [{id: "complete"}], default: "complete"};
+        case "discover_sources": return {devices: [], queried: args ?? null};
+        case "check_updates": return {update_available: false, forced: args.force};
+        case "get_preview_frame": return previewPayload;
+        case "get_review_samples": return {session_id: "s1", offset: args.offset, limit: args.limit, all: args.all, total: 1, samples: []};
+        case "get_review_image": return reviewImgPayload;
+        case "select_model": return {cancelled: false, path: args.initial || "D:/m.onnx"};
+        case "set_config": return args.changes;
+        case "start_runtime": return {running: true, started: args.payload};
+        case "prepare_model": return {prepared: true};
+        case "personalization_action": return {ok: true, action: args.payload.action};
+        case "recording_action": return {state: "recording", payload: args.payload};
+        case "recording_display": return {accepted: true, frame: args.payload.frame};
+        case "recording_review": return {samples: args.payload.sample_ids.length};
+        case "training_action": return {running: true, op: args.payload.operation};
+        case "cymple_relay_action": return {running: args.payload.action === "start"};
+        case "stop_runtime": return {running: false};
+        case "quit_app": return {stopping: true};
+        default: throw new Error(`unexpected command ${command}`);
+      }
+    },
+  };
+
+  let staticRequested = null;
+  const fallbackFetch = async (path) => {
+    staticRequested = path;
+    return Response.json({version: 1, poses: []});
+  };
+  const fetcher = createTauriFetcher(tauriCore, fallbackFetch);
+
+  assert.deepEqual(await requestJson(fetcher, "/api/status"), {running: false, version: "2.6.2"});
+  assert.deepEqual(await requestJson(fetcher, "/api/expressions"), {running: true, prediction: {channels: {JawOpen: 0.5}}});
+  assert.deepEqual(await requestJson(fetcher, "/api/config"), {headset_port: 45681});
+  assert.deepEqual(await requestJson(fetcher, "/api/presets"), {presets: [{id: "complete"}], default: "complete"});
+  assert.deepEqual(await requestJson(fetcher, "/api/discovery"), {devices: [], queried: null});
+  assert.deepEqual(await requestJson(fetcher, "/api/discovery?host=198.51.100.9&port=45681"), {
+    devices: [],
+    queried: {host: "198.51.100.9", port: 45681},
+  });
+  assert.deepEqual(await requestJson(fetcher, "/api/update-check"), {update_available: false, forced: false});
+  assert.deepEqual(await requestJson(fetcher, "/api/update-check?force=1"), {update_available: false, forced: true});
+  assert.deepEqual(await requestJson(fetcher, "/api/recording/review?offset=24&limit=12&all=true"), {
+    session_id: "s1", offset: 24, limit: 12, all: true, total: 1, samples: [],
+  });
+  assert.deepEqual(await requestJson(fetcher, "/api/model/select", {initial: "D:/old.onnx"}), {
+    cancelled: false, path: "D:/old.onnx",
+  });
+  assert.deepEqual(await requestJson(fetcher, "/api/model/select", {}), {
+    cancelled: false, path: "D:/m.onnx",
+  });
+  assert.deepEqual(await requestJson(fetcher, "/api/config", {headset_port: 45690}), {headset_port: 45690});
+  assert.deepEqual(await requestJson(fetcher, "/api/start", {mode: "live"}), {running: true, started: {mode: "live"}});
+  assert.deepEqual(await requestJson(fetcher, "/api/prepare", {}), {prepared: true});
+  assert.deepEqual(await requestJson(fetcher, "/api/personalization", {action: "status"}), {ok: true, action: "status"});
+  assert.deepEqual(await requestJson(fetcher, "/api/recording", {action: "begin", person_id: "me"}), {
+    state: "recording", payload: {action: "begin", person_id: "me"},
+  });
+  assert.deepEqual(await requestJson(fetcher, "/api/recording/display", {frame: "f1", visible: true}), {
+    accepted: true, frame: "f1",
+  });
+  assert.deepEqual(await requestJson(fetcher, "/api/recording/review", {sample_ids: ["f0", "f1"]}), {samples: 2});
+  assert.deepEqual(await requestJson(fetcher, "/api/training", {action: "begin", operation: "export"}), {
+    running: true, op: "export",
+  });
+  assert.deepEqual(await requestJson(fetcher, "/api/cymple-relay", {action: "start", cymple_port: 23303}), {running: true});
+  assert.deepEqual(await requestJson(fetcher, "/api/stop", {}), {running: false});
+  assert.deepEqual(await requestJson(fetcher, "/api/shutdown", {}), {stopping: true});
+
+  assert.deepEqual(calls.map(c => c.command), [
+    "get_status", "get_expressions", "get_config", "get_presets",
+    "discover_sources", "discover_sources", "check_updates", "check_updates",
+    "get_review_samples", "select_model", "select_model", "set_config",
+    "start_runtime", "prepare_model", "personalization_action",
+    "recording_action", "recording_display", "recording_review",
+    "training_action", "cymple_relay_action", "stop_runtime", "quit_app",
+  ]);
+  assert.equal(calls[4].args, undefined);
+  assert.deepEqual(calls[9].args, {initial: "D:/old.onnx"});
+  assert.deepEqual(calls[10].args, {initial: ""});
+  assert.deepEqual(calls[11].args, {changes: {headset_port: 45690}});
+  assert.deepEqual(calls[12].args, {payload: {mode: "live"}});
+  assert.equal(calls[13].args, undefined);
+  assert.equal(calls[20].args, undefined);
+
+  // Binary preview: ArrayBuffer & Uint8Array non-empty -> 200 JPEG blob; empty -> 204.
+  const res200Buf = await fetcher("/api/preview.jpg?t=1001");
+  assert.equal(res200Buf.ok, true);
+  assert.equal(res200Buf.status, 200);
+  const blobBuf = await res200Buf.blob();
+  assert.equal(blobBuf.type, "image/jpeg");
+  assert.deepEqual([...new Uint8Array(await blobBuf.arrayBuffer())], [0xff, 0xd8, 0xff, 0xd9]);
+
+  previewPayload = new Uint8Array([0xff, 0xd8, 0x01, 0xff, 0xd9]);
+  const res200Arr = await fetcher("/api/preview.jpg?t=1002");
+  assert.equal(res200Arr.status, 200);
+  assert.equal((await res200Arr.blob()).size, 5);
+
+  previewPayload = new ArrayBuffer(0);
+  assert.equal((await fetcher("/api/preview.jpg?t=1003")).status, 204);
+  previewPayload = new Uint8Array(0);
+  assert.equal((await fetcher("/api/preview.jpg?t=1004")).status, 204);
+
+  // Binary review image: ArrayBuffer & Uint8Array non-empty -> 200 JPEG blob; empty -> 404.
+  const revRes = await fetcher("/api/recording/image?session=sess1&sample=f00001");
+  assert.equal(revRes.ok, true);
+  assert.equal(revRes.status, 200);
+  const revBlob = await revRes.blob();
+  assert.equal(revBlob.type, "image/jpeg");
+  assert.deepEqual([...new Uint8Array(await revBlob.arrayBuffer())], [0xff, 0xd8, 0xaa, 0xff, 0xd9]);
+  assert.deepEqual(calls.at(-1), {command: "get_review_image", args: {session: "sess1", sample: "f00001"}});
+
+  reviewImgPayload = new Uint8Array(0);
+  const revEmpty = await fetcher("/api/recording/image?session=sess1&sample=missing");
+  assert.equal(revEmpty.ok, false);
+  assert.equal(revEmpty.status, 404);
+
+  // Static asset passthrough for ./guide-reference/manifest.json.
+  const manifestRes = await requestJson(fetcher, "./guide-reference/manifest.json");
+  assert.equal(staticRequested, "./guide-reference/manifest.json");
+  assert.deepEqual(manifestRes, {version: 1, poses: []});
+
+  // Rejected invoke maps to HTTP 400 JSON { error } and integrates with errorMessage.
+  nextError = "No PICO camera service found";
+  await assert.rejects(
+    () => requestJson(fetcher, "/api/cymple-relay", {action: "start"}),
+    err => {
+      assert.match(err.message, /HTTP 400: No PICO camera service found/);
+      assert.equal(errorMessage("en", err.message), messages.en.cympleNoDevice);
+      assert.equal(errorMessage("zh-CN", err.message), messages["zh-CN"].cympleNoDevice);
+      return true;
+    },
+  );
+
+  // Unknown API route -> 404.
+  const res404 = await fetcher("/api/does-not-exist");
+  assert.equal(res404.ok, false);
+  assert.equal(res404.status, 404);
+});
+
+test("createTauriFetcher handles AbortSignal pre-abort and in-flight timeout cleanly", async () => {
+  let invokeCount = 0;
+  const tauriCore = {
+    invoke(command) {
+      invokeCount++;
+      if (command === "get_status") return new Promise(() => {});
+      return Promise.resolve({});
+    },
+  };
+  const fetcher = createTauriFetcher(tauriCore);
+
+  const preAborted = new AbortController();
+  preAborted.abort();
+  await assert.rejects(
+    () => fetcher("/api/status", {signal: preAborted.signal}),
+    err => err.name === "AbortError",
+  );
+  assert.equal(invokeCount, 0);
+
+  await assert.rejects(
+    () => requestJson(fetcher, "/api/status", undefined, 25),
+    /request timed out \(25 ms\)/,
+  );
+});
+
+test("update banner stays silent when current, renders update links/notes, filters unsafe URLs, and quit shuts down", async t => {
+  const f = setup(t);
+  await f.app.init();
+  await f.app.checkUpdates(false);
+  assert.equal(f.el("update-banner").hidden, true);
+  assert.equal(f.el("version-badge").textContent, "v2.6.2");
+  assert.equal(f.el("version-badge").hidden, false);
+
+  await f.el("check-update").emit("click");
+  assert.equal(f.el("update-banner").hidden, false);
+  assert.match(f.el("update-message").textContent, /latest version/i);
+  assert.equal(f.el("update-links").children.length, 1);
+
+  f.server.updateResponse = {
+    current_version: "2.6.2",
+    latest_version: "2.7.0",
+    update_available: true,
+    release_url: "https://github.com/WolalaQAQ/PicoET-Enhance/releases/tag/v2.7.0",
+    installer_url: "https://example.invalid/Setup.exe",
+    portable_url: "javascript:alert(1)",
+    module_url: "https://example.invalid/magisk.zip",
+    notes: ["Whole-mouth native Tauri"],
+    error: null,
+  };
+  await f.app.checkUpdates(true);
+  assert.equal(f.el("update-banner").hidden, false);
+  assert.match(f.el("update-message").textContent, /v2\.7\.0/);
+  assert.equal(f.el("update-notes").hidden, false);
+  assert.equal(f.el("update-links").children.length, 3);
+
+  f.el("update-dismiss").emit("click");
+  assert.equal(f.el("update-banner").hidden, true);
+
+  await f.el("quit-service").emit("click");
+  assert.ok(f.server.calls.some(c => c.path === "/api/shutdown"));
+  assert.equal(f.el("status").textContent, messages.en.serviceStopped);
+  assert.equal(f.el("quit-service").disabled, true);
+});
+
+test("Tauri mode syncs tray language, intercepts external update/license links, and quits via quit_app", async t => {
+  const invokes = [];
+  const tauriCore = {
+    async invoke(command, args) {
+      invokes.push({command, args});
+      switch (command) {
+        case "get_status": return {running: false, version: "2.6.2", config: {headset_host: "", headset_port: 45681, model_path: "", device: "auto", stale_ms: 350, preview_fps: 10, output_port: 45682, replay_path: ""}, contract: {channels: PRIMARY_CHANNELS}, model: {trained_channels: []}, prediction: {fresh: false, state: "stopped", valid_mask: 0, channels: {}}, metrics: {}, recording: {state: "idle"}, training: {state: "idle", running: false, operations: {}}};
+        case "get_presets": return {presets: [], default: ""};
+        case "discover_sources": return {devices: []};
+        case "check_updates": return {
+          current_version: "2.6.2", latest_version: "2.7.0", update_available: true,
+          release_url: "https://github.com/WolalaQAQ/PicoET-Enhance/releases/tag/v2.7.0",
+          installer_url: "https://example.invalid/Setup.exe", portable_url: "", module_url: "", notes: ["Faster"], error: null,
+        };
+        case "set_tray_language": return undefined;
+        case "open_external_url": return undefined;
+        case "quit_app": return {stopping: true};
+        default: throw new Error(`unexpected ${command}`);
+      }
+    },
+  };
+  const f = setup(t, {
+    fetch: createTauriFetcher(tauriCore, async () => Response.json({error: "not found"}, {status: 404})),
+    tauriCore,
+  });
+  await f.app.init();
+
+  assert.deepEqual(invokes.find(c => c.command === "set_tray_language"), {command: "set_tray_language", args: {language: "en"}});
+  f.app.setLanguage("zh-CN");
+  assert.deepEqual(invokes.filter(c => c.command === "set_tray_language").at(-1), {command: "set_tray_language", args: {language: "zh-CN"}});
+
+  await f.app.checkUpdates(true);
+  const firstLink = f.el("update-links").children[0];
+  let prevented = false;
+  firstLink.listeners.click({preventDefault() { prevented = true; }});
+  assert.equal(prevented, true);
+  assert.deepEqual(invokes.find(c => c.command === "open_external_url"), {
+    command: "open_external_url",
+    args: {url: "https://example.invalid/Setup.exe"},
+  });
+
+  // Middle click opens external URL; right click does not.
+  let auxPrevented = false;
+  firstLink.listeners.auxclick({button: 1, preventDefault() { auxPrevented = true; }});
+  assert.equal(auxPrevented, true);
+  firstLink.listeners.auxclick({button: 2, preventDefault() { throw new Error("should not prevent right-click"); }});
+  assert.equal(invokes.filter(c => c.command === "open_external_url").length, 2);
+
+  // Asset license link also opens externally via Tauri.
+  let licensePrevented = false;
+  f.el("reference-license").listeners.click({preventDefault() { licensePrevented = true; }});
+  assert.equal(licensePrevented, true);
+  assert.deepEqual(invokes.filter(c => c.command === "open_external_url").at(-1), {
+    command: "open_external_url",
+    args: {url: "https://developers.meta.com/horizon/licenses/oculussdk/"},
+  });
+
+  // Quit button invokes quit_app through createTauriFetcher.
+  await f.el("quit-service").emit("click");
+  assert.ok(invokes.some(c => c.command === "quit_app"));
+  assert.equal(f.el("status").textContent, messages["zh-CN"].serviceStopped);
+});
+
+test("Tauri mode fetches review thumbnails and focused review image via IPC blob URLs and revokes them on focus/reload/navigation", async t => {
+  const imageCalls = [];
+  let sessionId = "local-tauri";
+  const tauriCore = {
+    async invoke(command, args) {
+      switch (command) {
+        case "get_status": return {
+          running: false, version: "2.6.2",
+          config: {headset_host: "", headset_port: 45681, model_path: "", device: "auto", stale_ms: 350, preview_fps: 10, output_port: 45682, replay_path: ""},
+          contract: {channels: PRIMARY_CHANNELS}, model: {trained_channels: []},
+          prediction: {fresh: false, state: "stopped", valid_mask: 0, channels: {}},
+          metrics: {}, recording: {state: "stopped", path: "D:/local", session_id: sessionId},
+          training: {state: "idle", running: false, operations: {}},
+        };
+        case "get_presets": return {presets: [], default: ""};
+        case "discover_sources": return {devices: []};
+        case "check_updates": return {update_available: false, current_version: "2.6.2", latest_version: "2.6.2"};
+        case "get_review_samples": return {
+          session_id: sessionId, offset: args.offset, total: 2,
+          samples: [
+            {sample_id: "f000000000", prompt_candidate: {labels: {TongueOut: 0.5}}},
+            {sample_id: "f000000001", prompt_candidate: {labels: {JawOpen: 0.4}}},
+          ],
+        };
+        case "get_review_image":
+          imageCalls.push(args);
+          return new Uint8Array([0xff, 0xd8, 0x01, 0xff, 0xd9]).buffer;
+        case "set_tray_language": return undefined;
+        default: throw new Error(`unexpected ${command}`);
+      }
+    },
+  };
+  const f = setup(t, {
+    fetch: createTauriFetcher(tauriCore, async () => Response.json({error: "not found"}, {status: 404})),
+    tauriCore,
+  });
+  await f.app.init();
+  f.app.navigate("recording");
+
+  await f.app.loadReviews();
+  assert.equal(f.el("review-grid").children.length, 2);
+  const firstThumb = f.el("review-grid").children[0].children[1];
+  const secondThumb = f.el("review-grid").children[1].children[1];
+  assert.match(firstThumb.src, /^blob:/);
+  assert.match(secondThumb.src, /^blob:/);
+  assert.deepEqual(imageCalls, [
+    {session: "local-tauri", sample: "f000000000"},
+    {session: "local-tauri", sample: "f000000001"},
+  ]);
+
+  // Focusing first then second sample fetches via get_review_image and revokes previous focus blob URL.
+  await firstThumb.emit("click");
+  const focusUrl1 = f.el("review-image").src;
+  assert.match(focusUrl1, /^blob:/);
+  assert.equal(f.el("review-image").hidden, false);
+
+  await secondThumb.emit("click");
+  const focusUrl2 = f.el("review-image").src;
+  assert.match(focusUrl2, /^blob:/);
+  assert.notEqual(focusUrl2, focusUrl1);
+  assert.ok(f.urls.revoked.includes(focusUrl1), "previous focus URL should be revoked");
+
+  // Reloading revokes all previous thumbnails and active focus URL.
+  const prevThumb1 = firstThumb.src, prevThumb2 = secondThumb.src;
+  await f.app.loadReviews();
+  assert.ok(f.urls.revoked.includes(prevThumb1));
+  assert.ok(f.urls.revoked.includes(prevThumb2));
+  assert.ok(f.urls.revoked.includes(focusUrl2));
+
+  // Switching page away from recording revokes all current review blob URLs cleanly.
+  f.app.navigate("tracking");
+  assert.deepEqual(new Set(f.urls.revoked), new Set(f.urls.created));
+  assert.equal(f.el("review-grid").children.length, 0);
+  assert.equal(f.el("review-image").hidden, true);
+});
+
+test("Tauri review focus stays hidden on 404/error and navigating away during in-flight fetches revokes late blobs", async t => {
+  const pendingImageResolvers = [];
+  let imageMode = "ok";
+  const tauriCore = {
+    async invoke(command, args) {
+      switch (command) {
+        case "get_status": return {
+          running: false, version: "2.6.2",
+          config: {headset_host: "", headset_port: 45681, model_path: "", device: "auto", stale_ms: 350, preview_fps: 10, output_port: 45682, replay_path: ""},
+          contract: {channels: PRIMARY_CHANNELS}, model: {trained_channels: []},
+          prediction: {fresh: false, state: "stopped", valid_mask: 0, channels: {}},
+          metrics: {}, recording: {state: "stopped", path: "D:/local", session_id: "local-race"},
+          training: {state: "idle", running: false, operations: {}},
+        };
+        case "get_presets": return {presets: [], default: ""};
+        case "discover_sources": return {devices: []};
+        case "check_updates": return {update_available: false, current_version: "2.6.2", latest_version: "2.6.2"};
+        case "get_review_samples": return {
+          session_id: "local-race", offset: args.offset, total: 2,
+          samples: [
+            {sample_id: "f000000000", prompt_candidate: {labels: {TongueOut: 0.5}}},
+            {sample_id: "f000000001", prompt_candidate: {labels: {JawOpen: 0.4}}},
+          ],
+        };
+        case "get_review_image":
+          if (imageMode === "defer") {
+            return new Promise(resolve => { pendingImageResolvers.push(() => resolve(new Uint8Array([0xff, 0xd8, 0x02, 0xff, 0xd9]).buffer)); });
+          }
+          if (imageMode === "empty") return new Uint8Array(0);
+          if (imageMode === "error") throw new Error("disk read error");
+          return new Uint8Array([0xff, 0xd8, 0x01, 0xff, 0xd9]).buffer;
+        case "set_tray_language": return undefined;
+        default: throw new Error(`unexpected ${command}`);
+      }
+    },
+  };
+  const f = setup(t, {
+    fetch: createTauriFetcher(tauriCore, async () => Response.json({error: "not found"}, {status: 404})),
+    tauriCore,
+  });
+  await f.app.init();
+  f.app.navigate("recording");
+
+  // 1. In-flight thumbnails: navigate away while reviewThumbUrls is still empty -> late blobs must be revoked immediately.
+  imageMode = "defer";
+  const loadPromise = f.app.loadReviews();
+  while (pendingImageResolvers.length < 2) await Promise.resolve();
+  assert.equal(f.app.state.reviewThumbUrls.size, 0);
+  assert.equal(f.app.state.reviewFocusUrl, null);
+  f.app.navigate("tracking");
+  for (const resolve of pendingImageResolvers.splice(0)) resolve();
+  await loadPromise;
+  assert.equal(f.urls.created.length, 2);
+  assert.deepEqual(new Set(f.urls.revoked), new Set(f.urls.created));
+  assert.equal(f.app.state.reviewThumbUrls.size, 0);
+
+  // 2. Focus image stays hidden on 404 (empty bytes) and error, and revokes any previously focused image.
+  f.app.navigate("recording");
+  imageMode = "ok";
+  await f.app.loadReviews();
+  const thumb0 = f.el("review-grid").children[0].children[1];
+  const thumb1 = f.el("review-grid").children[1].children[1];
+  await thumb0.emit("click");
+  const goodFocusUrl = f.el("review-image").src;
+  assert.equal(f.el("review-image").hidden, false);
+  assert.match(goodFocusUrl, /^blob:/);
+
+  imageMode = "empty";
+  await thumb1.emit("click");
+  assert.equal(f.el("review-image").hidden, true);
+  assert.equal(f.el("review-image").src, "");
+  assert.ok(f.urls.revoked.includes(goodFocusUrl));
+
+  imageMode = "error";
+  await thumb0.emit("click");
+  assert.equal(f.el("review-image").hidden, true);
+  assert.equal(f.el("review-image").src, "");
+
+  // 3. In-flight focus fetch while reviewFocusUrl is null -> navigating away revokes late focus blob and keeps image hidden.
+  imageMode = "defer";
+  const focusPromise = thumb0.emit("click");
+  assert.equal(f.el("review-image").hidden, true);
+  while (pendingImageResolvers.length < 1) await Promise.resolve();
+  assert.equal(f.app.state.reviewFocusUrl, null);
+  f.app.navigate("tracking");
+  for (const resolve of pendingImageResolvers.splice(0)) resolve();
+  await focusPromise;
+  assert.equal(f.el("review-image").hidden, true);
+  assert.deepEqual(new Set(f.urls.revoked), new Set(f.urls.created));
+});
+
+test("missing ONNX Runtime dynamic library maps to clear bilingual guidance", () => {
+  const raw = "POST /api/start · HTTP 400: Unable to load ONNX Runtime dynamic library: onnxruntime.dll not found";
+  assert.equal(errorMessage("en", raw), messages.en.ortMissing);
+  assert.match(messages.en.ortMissing, /onnxruntime\.dll/);
+  assert.match(messages.en.ortMissing, /PicoET-PC-Studio\.exe/);
+  assert.match(messages.en.ortMissing, /ORT_DYLIB_PATH/);
+  assert.equal(errorMessage("zh-CN", raw), messages["zh-CN"].ortMissing);
+  assert.match(messages["zh-CN"].ortMissing, /onnxruntime\.dll/);
+  assert.match(messages["zh-CN"].ortMissing, /PicoET-PC-Studio\.exe/);
+  assert.match(messages["zh-CN"].ortMissing, /ORT_DYLIB_PATH/);
 });

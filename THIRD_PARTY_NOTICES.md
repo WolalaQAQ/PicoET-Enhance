@@ -178,26 +178,7 @@ portions embedded by compilation. See the [LLVM license](https://llvm.org/LICENS
 and the fixed NDK's `NOTICE.toolchain` for its license and exception text. No NDK
 tool executables are distributed in the module.
 
-## PC tongue development dependencies and upstream work
-
-The archived `pc-studio/` segmentation architecture, preprocessing and geometry adapt
-Rulez777's MIT-licensed PicoET-Enhance PR #4, pinned to
-`04fe68ac88e8c1fcaf504eba8223ebf33c629d93` for `shadow_model.py`, with calibration,
-personal mask-head training/acceptance and size hysteresis based on tongue.2
-(`f5f7894c6b30a86fd4699d721f966b6a01861443`). The upstream copyright is
-`Copyright (c) 2026 PicoET-Enhance contributors`; the full MIT notice is retained
-in this repository's [LICENSE](LICENSE). The PC adaptation adds ONNX Runtime
-providers, fresh-source transport and transactional personal-profile activation.
-The upstream photographs and demo media are not distributed here. Standard
-weights are not included in this source tree. The archived `prepare_model.py`
-can fetch the author's `v2.4.2-tongue.1` release using its pinned checkpoint digest;
-it is not invoked by the whole-mouth regression setup or runtime.
-
-PC packages are installed separately: PyTorch/torchvision (BSD-style licenses),
-ONNX (Apache-2.0), ONNX Runtime (MIT), NumPy (BSD), Pillow (HPND), and optional
-OpenVINO (Apache-2.0). CUDA runtime components retain NVIDIA's terms. Their
-installed wheels carry the applicable notices; none of those packages or runtime
-DLLs is copied into this repository.
+## LAN camera JPEG daemon
 
 The optional JPEG daemon links the libjpeg API from
 [libjpeg-turbo 3.1.2](https://github.com/libjpeg-turbo/libjpeg-turbo/tree/3.1.2).
@@ -206,17 +187,138 @@ The IJG license covers the libjpeg API and its SIMD implementation (whose source
 also carries zlib notices); the build system and TurboJPEG API carry a
 three-clause BSD license. This integration uses the libjpeg API, not TurboJPEG.
 `camera-source/build.py` downloads a pinned source archive, builds it separately,
-and retains `LICENSE.md` and `README.ijg` with the build outputs. The module includes both in `licenses/libjpeg-turbo/`. Keep those
-notices and this attribution when distributing a linked daemon. ShadowHook and
-the Android C++ runtime use the existing notices above.
+and retains `LICENSE.md` and `README.ijg` with the build outputs. The module
+includes both in `licenses/libjpeg-turbo/`. Keep those notices and this
+attribution when distributing a linked daemon. ShadowHook and the Android C++
+runtime use the existing notices above.
+
+## PC Studio (Rust, Tauri v2, ort, ONNX Runtime, WebView2, Inno Setup 6)
+
+The Windows PC Studio desktop app (`pc-studio/src-tauri/`) is compiled from Rust
+with Tauri v2 into a standalone executable (`PicoET-PC-Studio.exe`). No
+third-party binaries or prebuilt runtime packages are committed to this
+repository; exact crate versions and checksums are pinned in
+`pc-studio/src-tauri/Cargo.lock` and can be inspected with
+`cargo metadata --locked --filter-platform x86_64-pc-windows-msvc --manifest-path pc-studio/src-tauri/Cargo.toml`.
+
+### MPL-2.0 Rust crates (source availability notice)
+
+`PicoET-PC-Studio.exe` statically links the following unmodified third-party
+Rust crates licensed under the **Mozilla Public License, v. 2.0 (MPL-2.0)**
+(transitive dependencies of `tauri`):
+
+- `option-ext` (`0.2.0`) — <https://github.com/soc/option-ext>
+- `cssparser` (`0.37.0`) — <https://github.com/servo/rust-cssparser>
+- `cssparser-macros` (`0.7.1`) — <https://github.com/servo/rust-cssparser>
+- `dtoa-short` (`0.3.5`) — <https://github.com/upsuper/dtoa-short>
+- `selectors` (`0.38.0`) — <https://github.com/servo/stylo>
+
+These components are subject to the terms of the Mozilla Public License, v. 2.0
+(<https://www.mozilla.org/en-US/MPL/2.0/>) and are combined with this
+MIT-licensed Larger Work under MPL-2.0 Section 3.3. Their unmodified Source Code
+Form is publicly available from [crates.io](https://crates.io/) and the upstream
+repositories listed above at the exact versions pinned in
+`pc-studio/src-tauri/Cargo.lock`.
+
+### Permissive Rust crates
+
+The remaining statically linked Rust dependencies in
+`pc-studio/src-tauri/Cargo.lock` are licensed under permissive open-source
+licenses:
+
+- **Apache-2.0 / MIT** (single- or dual-licensed, including `tauri`,
+  `tauri-plugin-single-instance`, `tao` [Apache-2.0], `wry`, `webview2-com`
+  [MIT], `ort`, `ort-sys`, `rfd` [MIT], `zip` [MIT], `crc32fast`, `uuid`,
+  `chrono`, `reqwest`, `schannel` [MIT], `image`, `serde`, `serde_json`,
+  `socket2`, `windows-sys`, `dpi`, `sync_wrapper` [Apache-2.0], `zopfli`
+  [Apache-2.0], and their transitive dependencies). The Apache License 2.0 text
+  is available at <https://www.apache.org/licenses/LICENSE-2.0>.
+- **ISC**: `libloading` (used by `ort` for dynamic loading of `onnxruntime.dll`).
+- **BSD-3-Clause** (single- or dual-licensed with MIT / Apache-2.0): `brotli`,
+  `brotli-decompressor`, `alloc-stdlib`, `alloc-no-stdlib`, `moxcms`, `pxfm`,
+  `if-addrs`.
+- **Zlib** (single- or dual-licensed with MIT / Apache-2.0): `zune-jpeg`,
+  `zune-core`, `zlib-rs`, `foldhash`, `miniz_oxide`, `bytemuck`, `tinyvec`,
+  `raw-window-handle`, `static_vcruntime`.
+- **Unicode-3.0**: ICU4X / Unicode data crates (`icu_collections`,
+  `icu_locale_core`, `icu_normalizer`, `icu_normalizer_data`, `icu_properties`,
+  `icu_properties_data`, `icu_provider`, `zerovec`, `zerotrie`, `yoke`,
+  `zerofrom`, `litemap`, `tinystr`, `writeable`, `potential_utf`) and
+  `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`).
+- **Unlicense / 0BSD / CC0-1.0 / BSL-1.0** (dual-licensed with MIT or
+  Apache-2.0): `memchr`, `aho-corasick`, `byteorder`, `byteorder-lite`, `jiff`,
+  `jiff-core`, `jiff-tzdb`, `jiff-tzdb-platform`, `winapi-util`, `same-file`,
+  `walkdir`, `adler2`, `dunce`, `ryu`.
+
+### ONNX Runtime (`onnxruntime.dll`)
+
+`PicoET-PC-Studio.exe` links the MIT/Apache-2.0 `ort` crate with dynamic loading
+(`load-dynamic`) and loads [ONNX Runtime](https://github.com/microsoft/onnxruntime)
+(MIT License, Copyright (c) Microsoft Corporation) dynamically at runtime when
+performing whole-mouth `.onnx` inference. No ONNX Runtime binaries or execution
+provider libraries (DirectML, CUDA, OpenVINO) are committed to this repository.
+Optional side-by-side DLLs supplied via `ORT_DYLIB_PATH`, placed next to
+`PicoET-PC-Studio.exe`, or bundled locally with `pc-studio/package_release.py`
+remain subject to their respective upstream licenses (MIT for ONNX Runtime;
+Apache-2.0 for OpenVINO; Microsoft DirectML and NVIDIA CUDA terms for their
+respective runtime components).
+
+### Microsoft Edge WebView2 Runtime
+
+`PicoET-PC-Studio.exe` statically links the MIT-licensed `webview2-com` bindings
+and hosts its UI via the system-installed **Microsoft Edge WebView2 Runtime**
+(Evergreen). Microsoft Edge WebView2 Runtime is proprietary software owned by
+Microsoft Corporation and is not redistributed by this project.
+
+### Inno Setup 6
+
+The Windows installer (`PicoET-PC-Studio-Setup-v<version>.exe`) is packaged
+with **Inno Setup 6** (Copyright (C) Jordan Russell & Martijn Laan), licensed
+under the [Inno Setup License](https://jrsoftware.org/files/is/license.txt)
+(modified BSD-style license).
+
+## Unity-Movement demonstration assets
+
+The expression guidance images in `pc-studio/web/guide-reference/` are rendered
+close-ups of the Meta-Man character from
+[oculus-samples/Unity-Movement](https://github.com/oculus-samples/Unity-Movement/tree/v71.0.0/Samples~/BodyTrackingSamples/HighFidelity)
+(`v71.0.0`, `Samples~/BodyTrackingSamples/HighFidelity`), Copyright (c) Meta
+Platforms, Inc. and affiliates, licensed under the
+[Oculus SDK License Agreement](https://developers.meta.com/horizon/licenses/oculussdk/).
+See `pc-studio/web/guide-reference/NOTICE.txt` and `LICENSE.txt` for details.
+Only rendered images and notices are included—no FBX models, Blender scenes, SDK
+code, or training labels are distributed.
+
+## PC tongue upstream work and optional Python training dependencies
+
+The legacy `pc-studio/` segmentation architecture, preprocessing and geometry adapt
+Rulez777's MIT-licensed PicoET-Enhance PR #4, pinned to
+`04fe68ac88e8c1fcaf504eba8223ebf33c629d93` for `shadow_model.py`, with calibration,
+personal mask-head training/acceptance and size hysteresis based on tongue.2
+(`f5f7894c6b30a86fd4699d721f966b6a01861443`). The upstream copyright is
+`Copyright (c) 2026 PicoET-Enhance contributors`; the full MIT notice is retained
+in this repository's [LICENSE](LICENSE). The PC adaptation adds ONNX Runtime
+providers, fresh-source transport and transactional personal-profile activation.
+The upstream photographs and demo media are not distributed here. Standard
+weights are not included in this source tree.
+
+Optional offline Python training tools (`pc-studio/face_train.py`,
+`pc-studio/mouth50_trainer/`, `pc-studio/requirements-training.txt`) use
+separately installed packages: PyTorch/torchvision (BSD-style licenses), ONNX
+(Apache-2.0), ONNX Runtime (MIT), NumPy (BSD), Pillow (HPND), and optional
+OpenVINO (Apache-2.0). CUDA runtime components retain NVIDIA's terms. Their
+installed wheels carry the applicable notices; none of those packages or runtime
+DLLs is committed to this repository.
 
 ## MouthLink interoperability
 
-The `pc-studio/mouthlink.py` adapter and whole-mouth regression tools follow the ONNX/JSON contract and
-Pillow preprocessing of [UndefinedSignal/MouthLink](https://github.com/UndefinedSignal/MouthLink),
+The whole-mouth regression tools and Rust preprocessing adapter follow the
+ONNX/JSON contract and Pillow preprocessing of
+[UndefinedSignal/MouthLink](https://github.com/UndefinedSignal/MouthLink),
 reviewed at `39e091f4191d2ea1ad8536120924cdf61949dae2` (`training/export_onnx.py`,
 `tools/mouthlink_live.py`). Negative-pose sampling, session-wise validation and
-incremental fine-tuning, continuous regression and masked-label supervision also draw on that project's training workflow and
+incremental fine-tuning, continuous regression and masked-label supervision also
+draw on that project's training workflow and
 [issue #5](https://github.com/WolalaQAQ/PicoET-Enhance/issues/5). This integration
 uses the existing JPEG transport and PC inference path; upstream photos, personal
 weights, raw UDP source and native ORT bindings are not distributed here.
@@ -259,9 +361,9 @@ the upstream repository or private training images.
 ## Optional DINOv3 training backbone
 
 The teacher adapter can load an explicitly supplied local checkout and ViT-B/16,
-ViT-L/16 or ViT-H+/16
-checkpoint of [Meta's DINOv3](https://github.com/facebookresearch/dinov3), covered
-by the [DINOv3 License](https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md).
+ViT-L/16 or ViT-H+/16 checkpoint of
+[Meta's DINOv3](https://github.com/facebookresearch/dinov3), covered by the
+[DINOv3 License](https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md).
 Obtain access to the weights and accept their accompanying terms through Meta's
 official distribution. Source and weights are not bundled. Retain the applicable
 license and attribution when distributing trained derivatives.

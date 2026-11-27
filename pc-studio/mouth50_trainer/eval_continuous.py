@@ -61,6 +61,11 @@ def _cpu_ort_session(path):
     return ort.InferenceSession(str(path), options, providers=["CPUExecutionProvider"])
 
 
+def _prepare_onnx_input(image: np.ndarray, width: int, height: int) -> np.ndarray:
+    resized = Image.fromarray(image).resize((width, height), Image.Resampling.BILINEAR)
+    return np.asarray(resized, dtype=np.float32)[None, None] / 255.0
+
+
 @torch.inference_mode()
 def predict_paths(
     model_or_onnx, kind: str, paths: list[str], device: str = "cpu", batch_size: int = 32,
@@ -72,7 +77,6 @@ def predict_paths(
         return predict_stateful_sequence(model_or_onnx, paths, device=device, propagate=propagate)
     if kind == "onnx":
         import onnxruntime as ort
-        from mouthlink import prepare_input
 
         sess = model_or_onnx if isinstance(model_or_onnx, ort.InferenceSession) else _cpu_ort_session(model_or_onnx)
         frame_input, *state_inputs = sess.get_inputs()
@@ -81,7 +85,7 @@ def predict_paths(
         initial = state
         outs = []
         for p in paths:
-            inputs = {frame_input.name: prepare_input(load_gray400(p), int(w), int(h))}
+            inputs = {frame_input.name: _prepare_onnx_input(load_gray400(p), int(w), int(h))}
             if state_inputs:
                 inputs[state_inputs[0].name] = state
             y, *next_state = sess.run(None, inputs)

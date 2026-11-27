@@ -1,47 +1,18 @@
-"""Build standalone PyInstaller bundle, portable ZIP, and Inno Setup installer for PC Studio."""
+"""Build standalone Rust/Tauri PC Studio binary, portable ZIP, and Inno Setup installer."""
 import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
-import socket
 import subprocess
-import sys
 import tempfile
-import time
-from urllib.request import urlopen
 import zipfile
-
-from updater import APP_VERSION
 
 STUDIO_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = STUDIO_ROOT.parent
-
-STUDIO_SOURCES = (
-    'backend.py',
-    'runtime.py',
-    'discovery.py',
-    'stock.py',
-    'wire.py',
-    'cymple_relay.py',
-    'updater.py',
-    'package_release.py',
-    'check.py',
-    'test_stock.py',
-    'test_runtime.py',
-    'test_cymple_relay.py',
-    'requirements.txt',
-    'start.cmd',
-    'installer/PicoET-PC-Studio.iss',
-    'web/favicon.ico',
-    'web/icon.png',
-    'web/index.html',
-    'web/styles.css',
-    'web/app.mjs',
-    'web/i18n.mjs',
-    'web/checks/app.test.mjs',
-)
+TAURI_DIR = STUDIO_ROOT / 'src-tauri'
 
 REPO_DOCS = (
     'LICENSE',
@@ -49,26 +20,76 @@ REPO_DOCS = (
     'CAMERA-PROTOCOL.md',
     'README.md',
     'README_zh.md',
+    'TONGUE.md',
+    'TONGUE_zh.md',
 )
 
-EXCLUDED_MODULES = (
-    'torch',
-    'torchvision',
-    'torchaudio',
-    'onnx',
-    'onnxruntime',
-    'numpy',
-    'scipy',
-    'matplotlib',
-    'cv2',
-    'pytest',
-    'tkinter',
-    'sqlite3',
-    'capstone',
-    'elftools',
-    'psutil',
-    'idapro',
-)
+
+def _read_module_prop_version(prop_path):
+    if not prop_path.is_file():
+        raise FileNotFoundError(f'Missing module.prop: {prop_path}')
+    text = prop_path.read_text(encoding='utf-8')
+    match = re.search(r'(?m)^version=(.+)$', text)
+    if match and match.group(1).strip():
+        return match.group(1).strip()
+    raise ValueError(f'Missing version in {prop_path}')
+
+
+def _read_cargo_package_version(cargo_toml_path):
+    if not cargo_toml_path.is_file():
+        raise FileNotFoundError(f'Missing Cargo.toml: {cargo_toml_path}')
+    text = cargo_toml_path.read_text(encoding='utf-8')
+    try:
+        import tomllib
+        data = tomllib.loads(text)
+        version = data.get('package', {}).get('version', '')
+        if isinstance(version, str) and version.strip():
+            return version.strip()
+    except ImportError:
+        pass
+    section = re.search(r'(?ms)^\[package\]\r?\n(.*?)(?=^\[|\Z)', text)
+    if section:
+        match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', section.group(1))
+        if match and match.group(1).strip():
+            return match.group(1).strip()
+    raise ValueError(f'Missing [package].version in {cargo_toml_path}')
+
+
+def _read_tauri_conf_version(conf_path):
+    if not conf_path.is_file():
+        raise FileNotFoundError(f'Missing tauri.conf.json: {conf_path}')
+    data = json.loads(conf_path.read_text(encoding='utf-8'))
+    version = data.get('version', '')
+    if isinstance(version, str) and version.strip():
+        return version.strip()
+    raise ValueError(f'Missing version in {conf_path}')
+
+
+def verify_version_parity(expected_version):
+    versions = {
+        'magisk-picoet-enhance/module.prop': _read_module_prop_version(
+            REPO_ROOT / 'magisk-picoet-enhance' / 'module.prop'
+        ),
+        'pc-studio/src-tauri/Cargo.toml': _read_cargo_package_version(TAURI_DIR / 'Cargo.toml'),
+        'pc-studio/src-tauri/tauri.conf.json': _read_tauri_conf_version(TAURI_DIR / 'tauri.conf.json'),
+    }
+    mismatches = {k: v for k, v in versions.items() if v != expected_version}
+    if mismatches:
+        detail = ', '.join(f'{k}={v!r}' for k, v in versions.items())
+        raise ValueError(
+            f'Version mismatch (expected {expected_version!r}): {detail}. '
+            'Keep module.prop, Cargo.toml, and tauri.conf.json in sync.'
+        )
+
+
+def default_version():
+    prop_path = REPO_ROOT / 'magisk-picoet-enhance' / 'module.prop'
+    if prop_path.is_file():
+        return _read_module_prop_version(prop_path)
+    cargo_toml = TAURI_DIR / 'Cargo.toml'
+    if cargo_toml.is_file():
+        return _read_cargo_package_version(cargo_toml)
+    return '2.7.0'
 
 
 def sha256_file(path):
@@ -84,6 +105,23 @@ def write_sha256(path):
     sha_path = Path(f'{path}.sha256')
     sha_path.write_text(f'{digest}  {path.name}\n', encoding='ascii')
     return digest, sha_path
+
+
+def find_cargo(explicit=None):
+    candidates = []
+    if explicit:
+        candidates.append(Path(explicit))
+    if os.environ.get('CARGO'):
+        candidates.append(Path(os.environ['CARGO']))
+    which_cargo = shutil.which('cargo')
+    if which_cargo:
+        candidates.append(Path(which_cargo))
+    exe_name = 'cargo.exe' if os.name == 'nt' else 'cargo'
+    candidates.append(Path.home() / '.cargo' / 'bin' / exe_name)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError('Rust cargo executable not found (install Rust or set CARGO)')
 
 
 def find_iscc(explicit=None):
@@ -108,181 +146,215 @@ def find_iscc(explicit=None):
     raise FileNotFoundError('Inno Setup 6 compiler (ISCC.exe) not found')
 
 
-def _free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
+def _is_ort_companion_dll(name):
+    lower = name.lower()
+    return (
+        lower == 'directml.dll'
+        or (lower.startswith('onnxruntime_providers_') and lower.endswith('.dll'))
+    )
+
+
+def collect_ort_dlls(ort_dll=None, ort_dir=None):
+    """Resolve optional ONNX Runtime DLL(s) to copy beside PicoET-PC-Studio.exe.
+
+    Returns a deterministic list of ``(source_path, dest_filename)`` tuples.
+    Returns ``[]`` when neither CLI flags nor environment variables request bundling.
+    """
+    if ort_dll is not None and ort_dir is not None:
+        raise ValueError('Specify at most one of --ort-dll or --ort-dir')
+
+    if ort_dir is None and ort_dll is None:
+        env_dir = (os.environ.get('PICOET_ORT_DIR') or '').strip()
+        env_dll = (os.environ.get('PICOET_ORT_DLL') or '').strip()
+        if env_dir and env_dll:
+            raise ValueError('Specify at most one of PICOET_ORT_DLL or PICOET_ORT_DIR')
+        if env_dir:
+            ort_dir = Path(env_dir)
+        elif env_dll:
+            ort_dll = Path(env_dll)
+
+    if ort_dir is not None:
+        directory = Path(ort_dir).resolve()
+        if not directory.is_dir():
+            raise FileNotFoundError(f'ONNX Runtime directory not found: {directory}')
+        primary = None
+        companions = []
+        for entry in sorted(directory.iterdir(), key=lambda p: p.name.lower()):
+            if not entry.is_file():
+                continue
+            lower = entry.name.lower()
+            if lower == 'onnxruntime.dll':
+                primary = (entry, 'onnxruntime.dll')
+            elif _is_ort_companion_dll(entry.name):
+                companions.append((entry, entry.name))
+        if primary is None:
+            raise FileNotFoundError(f'Missing onnxruntime.dll in ONNX Runtime directory: {directory}')
+        return [primary, *companions]
+
+    if ort_dll is not None:
+        dll_path = Path(ort_dll).resolve()
+        if not dll_path.is_file():
+            raise FileNotFoundError(f'ONNX Runtime DLL not found: {dll_path}')
+        return [(dll_path, 'onnxruntime.dll')]
+
+    return []
 
 
 def smoke_test_executable(exe_path, expected_version):
-    port = _free_port()
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        cfg = Path(tmp_dir) / 'config.json'
-        proc = subprocess.Popen(
-            [str(exe_path), '--host', '127.0.0.1', '--port', str(port), '--config', str(cfg), '--no-browser'],
-            cwd=exe_path.parent,
+    ver_proc = subprocess.run(
+        [str(exe_path), '--version'],
+        cwd=exe_path.parent,
+        capture_output=True,
+        text=True,
+        timeout=10.0,
+        check=False,
+    )
+    if ver_proc.returncode != 0:
+        raise RuntimeError(
+            f'--version returned {ver_proc.returncode}: '
+            f'stdout={ver_proc.stdout.strip()!r} stderr={ver_proc.stderr.strip()!r}'
         )
-        try:
-            deadline = time.monotonic() + 10.0
-            status_data = None
-            while time.monotonic() < deadline:
-                if proc.poll() is not None:
-                    raise RuntimeError(f'Frozen executable exited early with code {proc.returncode}')
-                try:
-                    with urlopen(f'http://127.0.0.1:{port}/api/status', timeout=0.5) as resp:
-                        status_data = json.loads(resp.read().decode('utf-8'))
-                        break
-                except OSError:
-                    time.sleep(0.1)
-            if not status_data:
-                raise RuntimeError('Timed out waiting for frozen executable HTTP server')
-            if status_data.get('version') != expected_version:
-                raise RuntimeError(f"Version mismatch in frozen executable: {status_data.get('version')} != {expected_version}")
-            with urlopen(f'http://127.0.0.1:{port}/', timeout=1.0) as resp:
-                html = resp.read().decode('utf-8')
-                if 'cymple-relay' not in html or 'brand-mark' not in html:
-                    raise RuntimeError('Frozen executable did not serve index.html')
-            for icon_route in ('/favicon.ico', '/static/icon.png'):
-                with urlopen(f'http://127.0.0.1:{port}{icon_route}', timeout=1.0) as resp:
-                    if resp.status != 200 or not resp.read():
-                        raise RuntimeError(f'Frozen executable failed serving {icon_route}')
-            stop_rc = subprocess.run(
-                [str(exe_path), '--host', '127.0.0.1', '--port', str(port), '--stop'],
-                cwd=exe_path.parent,
-                timeout=10.0,
-                check=False,
-            ).returncode
-            if stop_rc != 0:
-                raise RuntimeError(f'--stop returned {stop_rc}')
-            proc.wait(timeout=5.0)
-        finally:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=3.0)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+    got_version = ver_proc.stdout.strip()
+    if got_version != expected_version and got_version != f'v{expected_version}':
+        raise RuntimeError(
+            f'Version mismatch from --version: {got_version!r} != {expected_version!r}'
+        )
+
+    stop_proc = subprocess.run(
+        [str(exe_path), '--stop'],
+        cwd=exe_path.parent,
+        capture_output=True,
+        text=True,
+        timeout=15.0,
+        check=False,
+    )
+    if stop_proc.returncode != 0:
+        raise RuntimeError(
+            f'--stop returned {stop_proc.returncode}: '
+            f'stdout={stop_proc.stdout.strip()!r} stderr={stop_proc.stderr.strip()!r}'
+        )
 
 
-def _set_pe_gui_subsystem(exe_path):
-    """Switch PE OptionalHeader.Subsystem from CUI (3) to GUI (2) for windowless launch."""
-    data = bytearray(Path(exe_path).read_bytes())
-    pe_offset = int.from_bytes(data[0x3C:0x40], 'little')
-    if data[pe_offset:pe_offset + 4] != b'PE\x00\x00':
-        raise ValueError(f'Invalid PE signature in {exe_path}')
-    subsystem_offset = pe_offset + 24 + 68
-    data[subsystem_offset:subsystem_offset + 2] = (2).to_bytes(2, 'little')
-    Path(exe_path).write_bytes(data)
+def build_packages(
+    version=None,
+    *,
+    output_dir=None,
+    work_dir=None,
+    iscc=None,
+    skip_installer=False,
+    ort_dll=None,
+    ort_dir=None,
+):
+    version = version or default_version()
+    verify_version_parity(version)
+    ort_entries = collect_ort_dlls(ort_dll=ort_dll, ort_dir=ort_dir)
 
-
-def build_packages(version=APP_VERSION, *, output_dir=None, work_dir=None, iscc=None, skip_installer=False):
     out_dir = Path(output_dir or (REPO_ROOT / 'artifacts' / 'pc-studio-release')).resolve()
-    wk_dir = Path(work_dir).resolve() if work_dir else Path(tempfile.mkdtemp(prefix='picoet-pc-studio-build-')).resolve()
-    if work_dir and wk_dir.exists():
+    auto_work_dir = work_dir is None
+    wk_dir = Path(tempfile.mkdtemp(prefix='picoet-pc-studio-build-')).resolve() if auto_work_dir else Path(work_dir).resolve()
+    if not auto_work_dir and wk_dir.exists():
         shutil.rmtree(wk_dir)
     wk_dir.mkdir(parents=True, exist_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
-    pyi_build = wk_dir / 'pyi-build'
-    pyi_dist = wk_dir / 'pyi-dist'
-    pyi_spec = wk_dir / 'pyi-spec'
     bundle_dir = wk_dir / 'bundle'
+    bundle_dir.mkdir(parents=True, exist_ok=True)
 
-    env = dict(os.environ)
-    conda_bin = Path(sys.base_prefix) / 'Library' / 'bin'
-    if conda_bin.is_dir():
-        env['PATH'] = f"{conda_bin}{os.pathsep}{env.get('PATH', '')}"
-
-    cmd = [
-        sys.executable, '-B', '-X', 'utf8', '-m', 'PyInstaller',
-        '--noconfirm', '--clean', '--onedir', '--console',
-        '--name', 'PicoET-PC-Studio',
-        '--icon', str(STUDIO_ROOT / 'web' / 'favicon.ico'),
-        '--distpath', str(pyi_dist),
-        '--workpath', str(pyi_build),
-        '--specpath', str(pyi_spec),
-        '--paths', str(STUDIO_ROOT),
-        '--add-data', f"{STUDIO_ROOT / 'web'}{os.pathsep}web",
-    ]
-    for mod in EXCLUDED_MODULES:
-        cmd.extend(['--exclude-module', mod])
-    cmd.append(str(STUDIO_ROOT / 'backend.py'))
-    subprocess.run(cmd, cwd=STUDIO_ROOT, env=env, check=True)
-
-    built_app_dir = pyi_dist / 'PicoET-PC-Studio'
-    exe_in_dist = built_app_dir / 'PicoET-PC-Studio.exe'
-    if not exe_in_dist.is_file():
-        raise FileNotFoundError(f'PyInstaller output missing: {exe_in_dist}')
-
-    # Strip legacy Win7 UCRT stub DLLs if bundled from a Conda base environment.
-    internal_dir = built_app_dir / '_internal'
-    if internal_dir.is_dir():
-        for stub in list(internal_dir.glob('api-ms-win-*.dll')) + list(internal_dir.glob('ucrtbase.dll')):
-            stub.unlink(missing_ok=True)
-    _set_pe_gui_subsystem(exe_in_dist)
-
-    shutil.copytree(built_app_dir, bundle_dir)
-    for rel in STUDIO_SOURCES:
-        src = STUDIO_ROOT / rel
-        dst = bundle_dir / 'pc-studio' / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
-    for doc in REPO_DOCS:
-        src = REPO_ROOT / doc
-        if src.is_file():
-            shutil.copy2(src, bundle_dir / doc)
-
-    exe_path = bundle_dir / 'PicoET-PC-Studio.exe'
-    smoke_test_executable(exe_path, version)
-
-    portable_zip = out_dir / f'picoet-pc-studio-v{version}.zip'
-    if portable_zip.exists():
-        portable_zip.unlink()
-    with zipfile.ZipFile(portable_zip, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(bundle_dir.rglob('*')):
-            if file_path.is_file():
-                zf.write(file_path, file_path.relative_to(bundle_dir).as_posix())
-    portable_sha, _ = write_sha256(portable_zip)
-
-    result = {
-        'version': version,
-        'portable_zip': str(portable_zip),
-        'portable_sha256': portable_sha,
-        'installer_exe': None,
-        'installer_sha256': None,
-    }
-
-    if not skip_installer:
-        iscc_exe = find_iscc(iscc)
-        iss_path = STUDIO_ROOT / 'installer' / 'PicoET-PC-Studio.iss'
+    try:
+        cargo_exe = find_cargo()
+        env = dict(os.environ)
+        env['PICOET_STUDIO_VERSION'] = version
         subprocess.run(
-            [
-                str(iscc_exe),
-                f'/DBundleDir={bundle_dir}',
-                f'/DOutputDir={out_dir}',
-                f'/DAppVersion={version}',
-                str(iss_path),
-            ],
-            cwd=STUDIO_ROOT,
+            [str(cargo_exe), 'build', '--release', '--locked', '--manifest-path', str(TAURI_DIR / 'Cargo.toml')],
+            cwd=TAURI_DIR,
+            env=env,
             check=True,
         )
-        installer_exe = out_dir / f'PicoET-PC-Studio-Setup-v{version}.exe'
-        if not installer_exe.is_file():
-            raise FileNotFoundError(f'Expected installer missing: {installer_exe}')
-        installer_sha, _ = write_sha256(installer_exe)
-        result['installer_exe'] = str(installer_exe)
-        result['installer_sha256'] = installer_sha
 
-    shutil.rmtree(wk_dir, ignore_errors=True)
-    return result
+        target_dir = (TAURI_DIR / env['CARGO_TARGET_DIR']).resolve() if env.get('CARGO_TARGET_DIR') else (TAURI_DIR / 'target')
+        built_exe = target_dir / 'release' / 'PicoET-PC-Studio.exe'
+        if not built_exe.is_file():
+            raise FileNotFoundError(f'Cargo release binary missing: {built_exe}')
+
+        exe_path = bundle_dir / 'PicoET-PC-Studio.exe'
+        shutil.copy2(built_exe, exe_path)
+
+        ort_files = []
+        for src_dll, dest_name in ort_entries:
+            shutil.copy2(src_dll, bundle_dir / dest_name)
+            ort_files.append(dest_name)
+
+        for doc in REPO_DOCS:
+            src = REPO_ROOT / doc
+            if not src.is_file():
+                raise FileNotFoundError(f'Missing required release document: {src}')
+            shutil.copy2(src, bundle_dir / doc)
+
+        smoke_test_executable(exe_path, version)
+
+        portable_zip = out_dir / f'picoet-pc-studio-v{version}.zip'
+        if portable_zip.exists():
+            portable_zip.unlink()
+        with zipfile.ZipFile(portable_zip, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            for file_path in sorted(bundle_dir.rglob('*')):
+                if file_path.is_file():
+                    zf.write(file_path, file_path.relative_to(bundle_dir).as_posix())
+            zf.writestr('user-data/.portable', '')
+        portable_sha, _ = write_sha256(portable_zip)
+
+        result = {
+            'version': version,
+            'portable_zip': str(portable_zip),
+            'portable_sha256': portable_sha,
+            'installer_exe': None,
+            'installer_sha256': None,
+            'ort_dll_bundled': bool(ort_files),
+            'ort_files': ort_files,
+        }
+
+        if not skip_installer:
+            iscc_exe = find_iscc(iscc)
+            iss_path = STUDIO_ROOT / 'installer' / 'PicoET-PC-Studio.iss'
+            subprocess.run(
+                [
+                    str(iscc_exe),
+                    f'/DBundleDir={bundle_dir}',
+                    f'/DOutputDir={out_dir}',
+                    f'/DAppVersion={version}',
+                    str(iss_path),
+                ],
+                cwd=STUDIO_ROOT,
+                check=True,
+            )
+            installer_exe = out_dir / f'PicoET-PC-Studio-Setup-v{version}.exe'
+            if not installer_exe.is_file():
+                raise FileNotFoundError(f'Expected installer missing: {installer_exe}')
+            installer_sha, _ = write_sha256(installer_exe)
+            result['installer_exe'] = str(installer_exe)
+            result['installer_sha256'] = installer_sha
+
+        return result
+    finally:
+        if auto_work_dir:
+            shutil.rmtree(wk_dir, ignore_errors=True)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Package PicoET-Enhance PC Studio portable ZIP and Windows installer')
-    parser.add_argument('--version', default=APP_VERSION)
+    parser.add_argument('--version', default=default_version())
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--work-dir', type=Path)
     parser.add_argument('--iscc', type=Path, help='Path to Inno Setup 6 ISCC.exe')
     parser.add_argument('--skip-installer', action='store_true')
+    parser.add_argument(
+        '--ort-dll',
+        type=Path,
+        help='Optional path to onnxruntime.dll to copy beside PicoET-PC-Studio.exe (or set PICOET_ORT_DLL)',
+    )
+    parser.add_argument(
+        '--ort-dir',
+        type=Path,
+        help='Optional directory containing onnxruntime.dll and sibling DirectML.dll / onnxruntime_providers_*.dll (or set PICOET_ORT_DIR)',
+    )
     args = parser.parse_args(argv)
     info = build_packages(
         args.version,
@@ -290,6 +362,8 @@ def main(argv=None):
         work_dir=args.work_dir,
         iscc=args.iscc,
         skip_installer=args.skip_installer,
+        ort_dll=args.ort_dll,
+        ort_dir=args.ort_dir,
     )
     print(json.dumps(info, indent=2))
 

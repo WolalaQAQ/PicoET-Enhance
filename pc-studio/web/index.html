@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Mouth tracking studio</title><link rel="icon" type="image/png" sizes="256x256" href="/static/icon.png?v=2"><link rel="icon" type="image/x-icon" href="/favicon.ico?v=2"><link rel="apple-touch-icon" href="/static/icon.png?v=2">
-  <link rel="stylesheet" href="/static/styles.css"><script type="module" src="/static/app.mjs"></script>
+  <title>Mouth tracking studio</title><link rel="icon" type="image/png" sizes="256x256" href="./icon.png"><link rel="icon" type="image/x-icon" href="./favicon.ico"><link rel="apple-touch-icon" href="./icon.png">
+  <link rel="stylesheet" href="./styles.css"><script type="module" src="./app.mjs"></script>
 </head>
 <body><main class="app-shell">
   <aside class="sidebar">
@@ -19,8 +19,22 @@
     <div class="sidebar-note"><span class="local-dot"></span><span id="local-label">Runs on your PC</span><p id="privacy-note">Images stay on this PC.</p></div>
   </aside>
   <div id="workspace" class="workspace">
-    <header class="topbar"><span id="workspace-caption">EXPRESSION WORKSPACE</span><div class="topbar-right"><span class="local-badge" id="service-state">Local service</span><select id="language" aria-label="Language"><option value="en">English</option><option value="zh-CN">简体中文</option></select></div></header>
+    <header class="topbar">
+      <span id="workspace-caption">EXPRESSION WORKSPACE</span>
+      <div class="topbar-right">
+        <span class="local-badge" id="service-state">Local service</span>
+        <span class="version-pill" id="version-badge" hidden></span>
+        <button id="check-update" class="topbar-btn" type="button">Check updates</button>
+        <select id="language" aria-label="Language"><option value="en">English</option><option value="zh-CN">简体中文</option></select>
+        <button id="quit-service" class="topbar-btn topbar-quit" type="button">Quit</button>
+      </div>
+    </header>
     <div class="page-heading"><div><p id="page-eyebrow" class="eyebrow" hidden>PICO / MOUTH TRACKING</p><h1 id="title" tabindex="-1">Tracking</h1><p id="page-intro">Choose your headset and model, then start.</p></div><span id="status" class="status-pill" role="status"></span></div>
+    <section id="update-banner" class="update-banner" role="status" hidden>
+      <div class="update-head"><strong id="update-message"></strong><button id="update-dismiss" class="update-dismiss" type="button">Dismiss</button></div>
+      <ul id="update-notes" class="update-notes" hidden></ul>
+      <div id="update-links" class="update-links actions"></div>
+    </section>
     <p id="error" role="alert" hidden></p>
     <form id="settings" novalidate>
       <div id="connection-setup" class="setup-grid">
