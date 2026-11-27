@@ -115,6 +115,7 @@ impl ReplayDataset {
 }
 
 struct DictParser<'a> {
+    input: &'a str,
     bytes: &'a [u8],
     pos: usize,
 }
@@ -122,6 +123,7 @@ struct DictParser<'a> {
 impl<'a> DictParser<'a> {
     fn new(input: &'a str) -> Self {
         Self {
+            input,
             bytes: input.as_bytes(),
             pos: 0,
         }
@@ -159,35 +161,33 @@ impl<'a> DictParser<'a> {
         self.skip_ws();
         let quote = match self.peek() {
             Some(b'\'') | Some(b'"') => {
-                let q = self.bytes[self.pos];
+                let q = self.bytes[self.pos] as char;
                 self.pos += 1;
                 q
             }
             _ => return Err("Invalid NPY header: expected string literal".to_string()),
         };
         let mut out = String::new();
-        while self.pos < self.bytes.len() {
-            let b = self.bytes[self.pos];
-            self.pos += 1;
-            if b == b'\\' {
-                if self.pos >= self.bytes.len() {
+        while let Some(ch) = self.input[self.pos..].chars().next() {
+            self.pos += ch.len_utf8();
+            if ch == '\\' {
+                let Some(esc) = self.input[self.pos..].chars().next() else {
                     return Err("Invalid NPY header: unterminated string escape".to_string());
-                }
-                let esc = self.bytes[self.pos];
-                self.pos += 1;
+                };
+                self.pos += esc.len_utf8();
                 match esc {
-                    b'\\' => out.push('\\'),
-                    b'\'' => out.push('\''),
-                    b'"' => out.push('"'),
-                    b'n' => out.push('\n'),
-                    b'r' => out.push('\r'),
-                    b't' => out.push('\t'),
-                    other => out.push(other as char),
+                    '\\' => out.push('\\'),
+                    '\'' => out.push('\''),
+                    '"' => out.push('"'),
+                    'n' => out.push('\n'),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    other => out.push(other),
                 }
-            } else if b == quote {
+            } else if ch == quote {
                 return Ok(out);
             } else {
-                out.push(b as char);
+                out.push(ch);
             }
         }
         Err("Invalid NPY header: unterminated string literal".to_string())
@@ -457,17 +457,43 @@ fn decode_u64_elements(
     Ok(out)
 }
 
+const MAX_IMAGES_ENTRY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_META_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+
+fn read_bounded<R: Read>(
+    reader: R,
+    name: &str,
+    declared_size: u64,
+    max_bytes: u64,
+) -> Result<Vec<u8>, String> {
+    if declared_size > max_bytes {
+        return Err(format!(
+            "NPZ entry '{name}' uncompressed size {declared_size} exceeds limit of {max_bytes} bytes"
+        ));
+    }
+    let cap = declared_size.min(64 * 1024 * 1024).min(max_bytes) as usize;
+    let mut buf = Vec::with_capacity(cap);
+    reader
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("Failed reading '{name}' from NPZ archive: {e}"))?;
+    if (buf.len() as u64) > max_bytes {
+        return Err(format!(
+            "NPZ entry '{name}' decompressed size exceeds limit of {max_bytes} bytes"
+        ));
+    }
+    Ok(buf)
+}
+
 fn read_zip_entry<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     name: &str,
+    max_bytes: u64,
 ) -> Result<Option<Vec<u8>>, String> {
     match archive.by_name(name) {
-        Ok(mut entry) => {
-            let mut buf = Vec::with_capacity(entry.size().min(64 * 1024 * 1024) as usize);
-            entry
-                .read_to_end(&mut buf)
-                .map_err(|e| format!("Failed reading '{name}' from NPZ archive: {e}"))?;
-            Ok(Some(buf))
+        Ok(entry) => {
+            let declared_size = entry.size();
+            read_bounded(entry, name, declared_size, max_bytes).map(Some)
         }
         Err(zip::result::ZipError::FileNotFound) => Ok(None),
         Err(err) => Err(format!("Failed opening '{name}' in NPZ archive: {err}")),
@@ -487,14 +513,14 @@ pub fn load_npz_replay_from_reader<R: Read + Seek>(reader: R) -> Result<ReplayDa
     let mut archive =
         ZipArchive::new(reader).map_err(|e| format!("Invalid NPZ zip archive: {e}"))?;
 
-    let images_raw = read_zip_entry(&mut archive, "images.npy")?
+    let images_raw = read_zip_entry(&mut archive, "images.npy", MAX_IMAGES_ENTRY_BYTES)?
         .ok_or_else(|| "Replay NPZ archive is missing required 'images.npy'".to_string())?;
-    let seq_raw = read_zip_entry(&mut archive, "seq.npy")?
+    let seq_raw = read_zip_entry(&mut archive, "seq.npy", MAX_META_ENTRY_BYTES)?
         .ok_or_else(|| "Replay NPZ archive is missing required 'seq.npy'".to_string())?;
-    let times_raw = read_zip_entry(&mut archive, "times.npy")?
+    let times_raw = read_zip_entry(&mut archive, "times.npy", MAX_META_ENTRY_BYTES)?
         .ok_or_else(|| "Replay NPZ archive is missing required 'times.npy'".to_string())?;
-    let vendor_raw = read_zip_entry(&mut archive, "vendor_ns.npy")?;
-    let identity_raw = read_zip_entry(&mut archive, "raw_identity.npy")?;
+    let vendor_raw = read_zip_entry(&mut archive, "vendor_ns.npy", MAX_META_ENTRY_BYTES)?;
+    let identity_raw = read_zip_entry(&mut archive, "raw_identity.npy", MAX_META_ENTRY_BYTES)?;
 
     let (img_hdr, img_payload) = parse_npy(&images_raw)?;
     if img_hdr.dtype != NpyDtype::U8 {
@@ -521,7 +547,7 @@ pub fn load_npz_replay_from_reader<R: Read + Seek>(reader: R) -> Result<ReplayDa
     if times_hdr.shape != [count, 3] {
         return Err(SHAPE_ERR.to_string());
     }
-    let times_flat = decode_u64_elements(times_hdr.dtype, times_payload, "times", false)?;
+    let times_flat = decode_u64_elements(times_hdr.dtype, times_payload, "times", true)?;
     let mut times = Vec::with_capacity(count);
     for chunk in times_flat.chunks_exact(3) {
         times.push([chunk[0], chunk[1], chunk[2]]);
@@ -883,5 +909,99 @@ mod tests {
         let mut truncated = NpyWriter::u64_array((1, 0), &[2], &[1, 2]);
         truncated.pop();
         assert!(parse_npy(&truncated).is_err());
+    }
+
+    #[test]
+    fn zip_decompression_cap_bounds_entry_and_stream_overflow() {
+        // Compress 64 KiB of zeros (tiny compressed payload) and verify strict cap.
+        let payload = vec![0u8; 64 * 1024];
+        let npz_bytes = build_npz(&[("bomb.npy", payload.clone())], CompressionMethod::Deflated);
+        let mut archive = ZipArchive::new(Cursor::new(npz_bytes)).unwrap();
+
+        // Exact limit succeeds.
+        let ok = read_zip_entry(&mut archive, "bomb.npy", 64 * 1024)
+            .unwrap()
+            .unwrap();
+        assert_eq!(ok.len(), 64 * 1024);
+
+        // One byte below uncompressed size fails cleanly.
+        let err = read_zip_entry(&mut archive, "bomb.npy", 64 * 1024 - 1).unwrap_err();
+        assert!(err.contains("exceeds limit"), "unexpected error: {err}");
+
+        // Stream overflow when declared_size lies (forged small header) is caught by Read::take.
+        let err = read_bounded(Cursor::new(payload), "forged.npy", 16, 1024).unwrap_err();
+        assert!(
+            err.contains("decompressed size exceeds limit"),
+            "unexpected error: {err}"
+        );
+
+        // Exact boundary on read_bounded succeeds.
+        let ok = read_bounded(Cursor::new(vec![7u8; 1024]), "exact.npy", 0, 1024).unwrap();
+        assert_eq!(ok.len(), 1024);
+    }
+
+    #[test]
+    fn npy_v3_utf8_string_decoding_and_32bit_times() {
+        // 1. DictParser::parse_string preserves multi-byte UTF-8 without Latin-1 mojibake.
+        let mut parser = DictParser::new("'模型-αβγ\\n测试'");
+        assert_eq!(parser.parse_string().unwrap(), "模型-αβγ\n测试");
+
+        // 2. NPY v3.0 header with non-ASCII UTF-8 key preserves exact UTF-8 in error message.
+        let header = "{'描述': '测试', 'descr': '<u8', 'fortran_order': False, 'shape': (1,)}\n";
+        let mut raw = Vec::new();
+        raw.extend_from_slice(NPY_MAGIC);
+        raw.extend_from_slice(&[3, 0]);
+        raw.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        raw.extend_from_slice(header.as_bytes());
+        raw.extend_from_slice(&1u64.to_le_bytes());
+        let err = parse_npy(&raw).unwrap_err();
+        assert!(
+            err.contains("unexpected key '描述'"),
+            "expected preserved UTF-8 key in error, got: {err}"
+        );
+
+        // 3. times.npy accepts u32 and i32 synthetic fixtures (and rejects negative i32).
+        let imgs = vec![11u8; 2 * FRAME_PIXELS];
+        let u32_npz = build_npz(
+            &[
+                ("images.npy", NpyWriter::u8_array((1, 0), &[2, 400, 400], &imgs)),
+                ("seq.npy", NpyWriter::u32_array((1, 0), &[2], &[1, 2])),
+                (
+                    "times.npy",
+                    NpyWriter::u32_array((3, 0), &[2, 3], &[10, 20, 30, 40, 50, 60]),
+                ),
+            ],
+            CompressionMethod::Stored,
+        );
+        let ds_u32 = load_npz_replay_from_reader(Cursor::new(u32_npz)).unwrap();
+        assert_eq!(ds_u32.times, vec![[10, 20, 30], [40, 50, 60]]);
+        assert_eq!(ds_u32.vendor_ns, vec![30, 60]);
+
+        let i32_npz = build_npz(
+            &[
+                ("images.npy", NpyWriter::u8_array((1, 0), &[1, 400, 400], &vec![0u8; FRAME_PIXELS])),
+                ("seq.npy", NpyWriter::i32_array((1, 0), &[1], &[5])),
+                (
+                    "times.npy",
+                    NpyWriter::i32_array((3, 0), &[1, 3], &[100, 200, 300]),
+                ),
+            ],
+            CompressionMethod::Stored,
+        );
+        let ds_i32 = load_npz_replay_from_reader(Cursor::new(i32_npz)).unwrap();
+        assert_eq!(ds_i32.times, vec![[100, 200, 300]]);
+
+        let neg_i32_npz = build_npz(
+            &[
+                ("images.npy", NpyWriter::u8_array((1, 0), &[1, 400, 400], &vec![0u8; FRAME_PIXELS])),
+                ("seq.npy", NpyWriter::i32_array((1, 0), &[1], &[5])),
+                (
+                    "times.npy",
+                    NpyWriter::i32_array((3, 0), &[1, 3], &[100, -1, 300]),
+                ),
+            ],
+            CompressionMethod::Stored,
+        );
+        assert!(load_npz_replay_from_reader(Cursor::new(neg_i32_npz)).is_err());
     }
 }

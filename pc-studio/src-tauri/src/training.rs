@@ -491,6 +491,12 @@ impl TrainingRunner {
 
         let cli_args = validate_operation_args(operation, args)?;
         let script_path = script_root.join("face_train.py");
+        if !script_path.is_file() {
+            return Err(
+                "Local training requires face_train.py, which is only available in a source checkout"
+                    .to_string(),
+            );
+        }
 
         let mut cmd = Command::new(python);
         cmd.arg("-B")
@@ -578,12 +584,13 @@ impl TrainingRunner {
                         .name("mouth-local-training-stderr".to_string())
                         .spawn(move || {
                             let mut reader = BufReader::new(err_pipe);
-                            let mut line = String::new();
+                            let mut buf = Vec::new();
                             loop {
-                                line.clear();
-                                match reader.read_line(&mut line) {
+                                buf.clear();
+                                match reader.read_until(b'\n', &mut buf) {
                                     Ok(0) | Err(_) => break,
                                     Ok(_) => {
+                                        let line = String::from_utf8_lossy(&buf);
                                         if let Ok(mut st) = st_ref.lock() {
                                             st.ingest_line(job_id, &line);
                                         }
@@ -596,12 +603,13 @@ impl TrainingRunner {
 
                 if let Some(out_pipe) = stdout {
                     let mut reader = BufReader::new(out_pipe);
-                    let mut line = String::new();
+                    let mut buf = Vec::new();
                     loop {
-                        line.clear();
-                        match reader.read_line(&mut line) {
+                        buf.clear();
+                        match reader.read_until(b'\n', &mut buf) {
                             Ok(0) | Err(_) => break,
                             Ok(_) => {
+                                let line = String::from_utf8_lossy(&buf);
                                 if let Ok(mut st) = inner_clone.lock() {
                                     st.ingest_line(job_id, &line);
                                 }
@@ -710,7 +718,7 @@ impl TrainingRunner {
 
     /// Terminate any running training subprocess and join its reader thread with timeout.
     pub fn cancel(&self) -> Result<Value, String> {
-        let (child_opt, worker_opt) = {
+        let (child_opt, worker_opt, cancel_gen) = {
             let mut st = self.inner.lock().unwrap();
             if st.running {
                 st.state = "cancelling".to_string();
@@ -719,7 +727,7 @@ impl TrainingRunner {
                 // observes the cancellation and aborts cleanly before publishing.
                 st.job_id = st.job_id.wrapping_add(1);
             }
-            (st.child.clone(), st.worker.take())
+            (st.child.clone(), st.worker.take(), st.job_id)
         };
 
         if let Some(child_arc) = child_opt {
@@ -745,11 +753,13 @@ impl TrainingRunner {
         }
 
         let mut st = self.inner.lock().unwrap();
-        st.job_id = st.job_id.wrapping_add(1);
-        st.state = "cancelled".to_string();
-        st.running = false;
-        st.child = None;
-        st.error = None;
+        if st.job_id == cancel_gen {
+            st.job_id = st.job_id.wrapping_add(1);
+            st.state = "cancelled".to_string();
+            st.running = false;
+            st.child = None;
+            st.error = None;
+        }
         Ok(st.snapshot())
     }
 }
@@ -771,8 +781,16 @@ mod tests {
         }
     }
 
+    fn ensure_mock_script(dir: &Path) {
+        let script = dir.join("face_train.py");
+        if !script.exists() {
+            fs::write(&script, b"# mock training script\n").unwrap();
+        }
+    }
+
     #[cfg(windows)]
     fn write_mock_python(dir: &Path, name: &str, body: &str) -> PathBuf {
+        ensure_mock_script(dir);
         let path = dir.join(format!("{name}.cmd"));
         fs::write(&path, format!("@echo off\r\n{body}\r\n")).unwrap();
         path
@@ -781,6 +799,7 @@ mod tests {
     #[cfg(not(windows))]
     fn write_mock_python(dir: &Path, name: &str, body: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
+        ensure_mock_script(dir);
         let path = dir.join(format!("{name}.sh"));
         fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         let mut perms = fs::metadata(&path).unwrap().permissions();
@@ -1214,5 +1233,177 @@ mod tests {
             assert_eq!(st["running"], false);
             assert!(st["error"].is_null(), "unexpected error: {st}");
         }
+    }
+
+    #[test]
+    fn runner_rejects_missing_face_train_script_before_spawning() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = TrainingRunner::new();
+        let err = runner
+            .begin_with_python(
+                "export",
+                &json!({"checkpoint": "a.pt", "output": "b.onnx"}),
+                dir.path(),
+                Path::new("nonexistent-python-executable"),
+            )
+            .unwrap_err();
+        assert!(
+            err.contains("face_train.py") && err.contains("source checkout"),
+            "unexpected error: {err}"
+        );
+        let st = runner.status();
+        assert_eq!(st["state"], "idle");
+        assert_eq!(st["running"], false);
+    }
+
+    #[test]
+    fn runner_survives_non_utf8_stdout_and_stderr_before_json_events() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("raw_out.bin"),
+            b"gbk-out \xb2\xe2\xca\xd4\xff\xfe\r\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("raw_err.bin"),
+            b"gbk-err \x80\x81\xb2\xe2\r\n",
+        )
+        .unwrap();
+
+        #[cfg(windows)]
+        let mock = write_mock_python(
+            dir.path(),
+            "mock_non_utf8",
+            concat!(
+                "type \"%~dp0raw_err.bin\" 1>&2\r\n",
+                "type \"%~dp0raw_out.bin\"\r\n",
+                "echo {\"event\":\"progress\",\"epoch\":2,\"loss\":0.12}\r\n",
+                "echo {\"event\":\"result\",\"result\":{\"output\":\"recovered.onnx\"}}\r\n",
+            ),
+        );
+        #[cfg(not(windows))]
+        let mock = write_mock_python(
+            dir.path(),
+            "mock_non_utf8",
+            concat!(
+                "cat \"$(dirname \"$0\")/raw_err.bin\" >&2\n",
+                "cat \"$(dirname \"$0\")/raw_out.bin\"\n",
+                "echo '{\"event\":\"progress\",\"epoch\":2,\"loss\":0.12}'\n",
+                "echo '{\"event\":\"result\",\"result\":{\"output\":\"recovered.onnx\"}}'\n",
+            ),
+        );
+
+        let runner = TrainingRunner::new();
+        runner
+            .begin_with_python(
+                "export",
+                &json!({"checkpoint": "a.pt", "output": "recovered.onnx"}),
+                dir.path(),
+                &mock,
+            )
+            .unwrap();
+
+        wait_for_idle(&runner, Duration::from_secs(5));
+        let st = runner.status();
+        assert_eq!(st["state"], "completed", "status={st}");
+        assert_eq!(st["running"], false);
+        assert!(st["error"].is_null());
+        assert_eq!(st["progress"]["event"], "progress");
+        assert_eq!(st["progress"]["epoch"], 2);
+        assert_eq!(st["result"]["output"], "recovered.onnx");
+
+        let tail = st["log_tail"].as_array().unwrap();
+        assert!(
+            tail.iter()
+                .filter_map(Value::as_str)
+                .any(|line| line.contains("gbk-out") && line.contains('\u{FFFD}')),
+            "expected lossy stdout line in log_tail={tail:?}"
+        );
+        assert!(
+            tail.iter()
+                .filter_map(Value::as_str)
+                .any(|line| line.contains("gbk-err") && line.contains('\u{FFFD}')),
+            "expected lossy stderr line in log_tail={tail:?}"
+        );
+    }
+
+    #[test]
+    fn runner_cancel_does_not_clobber_concurrently_started_job() {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        let mock = write_mock_python(
+            dir.path(),
+            "mock_job2",
+            "echo {\"event\":\"progress\",\"epoch\":1}\r\nping -n 30 127.0.0.1 >nul",
+        );
+        #[cfg(not(windows))]
+        let mock = write_mock_python(
+            dir.path(),
+            "mock_job2",
+            "echo '{\"event\":\"progress\",\"epoch\":1}'\nsleep 30",
+        );
+
+        let runner = Arc::new(TrainingRunner::new());
+        let (done_tx, done_rx) = mpsc::channel();
+        let runner_for_worker = Arc::clone(&runner);
+        let root = dir.path().to_path_buf();
+        let exe = mock.clone();
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                {
+                    let mut st = runner_for_worker.inner.lock().unwrap();
+                    if st.state == "cancelling" {
+                        // Simulate job 1 finishing just before cancel() wakes up.
+                        st.running = false;
+                        st.state = "cancelled".to_string();
+                        st.child = None;
+                        break;
+                    }
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for cancel() to enter cancelling state"
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+            // Start job 2 in the race window before job 1 signals done_tx.
+            runner_for_worker
+                .begin_with_python(
+                    "export",
+                    &json!({"checkpoint": "a.pt", "output": "b.onnx"}),
+                    &root,
+                    &exe,
+                )
+                .unwrap();
+            let _ = done_tx.send(());
+        });
+
+        {
+            let mut st = runner.inner.lock().unwrap();
+            st.job_id = 1;
+            st.state = "training".to_string();
+            st.running = true;
+            st.operation = Some("export".to_string());
+            st.worker = Some(WorkerHandle { handle, done_rx });
+        }
+
+        // Job 1's cancel() must observe st.job_id != cancel_gen and leave job 2 intact.
+        let after_cancel1 = runner.cancel().unwrap();
+        assert_eq!(after_cancel1["state"], "training", "status={after_cancel1}");
+        assert_eq!(after_cancel1["running"], true);
+        assert!(runner.is_running());
+        {
+            let st = runner.inner.lock().unwrap();
+            assert_eq!(st.job_id, 2);
+            assert!(st.child.is_some());
+            assert!(st.worker.is_some());
+        }
+
+        // A second cancel() now cleanly terminates job 2.
+        let after_cancel2 = runner.cancel().unwrap();
+        assert_eq!(after_cancel2["state"], "cancelled", "status={after_cancel2}");
+        assert_eq!(after_cancel2["running"], false);
+        assert!(!runner.is_running());
     }
 }

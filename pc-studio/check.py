@@ -52,7 +52,7 @@ def main(argv=None):
     )
     for js in ('web/app.mjs', 'web/i18n.mjs'):
         subprocess.run(['node', '--check', str(ROOT / js)], cwd=ROOT, check=True)
-    subprocess.run(['node', '--test', str(ROOT / 'web/checks/app.test.mjs')], cwd=ROOT, check=True)
+    subprocess.run(['node', '--test', str(ROOT / 'web-checks/app.test.mjs')], cwd=ROOT, check=True)
 
     if args.with_training:
         for test_file in TRAINING_TEST_FILES:

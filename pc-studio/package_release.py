@@ -222,10 +222,17 @@ def fetch_default_ort_directml(extract_dir, cache_dir=None):
     nupkg_path = cache_root / f'microsoft.ml.onnxruntime.directml.{DEFAULT_ORT_NUPKG_VERSION}.nupkg'
 
     if not nupkg_path.is_file() or sha256_file(nupkg_path) != DEFAULT_ORT_NUPKG_SHA256:
-        tmp_path = nupkg_path.with_suffix('.nupkg.tmp')
+        tmp_path = None
         try:
-            with urllib.request.urlopen(DEFAULT_ORT_NUPKG_URL, timeout=60) as resp, open(tmp_path, 'wb') as out:
-                shutil.copyfileobj(resp, out)
+            with tempfile.NamedTemporaryFile(
+                dir=cache_root,
+                prefix=f'{nupkg_path.name}.',
+                suffix='.tmp',
+                delete=False,
+            ) as out:
+                tmp_path = Path(out.name)
+                with urllib.request.urlopen(DEFAULT_ORT_NUPKG_URL, timeout=60) as resp:
+                    shutil.copyfileobj(resp, out)
             actual = sha256_file(tmp_path)
             if actual != DEFAULT_ORT_NUPKG_SHA256:
                 raise RuntimeError(
@@ -234,7 +241,7 @@ def fetch_default_ort_directml(extract_dir, cache_dir=None):
                 )
             os.replace(tmp_path, nupkg_path)
         except Exception:
-            if tmp_path.exists():
+            if tmp_path is not None and tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
             raise
 

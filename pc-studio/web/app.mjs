@@ -974,7 +974,9 @@ export function createApp(doc, options = {}) {
   async function loadReviews(offset = 0) {
     if (get("review-load").disabled) return;
     await control("working", async () => {
+      const startGen = state.reviewGeneration;
       const result = await requestJson(fetcher, `/api/recording/review?offset=${offset}&limit=24&all=${get("review-all").checked}`);
+      if (state.destroyed || state.page !== "recording" || startGen !== state.reviewGeneration) return;
       revokeReviewUrls();
       const reviewGen = state.reviewGeneration;
       state.reviews = result; state.reviewFocus = null; state.reviewSelected.clear(); get("review-grid").replaceChildren();
@@ -995,7 +997,7 @@ export function createApp(doc, options = {}) {
             try {
               const objectUrl = await fetchReviewObjectUrl(imgUrl);
               if (!objectUrl) return;
-              if (reviewGen !== state.reviewGeneration || state.destroyed) {
+              if (reviewGen !== state.reviewGeneration || state.destroyed || state.page !== "recording") {
                 urls.revokeObjectURL(objectUrl);
                 return;
               }
@@ -1548,8 +1550,9 @@ export function createApp(doc, options = {}) {
     const prevPage = state.page;
     state.page = page;
     if (prevPage === "recording" && page !== "recording") {
+      const hadReviewBlobs = state.reviewThumbUrls.size > 0 || Boolean(state.reviewFocusUrl);
       revokeReviewUrls();
-      if (tauriCore || state.reviewThumbUrls.size > 0 || state.reviewFocusUrl) {
+      if (tauriCore || hadReviewBlobs) {
         state.reviews = null;
         state.reviewFocus = null;
         state.reviewSelected.clear();

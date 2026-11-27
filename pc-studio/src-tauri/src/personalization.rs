@@ -688,13 +688,24 @@ fn resolve_checkpoint_path(checkpoint: &str) -> String {
     strip_win_verbatim_prefix(&normalized)
 }
 
-fn strip_win_verbatim_prefix(path: &Path) -> String {
-    let s = path.to_string_lossy();
+fn strip_win_verbatim_prefix_str(s: &str) -> String {
     #[cfg(windows)]
-    if let Some(stripped) = s.strip_prefix(r"\\?\") {
-        return stripped.to_string();
+    {
+        if let Some(after_prefix) = s.strip_prefix(r"\\?\") {
+            if let Some(unc_rest) = after_prefix
+                .strip_prefix(r"UNC\")
+                .or_else(|| after_prefix.strip_prefix(r"unc\"))
+            {
+                return format!(r"\\{unc_rest}");
+            }
+            return after_prefix.to_string();
+        }
     }
-    s.into_owned()
+    s.to_string()
+}
+
+fn strip_win_verbatim_prefix(path: &Path) -> String {
+    strip_win_verbatim_prefix_str(&path.to_string_lossy())
 }
 
 struct PersonalizationState {
@@ -810,7 +821,7 @@ impl Personalization {
             .ok()
             .and_then(|txt| serde_json::from_str::<PersonalProfile>(&txt).ok());
         st.profile = match loaded {
-            Some(p) if p.checkpoint == resolved => p,
+            Some(p) if p.checkpoint == resolved && valid_calibration(&p.calibration) => p,
             _ => PersonalProfile {
                 checkpoint: resolved,
                 calibration: DEFAULT_CALIBRATION,
@@ -820,10 +831,14 @@ impl Personalization {
     }
 
     pub fn persist(&self, profile: PersonalProfile) -> Result<(), String> {
+        if !valid_calibration(&profile.calibration) {
+            return Err("Invalid personal calibration".to_string());
+        }
         let json = serde_json::to_string_pretty(&profile).map_err(|e| e.to_string())?;
+        let mut st = self.inner.state.lock().unwrap();
         write_text_atomic(&self.inner.root.join("active.json"), &json)
             .map_err(|e| e.to_string())?;
-        self.inner.state.lock().unwrap().profile = profile;
+        st.profile = profile;
         Ok(())
     }
 
@@ -1031,10 +1046,17 @@ impl Personalization {
                             guard.progress = 1.0;
                             return;
                         }
+                        let calibration = result.calibration.unwrap_or(DEFAULT_CALIBRATION);
+                        if !valid_calibration(&calibration) {
+                            guard.state = "failed".to_string();
+                            guard.error =
+                                "Training produced an invalid personal calibration".to_string();
+                            return;
+                        }
                         let profile = PersonalProfile {
                             checkpoint,
                             head: result.checkpoint,
-                            calibration: result.calibration.unwrap_or(DEFAULT_CALIBRATION),
+                            calibration,
                         };
                         guard.pending = Some(PendingProfile {
                             profile,
@@ -1073,6 +1095,9 @@ impl Personalization {
     }
 
     pub fn commit_pending(&self, request: &PendingProfile) -> Result<bool, String> {
+        if !valid_calibration(&request.profile.calibration) {
+            return Err("Invalid personal calibration".to_string());
+        }
         let committed = {
             let mut st = self.inner.state.lock().unwrap();
             let matches_pending = st.pending.as_ref() == Some(request);
@@ -1480,5 +1505,151 @@ mod tests {
         assert_eq!(personal.status().state, "restored");
         assert!(personal.pending().is_none());
         assert!(personal.profile().head.is_none());
+    }
+
+    struct InvalidCalTrainer {
+        ckpt: String,
+        cal: Calibration,
+    }
+    impl PersonalTrainer for InvalidCalTrainer {
+        fn train(
+            &self,
+            _samples: Vec<CalibrationSample>,
+            _base_checkpoint: &str,
+            _current_checkpoint: &str,
+            _job_dir: &Path,
+            _cancelled: Arc<AtomicBool>,
+            _on_progress: Box<dyn Fn(f64) + Send + Sync>,
+        ) -> Result<TrainOutcome, String> {
+            Ok(TrainOutcome {
+                accepted: true,
+                metrics: Some(json!({"bad_cal": true})),
+                checkpoint: Some(self.ckpt.clone()),
+                calibration: Some(self.cal),
+            })
+        }
+    }
+
+    #[test]
+    fn invalid_and_non_finite_calibrations_are_rejected_and_fallback_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("personalization");
+        let ckpt = dir.path().join("standard.onnx");
+        fs::write(&ckpt, b"dummy").unwrap();
+        let ckpt_str = ckpt.to_string_lossy().into_owned();
+        let resolved = resolve_checkpoint_path(&ckpt_str);
+
+        // 1. Corrupted active.json (left == center -> division by zero) falls back to standard.
+        fs::create_dir_all(&root).unwrap();
+        let bad_active = json!({
+            "checkpoint": resolved,
+            "calibration": {
+                "left": 0.66,
+                "center": 0.66,
+                "right": 1.11,
+                "min_area": 100
+            },
+            "head": "bad_head.onnx"
+        });
+        fs::write(root.join("active.json"), bad_active.to_string()).unwrap();
+
+        let personal = Personalization::new(root.clone(), None, None);
+        personal.set_checkpoint(&ckpt_str);
+        assert_eq!(personal.profile().calibration, DEFAULT_CALIBRATION);
+        assert!(personal.profile().head.is_none());
+
+        // 2. persist() rejects invalid and non-finite calibrations without overwriting active.json.
+        let before_disk = fs::read_to_string(root.join("active.json")).unwrap();
+        for bad_cal in [
+            Calibration {
+                left: f64::NAN,
+                ..DEFAULT_CALIBRATION
+            },
+            Calibration {
+                right: f64::INFINITY,
+                ..DEFAULT_CALIBRATION
+            },
+            Calibration {
+                left: 0.66,
+                center: 0.66,
+                right: 1.11,
+                min_area: 100,
+            },
+            Calibration {
+                min_area: 5,
+                ..DEFAULT_CALIBRATION
+            },
+        ] {
+            let bad_prof = PersonalProfile {
+                checkpoint: personal.checkpoint(),
+                calibration: bad_cal,
+                head: Some("should_not_persist.onnx".to_string()),
+            };
+            let err = personal.persist(bad_prof).unwrap_err();
+            assert!(err.contains("Invalid personal calibration"), "got: {err}");
+            assert_eq!(personal.profile().calibration, DEFAULT_CALIBRATION);
+            assert!(personal.profile().head.is_none());
+            assert_eq!(
+                fs::read_to_string(root.join("active.json")).unwrap(),
+                before_disk
+            );
+        }
+
+        // 3. commit_pending() rejects invalid/NaN calibration directly.
+        let fake_pending = PendingProfile {
+            profile: PersonalProfile {
+                checkpoint: personal.checkpoint(),
+                calibration: Calibration {
+                    center: f64::NAN,
+                    ..DEFAULT_CALIBRATION
+                },
+                head: Some("bad.onnx".to_string()),
+            },
+            generation: 0,
+        };
+        assert!(personal.commit_pending(&fake_pending).is_err());
+
+        // 4. Trainer returning non-finite calibration fails job instead of publishing pending.
+        personal.set_trainer(Some(Arc::new(InvalidCalTrainer {
+            ckpt: dir.path().join("personal.onnx").to_string_lossy().into_owned(),
+            cal: Calibration {
+                left: f64::NAN,
+                ..DEFAULT_CALIBRATION
+            },
+        })));
+        personal.begin("retrain", true).unwrap();
+        personal.submit_retrain_samples(synthetic_samples()).unwrap();
+        personal.join_worker();
+        let st = personal.status();
+        assert_eq!(st.state, "failed");
+        assert!(st.error.contains("invalid personal calibration"));
+        assert!(personal.pending().is_none());
+    }
+
+    #[test]
+    fn strip_win_verbatim_prefix_preserves_unc_and_strips_drive_prefix() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                strip_win_verbatim_prefix_str(r"\\?\UNC\fileserver\share\models\m.onnx"),
+                r"\\fileserver\share\models\m.onnx"
+            );
+            assert_eq!(
+                strip_win_verbatim_prefix_str(r"\\?\unc\fileserver\share\m.onnx"),
+                r"\\fileserver\share\m.onnx"
+            );
+            assert_eq!(
+                strip_win_verbatim_prefix_str(r"\\?\C:\models\m.onnx"),
+                r"C:\models\m.onnx"
+            );
+            assert_eq!(
+                strip_win_verbatim_prefix_str(r"\\fileserver\share\m.onnx"),
+                r"\\fileserver\share\m.onnx"
+            );
+        }
+        assert_eq!(
+            strip_win_verbatim_prefix_str("relative/model.onnx"),
+            "relative/model.onnx"
+        );
     }
 }

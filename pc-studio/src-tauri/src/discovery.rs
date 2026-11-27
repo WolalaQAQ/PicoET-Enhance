@@ -354,23 +354,45 @@ pub fn discover_sources(
     let mut candidates: BTreeMap<(String, u16), CaptureContext> = BTreeMap::new();
     let mut catalogs: HashMap<(String, u16), CameraCatalog> = HashMap::new();
 
+    const MAX_DISCOVERY_PACKETS: usize = 4096;
+    const MAX_PACKETS_PER_PASS: usize = 64;
+    const MAX_DISCOVERY_CANDIDATES: usize = 128;
+
     let deadline = Instant::now() + timeout;
     let mut buf = [0u8; 8192];
-    while !sockets.is_empty() && Instant::now() < deadline {
+    let mut total_packets = 0usize;
+    while !sockets.is_empty() && Instant::now() < deadline && total_packets < MAX_DISCOVERY_PACKETS
+    {
         let mut got_any = false;
         for sock in &sockets {
-            loop {
+            if Instant::now() >= deadline || total_packets >= MAX_DISCOVERY_PACKETS {
+                break;
+            }
+            for _ in 0..MAX_PACKETS_PER_PASS {
+                if Instant::now() >= deadline || total_packets >= MAX_DISCOVERY_PACKETS {
+                    break;
+                }
                 match sock.recv_from(&mut buf) {
                     Ok((n, endpoint)) => {
+                        total_packets += 1;
                         got_any = true;
                         let data = &buf[..n];
                         let key = (endpoint.ip().to_string(), endpoint.port());
                         if data.starts_with(b"{") {
-                            if let Some(cat) = parse_catalog(data) {
-                                catalogs.insert(key, cat);
+                            if catalogs.len() < MAX_DISCOVERY_CANDIDATES
+                                || catalogs.contains_key(&key)
+                            {
+                                if let Some(cat) = parse_catalog(data) {
+                                    catalogs.insert(key, cat);
+                                }
                             }
-                        } else if let Ok(ctx) = CaptureContext::unpack(data) {
-                            candidates.insert(key, ctx);
+                        } else if (candidates.len() < MAX_DISCOVERY_CANDIDATES
+                            || candidates.contains_key(&key))
+                            && !data.is_empty()
+                        {
+                            if let Ok(ctx) = CaptureContext::unpack(data) {
+                                candidates.insert(key, ctx);
+                            }
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
@@ -612,6 +634,45 @@ mod tests {
         assert_eq!(
             decode_chunked_body(b"5;ext=1\r\nhello\r\n0\r\nX-Trailer: 1\r\n\r\n", 64 * 1024),
             ChunkedStatus::Complete(b"hello".to_vec())
+        );
+    }
+
+    #[test]
+    fn discover_sources_bounds_continuous_udp_flood() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        let responder = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let responder_port = responder.local_addr().unwrap().port();
+        responder
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_bg = Arc::clone(&stop);
+
+        let flooder = thread::spawn(move || {
+            let mut buf = [0u8; 256];
+            if let Ok((_, peer)) = responder.recv_from(&mut buf) {
+                while !stop_bg.load(Ordering::Relaxed) {
+                    let _ = responder.send_to(b"noise-packet", peer);
+                }
+            }
+        });
+
+        let t0 = Instant::now();
+        let res = discover_sources(
+            Duration::from_millis(150),
+            Some(vec![("127.0.0.1".to_string(), responder_port)]),
+        );
+        let elapsed = t0.elapsed();
+        stop.store(true, Ordering::Relaxed);
+        let _ = flooder.join();
+
+        assert!(res.devices.is_empty());
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "discover_sources stalled for {elapsed:?} under continuous UDP traffic"
         );
     }
 }

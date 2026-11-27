@@ -42,6 +42,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\_internal"
 Type: filesandordirs; Name: "{app}\pc-studio"
+Type: files; Name: "{app}\onnxruntime.dll"
+Type: files; Name: "{app}\onnxruntime_providers_*.dll"
+Type: files; Name: "{app}\DirectML.dll"
+Type: files; Name: "{app}\ONNXRUNTIME-LICENSE.txt"
+Type: files; Name: "{app}\ONNXRUNTIME-THIRD-PARTY-NOTICES.txt"
 
 [Files]
 Source: "{#BundleDir}\PicoET-PC-Studio.exe"; DestDir: "{app}"; Flags: ignoreversion

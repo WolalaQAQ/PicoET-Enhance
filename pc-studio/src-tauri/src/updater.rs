@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -7,6 +8,7 @@ pub const GITHUB_REPO: &str = "WolalaQAQ/PicoET-Enhance";
 pub const RELEASES_LATEST_API: &str =
     "https://api.github.com/repos/WolalaQAQ/PicoET-Enhance/releases/latest";
 pub const RELEASES_PAGE_URL: &str = "https://github.com/WolalaQAQ/PicoET-Enhance/releases";
+const MAX_RELEASE_BODY_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedVersion {
@@ -21,7 +23,16 @@ pub fn parse_version(text: &str) -> Option<ParsedVersion> {
         .strip_prefix('v')
         .or_else(|| trimmed.strip_prefix('V'))
         .unwrap_or(trimmed);
-    let (core, suffix) = match stripped.split_once('-') {
+    let without_build = match stripped.split_once('+') {
+        Some((before, build)) => {
+            if build.trim().is_empty() {
+                return None;
+            }
+            before
+        }
+        None => stripped,
+    };
+    let (core, suffix) = match without_build.split_once('-') {
         Some((c, s)) => {
             let trimmed_suffix = s.trim();
             if trimmed_suffix.is_empty() {
@@ -29,7 +40,7 @@ pub fn parse_version(text: &str) -> Option<ParsedVersion> {
             }
             (c, trimmed_suffix.to_string())
         }
-        None => (stripped, String::new()),
+        None => (without_build, String::new()),
     };
     let parse_digits = |part: &str| -> Option<u64> {
         if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
@@ -157,33 +168,69 @@ struct GithubReleasePayload {
     assets: Vec<ReleaseAsset>,
 }
 
+fn validate_https_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || c == '"' || c == '\\')
+    {
+        return None;
+    }
+    if !trimmed
+        .as_bytes()
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"https://"))
+        || trimmed.as_bytes().get(8) == Some(&b'/')
+    {
+        return None;
+    }
+    let parsed = reqwest::Url::parse(trimmed).ok()?;
+    if parsed.scheme() != "https" || !parsed.has_host() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn read_capped_bytes<R: Read>(reader: R, max_bytes: u64) -> Result<Vec<u8>, String> {
+    let mut limited = reader.take(max_bytes.saturating_add(1));
+    let mut buf = Vec::new();
+    limited.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    if (buf.len() as u64) > max_bytes {
+        return Err(format!("Response body exceeds {} bytes limit", max_bytes));
+    }
+    Ok(buf)
+}
+
 pub fn classify_assets(assets: &[ReleaseAsset]) -> ClassifiedAssets {
     let mut result = ClassifiedAssets::default();
     for item in assets {
         let name = item.name.trim();
-        let url = item.browser_download_url.trim();
         let lower = name.to_ascii_lowercase();
-        if name.is_empty() || url.is_empty() || lower.ends_with(".sha256") {
+        if name.is_empty() || lower.ends_with(".sha256") {
             continue;
         }
+        let Some(url) = validate_https_url(&item.browser_download_url) else {
+            continue;
+        };
         if result.installer_url.is_empty()
             && lower.contains("pc-studio")
             && lower.ends_with(".exe")
         {
             result.installer_name = name.to_string();
-            result.installer_url = url.to_string();
+            result.installer_url = url;
         } else if result.portable_url.is_empty()
             && lower.contains("pc-studio")
             && lower.ends_with(".zip")
         {
             result.portable_name = name.to_string();
-            result.portable_url = url.to_string();
+            result.portable_url = url;
         } else if result.module_url.is_empty()
             && lower.contains("magisk-picoet-enhance")
             && lower.ends_with(".zip")
         {
             result.module_name = name.to_string();
-            result.module_url = url.to_string();
+            result.module_url = url;
         }
     }
     result
@@ -296,7 +343,13 @@ impl UpdateChecker {
                         } else if !status.is_success() {
                             res.error = Some(format!("HTTP {}", status.as_u16()));
                         } else {
-                            match resp.json::<GithubReleasePayload>() {
+                            let parsed = read_capped_bytes(resp, MAX_RELEASE_BODY_BYTES).and_then(
+                                |bytes| {
+                                    serde_json::from_slice::<GithubReleasePayload>(&bytes)
+                                        .map_err(|e| e.to_string())
+                                },
+                            );
+                            match parsed {
                                 Ok(payload) => {
                                     let tag = payload.tag_name.trim().to_string();
                                     let name_ver = payload
@@ -321,8 +374,10 @@ impl UpdateChecker {
                                     res.update_available =
                                         is_newer_version(&latest_ver, &self.current_version);
                                     res.latest_version = Some(latest_ver);
-                                    if !payload.html_url.trim().is_empty() {
-                                        res.release_url = payload.html_url.trim().to_string();
+                                    if let Some(safe_release_url) =
+                                        validate_https_url(&payload.html_url)
+                                    {
+                                        res.release_url = safe_release_url;
                                     }
                                     res.published_at = payload.published_at.trim().to_string();
                                     res.notes = summarize_notes(&payload.body, 6);
@@ -335,7 +390,7 @@ impl UpdateChecker {
                                     res.module_url = assets.module_url;
                                 }
                                 Err(err) => {
-                                    res.error = Some(err.to_string());
+                                    res.error = Some(err);
                                 }
                             }
                         }
@@ -461,5 +516,128 @@ mod tests {
         assert_eq!(payload.assets.len(), 2);
         let classified = classify_assets(&payload.assets);
         assert_eq!(classified.installer_url, "https://example.com/setup.exe");
+    }
+
+    #[test]
+    fn parse_version_strips_semver_build_metadata() {
+        let stable = parse_version("2.7.0+build.1").unwrap();
+        assert_eq!(stable.nums, (2, 7, 0));
+        assert!(stable.is_stable);
+        assert_eq!(stable.suffix, "");
+
+        let pre = parse_version("v2.7.0-rc.1+sha.abc123").unwrap();
+        assert_eq!(pre.nums, (2, 7, 0));
+        assert!(!pre.is_stable);
+        assert_eq!(pre.suffix, "rc.1");
+
+        assert!(is_newer_version("2.7.0+build.1", "2.6.9"));
+        assert!(!is_newer_version("2.7.0+build.2", "2.7.0+build.1"));
+        assert!(!is_newer_version("2.7.0-rc.1+build.1", "2.7.0-rc.1"));
+        assert!(!is_newer_version("2.7.0-rc.1", "2.7.0-rc.1+build.1"));
+        assert!(is_newer_version("2.7.0+build.1", "2.7.0-rc.1+build.9"));
+
+        assert!(parse_version("2.7.0+").is_none());
+        assert!(parse_version("2.7.0-rc.1+   ").is_none());
+        assert!(parse_version("2.7.0-+build.1").is_none());
+    }
+
+    #[test]
+    fn updater_enforces_https_urls_and_body_size_cap() {
+        assert_eq!(
+            validate_https_url("https://github.com/WolalaQAQ/PicoET-Enhance/releases/tag/v2.7.0")
+                .as_deref(),
+            Some("https://github.com/WolalaQAQ/PicoET-Enhance/releases/tag/v2.7.0")
+        );
+        assert!(validate_https_url("http://example.com/setup.exe").is_none());
+        assert!(validate_https_url("javascript:alert(1)").is_none());
+        assert!(validate_https_url("file:///C:/Windows/win.ini").is_none());
+        assert!(validate_https_url("https://").is_none());
+        assert!(validate_https_url("https:///foo").is_none());
+        assert!(validate_https_url("https://example.com/a b").is_none());
+
+        let assets = vec![
+            ReleaseAsset {
+                name: "PicoET-PC-Studio-Setup-v2.7.0.exe".into(),
+                browser_download_url: "http://insecure.example.com/setup.exe".into(),
+            },
+            ReleaseAsset {
+                name: "PicoET-PC-Studio-Setup-v2.7.0-good.exe".into(),
+                browser_download_url: "https://example.com/setup.exe".into(),
+            },
+            ReleaseAsset {
+                name: "picoet-pc-studio-v2.7.0.zip".into(),
+                browser_download_url: "javascript:alert(1)".into(),
+            },
+        ];
+        let got = classify_assets(&assets);
+        assert_eq!(got.installer_name, "PicoET-PC-Studio-Setup-v2.7.0-good.exe");
+        assert_eq!(got.installer_url, "https://example.com/setup.exe");
+        assert_eq!(got.portable_url, "");
+
+        let exact = vec![b'a'; 64];
+        assert_eq!(read_capped_bytes(&exact[..], 64).unwrap().len(), 64);
+        let over = vec![b'a'; 65];
+        assert!(read_capped_bytes(&over[..], 64).is_err());
+    }
+
+    #[test]
+    fn update_checker_rejects_oversized_response_and_unsafe_html_url() {
+        use std::io::Write;
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let srv = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut req = [0u8; 512];
+                let _ = stream.read(&mut req);
+                let body = r#"{"tag_name":"v2.8.0","html_url":"javascript:alert(1)","assets":[{"name":"PicoET-PC-Studio-Setup-v2.8.0.exe","browser_download_url":"http://evil.example/setup.exe"}]}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut req = [0u8; 512];
+                let _ = stream.read(&mut req);
+                let big_len = (MAX_RELEASE_BODY_BYTES as usize) + 128;
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {big_len}\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let chunk = vec![b' '; 65536];
+                let mut sent = 0usize;
+                while sent < big_len {
+                    let take = (big_len - sent).min(chunk.len());
+                    if stream.write_all(&chunk[..take]).is_err() {
+                        break;
+                    }
+                    sent += take;
+                }
+            }
+        });
+
+        let checker = UpdateChecker::with_config(
+            "2.7.0".to_string(),
+            format!("http://127.0.0.1:{port}/latest"),
+            Duration::from_secs(0),
+        );
+        let first = checker.check(true);
+        assert!(first.error.is_none());
+        assert_eq!(first.release_url, RELEASES_PAGE_URL);
+        assert_eq!(first.installer_url, "");
+        assert!(first.update_available);
+
+        let second = checker.check(true);
+        assert!(
+            second.error.as_deref().is_some_and(|e| e.contains("exceeds")),
+            "expected oversized body error, got {:?}",
+            second.error
+        );
+
+        let _ = srv.join();
     }
 }

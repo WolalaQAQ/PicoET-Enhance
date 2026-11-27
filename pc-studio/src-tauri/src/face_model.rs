@@ -9,10 +9,9 @@ use crate::personalization::WizardFrameRaw;
 use crate::state::RawTongueInput;
 use ort::environment::Environment;
 use ort::ep::{self, ArbitrarilyConfigurableExecutionProvider, ExecutionProviderDispatch};
-use ort::memory::{AllocationDevice, Allocator, AllocatorType, MemoryInfo, MemoryType};
 use ort::session::builder::GraphOptimizationLevel;
-use ort::session::{IoBinding, Session};
-use ort::value::{Tensor, TensorElementType, TensorRef, ValueType};
+use ort::session::{Session, SessionOutputs};
+use ort::value::{TensorElementType, TensorRef, ValueType};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashSet};
@@ -638,16 +637,8 @@ pub trait MouthModel: Send {
 }
 
 // ---------------------------------------------------------------------------
-// Internal ORT backend session + provider selection + CUDA Graph IoBinding
+// Internal ORT backend session + provider selection
 // ---------------------------------------------------------------------------
-
-struct CudaGraphState {
-    binding: IoBinding,
-    input_tensor: Tensor<f32>,
-    output_tensor: Tensor<f32>,
-    state_in_tensor: Option<Tensor<f32>>,
-    state_out_tensor: Option<Tensor<f32>>,
-}
 
 struct OrtSessionMeta {
     checkpoint: String,
@@ -661,32 +652,27 @@ struct OrtSessionMeta {
     fallbacks: Vec<Value>,
     load_ms: f64,
     session: Session,
-    cuda_graph: Option<CudaGraphState>,
 }
 
+const AUTO_PROVIDER_ORDER: [(&str, &str); 4] = [
+    ("onnx", "dml"),
+    ("onnx", "cuda"),
+    ("onnx", "openvino"),
+    ("onnx", "cpu"),
+];
+
 fn parse_device_spec(device: &str) -> Result<(String, String), String> {
+    if device == "onnxgraph" {
+        return Ok(("onnx".to_string(), "cuda".to_string()));
+    }
     let (engine, dev) = if let Some((prefix, rest)) = device.split_once(':') {
         if matches!(prefix, "torch" | "torchscript" | "onnx" | "onnxgraph") {
             (prefix.to_string(), rest.to_string())
         } else {
-            (
-                if device == "cuda" {
-                    "onnxgraph".to_string()
-                } else {
-                    "onnx".to_string()
-                },
-                device.to_string(),
-            )
+            ("onnx".to_string(), device.to_string())
         }
     } else {
-        (
-            if device == "cuda" {
-                "onnxgraph".to_string()
-            } else {
-                "onnx".to_string()
-            },
-            device.to_string(),
-        )
+        ("onnx".to_string(), device.to_string())
     };
 
     if matches!(engine.as_str(), "torch" | "torchscript") {
@@ -695,22 +681,58 @@ fn parse_device_spec(device: &str) -> Result<(String, String), String> {
     if dev != "auto" && provider_name(&dev).is_none() {
         return Err("device must be auto, cuda, dml, openvino, cpu, or engine:device".to_string());
     }
-    if engine == "onnxgraph" && dev != "cuda" {
-        return Err("onnxgraph requires CUDA".to_string());
+    if engine == "onnxgraph" {
+        if dev != "cuda" {
+            return Err("onnxgraph requires CUDA".to_string());
+        }
+        return Ok(("onnx".to_string(), "cuda".to_string()));
     }
     Ok((engine, dev))
 }
 
+fn plan_provider_choices(
+    requested_device: &str,
+    available_providers: &[String],
+) -> Result<(Vec<(String, String)>, bool), String> {
+    let (engine, dev) = parse_device_spec(requested_device)?;
+    let is_auto = dev == "auto";
+    let choices: Vec<(String, String)> = if is_auto {
+        AUTO_PROVIDER_ORDER
+            .into_iter()
+            .filter(|&(_, target)| {
+                provider_name(target)
+                    .is_some_and(|p| available_providers.iter().any(|ap| ap == p))
+            })
+            .map(|(eng, target)| (eng.to_string(), target.to_string()))
+            .collect()
+    } else {
+        vec![(engine, dev)]
+    };
+    if choices.is_empty() {
+        return Err("No supported ONNX Runtime execution provider is available".to_string());
+    }
+    Ok((choices, is_auto))
+}
+
+fn strip_win_verbatim_prefix_str(s: &str) -> String {
+    #[cfg(windows)]
+    {
+        if let Some(after_prefix) = s.strip_prefix(r"\\?\") {
+            if let Some(unc_rest) = after_prefix
+                .strip_prefix(r"UNC\")
+                .or_else(|| after_prefix.strip_prefix(r"unc\"))
+            {
+                return format!(r"\\{unc_rest}");
+            }
+            return after_prefix.to_string();
+        }
+    }
+    s.to_string()
+}
+
 fn canonical_path_string(path: &Path) -> String {
     match fs::canonicalize(path) {
-        Ok(canon) => {
-            let s = canon.to_string_lossy();
-            #[cfg(windows)]
-            if let Some(stripped) = s.strip_prefix(r"\\?\") {
-                return stripped.to_string();
-            }
-            s.into_owned()
-        }
+        Ok(canon) => strip_win_verbatim_prefix_str(&canon.to_string_lossy()),
         Err(_) => path.to_string_lossy().into_owned(),
     }
 }
@@ -719,8 +741,6 @@ fn canonical_path_string(path: &Path) -> String {
 struct IoSpec {
     input_name: String,
     input_shape: [usize; 4],
-    output_name: String,
-    output_shape: Vec<usize>,
     state_input_name: Option<String>,
     state_output_name: Option<String>,
     state_shape: Option<[usize; 2]>,
@@ -767,11 +787,10 @@ fn auto_detect_state(session: &Session, spec: &mut IoSpec) {
 fn build_session_for_provider(
     env: &Environment,
     artifact: &Path,
-    engine: &str,
     target_device: &str,
     available_providers: &[String],
     spec: &mut IoSpec,
-) -> Result<(Session, Option<CudaGraphState>, String, Vec<String>), String> {
+) -> Result<(Session, String, Vec<String>), String> {
     let provider = provider_name(target_device)
         .ok_or_else(|| format!("Unsupported target device: {target_device}"))?;
     if !available_providers.iter().any(|p| p == provider) {
@@ -790,12 +809,9 @@ fn build_session_for_provider(
 
     match target_device {
         "cuda" => {
-            let mut cuda = ep::CUDA::default()
+            let cuda = ep::CUDA::default()
                 .with_conv_algorithm_search(ep::cuda::ConvAlgorithmSearch::Heuristic)
                 .with_tf32(false);
-            if engine == "onnxgraph" {
-                cuda = cuda.with_cuda_graph(true);
-            }
             ep_list.push(cuda.build().error_on_failure());
             ep_list.push(ep::CPU::default().with_arena_allocator(true).build());
             active_providers.push(provider.to_string());
@@ -847,101 +863,28 @@ fn build_session_for_provider(
     let sample = vec![0.0f32; input_elems];
     let state_sample = spec.state_shape.map(|[r, c]| vec![0.0f32; r * c]);
 
-    let cuda_graph = if engine == "onnxgraph" {
-        let in_alloc = Allocator::new(
-            &session,
-            MemoryInfo::new(
-                AllocationDevice::CUDA_PINNED,
-                0,
-                AllocatorType::Device,
-                MemoryType::CPUInput,
-            )
-            .map_err(|e| e.to_string())?,
-        )
+    let input_ref = TensorRef::from_array_view((spec.input_shape, sample.as_slice()))
         .map_err(|e| e.to_string())?;
-        let out_alloc = Allocator::new(
-            &session,
-            MemoryInfo::new(
-                AllocationDevice::CUDA_PINNED,
-                0,
-                AllocatorType::Device,
-                MemoryType::CPUOutput,
-            )
-            .map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
-
-        let mut input_tensor =
-            Tensor::<f32>::new(&in_alloc, spec.input_shape).map_err(|e| e.to_string())?;
-        input_tensor.extract_tensor_mut().1.fill(0.0);
-        let mut output_tensor =
-            Tensor::<f32>::new(&out_alloc, spec.output_shape.as_slice()).map_err(|e| e.to_string())?;
-
-        let mut binding = session.create_binding().map_err(|e| e.to_string())?;
-        binding
-            .bind_input(&spec.input_name, &input_tensor)
-            .map_err(|e| e.to_string())?;
-        binding
-            .bind_output(&spec.output_name, output_tensor.view_mut())
-            .map_err(|e| e.to_string())?;
-
-        let (state_in_tensor, state_out_tensor) = if let (Some(s_in), Some(s_out), Some(s_shape)) = (
-            &spec.state_input_name,
-            &spec.state_output_name,
-            spec.state_shape,
-        ) {
-            let mut st_in = Tensor::<f32>::new(&in_alloc, s_shape).map_err(|e| e.to_string())?;
-            st_in.extract_tensor_mut().1.fill(0.0);
-            let mut st_out = Tensor::<f32>::new(&out_alloc, s_shape).map_err(|e| e.to_string())?;
-            binding
-                .bind_input(s_in, &st_in)
-                .map_err(|e| e.to_string())?;
-            binding
-                .bind_output(s_out, st_out.view_mut())
-                .map_err(|e| e.to_string())?;
-            (Some(st_in), Some(st_out))
-        } else {
-            (None, None)
-        };
-
-        for _ in 0..3 {
-            binding.synchronize_inputs().map_err(|e| e.to_string())?;
-            let _ = session.run_binding(&binding).map_err(|e| e.to_string())?;
-            binding.synchronize_outputs().map_err(|e| e.to_string())?;
-        }
-
-        Some(CudaGraphState {
-            binding,
-            input_tensor,
-            output_tensor,
-            state_in_tensor,
-            state_out_tensor,
-        })
+    if let (Some(s_in), Some(s_shape), Some(s_buf)) = (
+        &spec.state_input_name,
+        spec.state_shape,
+        state_sample.as_deref(),
+    ) {
+        let state_ref =
+            TensorRef::from_array_view((s_shape, s_buf)).map_err(|e| e.to_string())?;
+        let _ = session
+            .run(ort::inputs![
+                spec.input_name.as_str() => input_ref,
+                s_in.as_str() => state_ref,
+            ])
+            .map_err(|e| format!("Warmup inference failed on {provider}: {e}"))?;
     } else {
-        let input_ref =
-            TensorRef::from_array_view((spec.input_shape, sample.as_slice())).map_err(|e| e.to_string())?;
-        if let (Some(s_in), Some(s_shape), Some(s_buf)) = (
-            &spec.state_input_name,
-            spec.state_shape,
-            state_sample.as_deref(),
-        ) {
-            let state_ref =
-                TensorRef::from_array_view((s_shape, s_buf)).map_err(|e| e.to_string())?;
-            let _ = session
-                .run(ort::inputs![
-                    spec.input_name.as_str() => input_ref,
-                    s_in.as_str() => state_ref,
-                ])
-                .map_err(|e| format!("Warmup inference failed on {provider}: {e}"))?;
-        } else {
-            let _ = session
-                .run(ort::inputs![spec.input_name.as_str() => input_ref])
-                .map_err(|e| format!("Warmup inference failed on {provider}: {e}"))?;
-        }
-        None
-    };
+        let _ = session
+            .run(ort::inputs![spec.input_name.as_str() => input_ref])
+            .map_err(|e| format!("Warmup inference failed on {provider}: {e}"))?;
+    }
 
-    Ok((session, cuda_graph, provider.to_string(), active_providers))
+    Ok((session, provider.to_string(), active_providers))
 }
 
 fn load_ort_session(
@@ -951,35 +894,14 @@ fn load_ort_session(
     spec: &mut IoSpec,
 ) -> Result<OrtSessionMeta, String> {
     let start = Instant::now();
-    let (engine, dev) = parse_device_spec(requested_device)?;
+    let _ = parse_device_spec(requested_device)?;
     if !artifact.is_file() {
         return Err(format!("ONNX model does not exist: {}", artifact.display()));
     }
 
     let env = ensure_ort_environment()?;
     let available_providers = available_ort_providers()?;
-
-    let choices: Vec<(&str, &str)> = if requested_device == "auto" {
-        [
-            ("onnxgraph", "cuda"),
-            ("onnx", "cuda"),
-            ("onnx", "openvino"),
-            ("onnx", "dml"),
-            ("onnx", "cpu"),
-        ]
-        .into_iter()
-        .filter(|&(_, target)| {
-            provider_name(target)
-                .is_some_and(|p| available_providers.iter().any(|ap| ap == p))
-        })
-        .collect()
-    } else {
-        vec![(engine.as_str(), dev.as_str())]
-    };
-
-    if choices.is_empty() {
-        return Err("No supported ONNX Runtime execution provider is available".to_string());
-    }
+    let (choices, is_auto) = plan_provider_choices(requested_device, &available_providers)?;
 
     let mut fallbacks = Vec::new();
     for (eng, target) in choices {
@@ -987,30 +909,28 @@ fn load_ort_session(
         match build_session_for_provider(
             &env,
             artifact,
-            eng,
-            target,
+            &target,
             &available_providers,
             &mut trial_spec,
         ) {
-            Ok((session, cuda_graph, provider, providers)) => {
+            Ok((session, provider, providers)) => {
                 *spec = trial_spec;
                 return Ok(OrtSessionMeta {
                     checkpoint: canonical_path_string(checkpoint),
                     artifact: canonical_path_string(artifact),
                     requested_device: requested_device.to_string(),
-                    engine: eng.to_string(),
-                    device: target.to_string(),
+                    engine: eng,
+                    device: target,
                     provider,
                     providers,
                     available_providers,
                     fallbacks,
                     load_ms: start.elapsed().as_secs_f64() * 1000.0,
                     session,
-                    cuda_graph,
                 });
             }
             Err(err) => {
-                if requested_device != "auto" {
+                if !is_auto {
                     return Err(err);
                 }
                 fallbacks.push(json!({
@@ -1026,6 +946,27 @@ fn load_ort_session(
         "All ONNX Runtime backends failed: {}",
         serde_json::to_string(&fallbacks).unwrap_or_default()
     ))
+}
+
+fn lookup_output<'a, V>(
+    getter: impl FnOnce(&str) -> Option<&'a V>,
+    name: &str,
+) -> Result<&'a V, String> {
+    if name.is_empty() {
+        return Err("ONNX session output name cannot be empty".to_string());
+    }
+    getter(name).ok_or_else(|| format!("ONNX session output '{name}' is missing"))
+}
+
+fn extract_output_f32<'a>(
+    outputs: &'a SessionOutputs<'_>,
+    name: &str,
+) -> Result<(&'a [i64], &'a [f32]), String> {
+    let value = lookup_output(|k| outputs.get(k), name)?;
+    let (shape, data) = value
+        .try_extract_tensor::<f32>()
+        .map_err(|e| e.to_string())?;
+    Ok((shape.as_ref(), data))
 }
 
 fn check_outlet_f32_tail(outlet: &ort::value::Outlet, expected_name: &str, tail: &[i64]) -> bool {
@@ -1351,8 +1292,6 @@ impl FaceModel {
         let mut io_spec = IoSpec {
             input_name: Self::INPUT_NAME.to_string(),
             input_shape,
-            output_name: Self::OUTPUT_NAME.to_string(),
-            output_shape: vec![1, 50],
             state_input_name: manifest.state_input_name.clone(),
             state_output_name: manifest.state_output_name.clone(),
             state_shape: manifest.state_shape,
@@ -1537,37 +1476,7 @@ impl FaceModel {
             let s_in_name = self.state_input_name.as_deref().unwrap();
             let s_out_name = self.state_output_name.as_deref().unwrap();
 
-            let (out_vec, next_state_vec) = if let Some(ref mut cg) = self.meta.cuda_graph {
-                let run_res: Result<(Vec<f32>, Vec<f32>), String> = (|| {
-                    cg.input_tensor.extract_tensor_mut().1.copy_from_slice(&x);
-                    if let Some(ref mut st_in) = cg.state_in_tensor {
-                        st_in.extract_tensor_mut().1.copy_from_slice(&state_buf);
-                    }
-                    cg.binding.synchronize_inputs().map_err(|e| e.to_string())?;
-                    let _ = self
-                        .meta
-                        .session
-                        .run_binding(&cg.binding)
-                        .map_err(|e| e.to_string())?;
-                    cg.binding.synchronize_outputs().map_err(|e| e.to_string())?;
-                    let out_slice = cg.output_tensor.extract_tensor().1.to_vec();
-                    let st_slice = cg
-                        .state_out_tensor
-                        .as_ref()
-                        .ok_or_else(|| "Missing CUDA graph state output tensor".to_string())?
-                        .extract_tensor()
-                        .1
-                        .to_vec();
-                    Ok((out_slice, st_slice))
-                })();
-                match run_res {
-                    Ok(pair) => pair,
-                    Err(err) => {
-                        self.reset_state();
-                        return Err(err);
-                    }
-                }
-            } else {
+            let (out_vec, next_state_vec) = {
                 let x_ref = TensorRef::from_array_view((self.input_shape, x.as_slice()))
                     .map_err(|e| e.to_string())?;
                 let s_ref = TensorRef::from_array_view((state_shape, state_buf.as_slice()))
@@ -1581,16 +1490,12 @@ impl FaceModel {
                             s_in_name => s_ref,
                         ])
                         .map_err(|e| e.to_string())?;
-                    let (out_shape, out_data) = outputs[Self::OUTPUT_NAME]
-                        .try_extract_tensor::<f32>()
-                        .map_err(|e| e.to_string())?;
-                    if out_shape.as_ref() != [1i64, 50] {
+                    let (out_shape, out_data) = extract_output_f32(&outputs, Self::OUTPUT_NAME)?;
+                    if out_shape != [1i64, 50] {
                         return Err("Whole-mouth model returned invalid blendshapes".to_string());
                     }
-                    let (st_shape, st_data) = outputs[s_out_name]
-                        .try_extract_tensor::<f32>()
-                        .map_err(|e| e.to_string())?;
-                    if st_shape.as_ref() != [state_shape[0] as i64, state_shape[1] as i64] {
+                    let (st_shape, st_data) = extract_output_f32(&outputs, s_out_name)?;
+                    if st_shape != [state_shape[0] as i64, state_shape[1] as i64] {
                         return Err(
                             "Whole-mouth model returned invalid temporal state".to_string()
                         );
@@ -1622,20 +1527,6 @@ impl FaceModel {
                 self.state_source_ns = Some(ns);
             }
             raw_output = out_vec;
-        } else if let Some(ref mut cg) = self.meta.cuda_graph {
-            cg.input_tensor.extract_tensor_mut().1.copy_from_slice(&x);
-            cg.binding.synchronize_inputs().map_err(|e| e.to_string())?;
-            let _ = self
-                .meta
-                .session
-                .run_binding(&cg.binding)
-                .map_err(|e| e.to_string())?;
-            cg.binding.synchronize_outputs().map_err(|e| e.to_string())?;
-            let out_slice = cg.output_tensor.extract_tensor().1;
-            if out_slice.len() != 50 || !out_slice.iter().all(|v| v.is_finite()) {
-                return Err("Whole-mouth model returned invalid blendshapes".to_string());
-            }
-            raw_output = out_slice.to_vec();
         } else {
             let x_ref = TensorRef::from_array_view((self.input_shape, x.as_slice()))
                 .map_err(|e| e.to_string())?;
@@ -1644,10 +1535,8 @@ impl FaceModel {
                 .session
                 .run(ort::inputs![Self::INPUT_NAME => x_ref])
                 .map_err(|e| e.to_string())?;
-            let (out_shape, out_data) = outputs[Self::OUTPUT_NAME]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| e.to_string())?;
-            if out_shape.as_ref() != [1i64, 50] || !out_data.iter().all(|v| v.is_finite()) {
+            let (out_shape, out_data) = extract_output_f32(&outputs, Self::OUTPUT_NAME)?;
+            if out_shape != [1i64, 50] || !out_data.iter().all(|v| v.is_finite()) {
                 return Err("Whole-mouth model returned invalid blendshapes".to_string());
             }
             raw_output = out_data.to_vec();
@@ -1779,8 +1668,6 @@ impl MouthLinkModel {
         let mut io_spec = IoSpec {
             input_name: Self::INPUT_NAME.to_string(),
             input_shape,
-            output_name: Self::OUTPUT_NAME.to_string(),
-            output_shape: vec![1, channels.len()],
             state_input_name: None,
             state_output_name: None,
             state_shape: None,
@@ -1848,21 +1735,7 @@ impl MouthLinkModel {
         let pre = Instant::now();
 
         let expected_len = self.channels.len();
-        let raw_output: Vec<f32> = if let Some(ref mut cg) = self.meta.cuda_graph {
-            cg.input_tensor.extract_tensor_mut().1.copy_from_slice(&x);
-            cg.binding.synchronize_inputs().map_err(|e| e.to_string())?;
-            let _ = self
-                .meta
-                .session
-                .run_binding(&cg.binding)
-                .map_err(|e| e.to_string())?;
-            cg.binding.synchronize_outputs().map_err(|e| e.to_string())?;
-            let out_slice = cg.output_tensor.extract_tensor().1;
-            if out_slice.len() != expected_len || !out_slice.iter().all(|v| v.is_finite()) {
-                return Err("MouthLink returned invalid blendshapes".to_string());
-            }
-            out_slice.to_vec()
-        } else {
+        let raw_output: Vec<f32> = {
             let x_ref = TensorRef::from_array_view((self.input_shape, x.as_slice()))
                 .map_err(|e| e.to_string())?;
             let outputs = self
@@ -1870,10 +1743,8 @@ impl MouthLinkModel {
                 .session
                 .run(ort::inputs![Self::INPUT_NAME => x_ref])
                 .map_err(|e| e.to_string())?;
-            let (out_shape, out_data) = outputs[Self::OUTPUT_NAME]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| e.to_string())?;
-            if out_shape.as_ref() != [1i64, expected_len as i64]
+            let (out_shape, out_data) = extract_output_f32(&outputs, Self::OUTPUT_NAME)?;
+            if out_shape != [1i64, expected_len as i64]
                 || !out_data.iter().all(|v| v.is_finite())
             {
                 return Err("MouthLink returned invalid blendshapes".to_string());
@@ -1952,14 +1823,26 @@ impl SegmentationModel {
         let mut io_spec = IoSpec {
             input_name: Self::INPUT_NAME.to_string(),
             input_shape: Self::INPUT_SHAPE,
-            output_name: Self::OUTPUT_NAME.to_string(),
-            output_shape: vec![1, 1, 56, 56],
             state_input_name: None,
             state_output_name: None,
             state_shape: None,
             allow_auto_detect_state: false,
         };
         let ort_meta = load_ort_session(path, &artifact, device, &mut io_spec)?;
+
+        let inputs = ort_meta.session.inputs();
+        let outputs = ort_meta.session.outputs();
+        if inputs.len() != 1
+            || !check_outlet_f32_tail(&inputs[0], Self::INPUT_NAME, &[1, 224, 224])
+            || outputs.len() != 1
+            || !check_outlet_f32_tail(&outputs[0], Self::OUTPUT_NAME, &[1, 56, 56])
+        {
+            return Err(
+                "Segmentation ONNX input/output contract does not match image[*,1,224,224] -> logits[*,1,56,56]"
+                    .to_string(),
+            );
+        }
+
         Ok(Self { meta: ort_meta })
     }
 
@@ -2010,17 +1893,7 @@ impl SegmentationModel {
         let x = to_segmentation_input(&frame200)?;
         let pre = Instant::now();
 
-        let logits: Vec<f32> = if let Some(ref mut cg) = self.meta.cuda_graph {
-            cg.input_tensor.extract_tensor_mut().1.copy_from_slice(&x);
-            cg.binding.synchronize_inputs().map_err(|e| e.to_string())?;
-            let _ = self
-                .meta
-                .session
-                .run_binding(&cg.binding)
-                .map_err(|e| e.to_string())?;
-            cg.binding.synchronize_outputs().map_err(|e| e.to_string())?;
-            cg.output_tensor.extract_tensor().1.to_vec()
-        } else {
+        let logits: Vec<f32> = {
             let x_ref = TensorRef::from_array_view((Self::INPUT_SHAPE, x.as_slice()))
                 .map_err(|e| e.to_string())?;
             let outputs = self
@@ -2028,10 +1901,8 @@ impl SegmentationModel {
                 .session
                 .run(ort::inputs![Self::INPUT_NAME => x_ref])
                 .map_err(|e| e.to_string())?;
-            let (out_shape, out_data) = outputs[Self::OUTPUT_NAME]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| e.to_string())?;
-            if out_shape.as_ref() != [1i64, 1, 56, 56] {
+            let (out_shape, out_data) = extract_output_f32(&outputs, Self::OUTPUT_NAME)?;
+            if out_shape != [1i64, 1, 56, 56] {
                 return Err("Segmentation model returned invalid logits shape".to_string());
             }
             out_data.to_vec()
@@ -2242,18 +2113,127 @@ mod tests {
         assert!(parse_device_spec("torch:cuda").is_err());
         assert!(parse_device_spec("torchscript:cpu").is_err());
         assert!(parse_device_spec("onnxgraph:cpu").is_err());
+        assert!(parse_device_spec("onnxgraph:dml").is_err());
+        assert!(parse_device_spec("onnxgraph:auto").is_err());
         assert!(parse_device_spec("bogus").is_err());
         assert_eq!(
             parse_device_spec("auto").unwrap(),
             ("onnx".to_string(), "auto".to_string())
         );
         assert_eq!(
+            parse_device_spec("onnx:auto").unwrap(),
+            ("onnx".to_string(), "auto".to_string())
+        );
+        assert_eq!(
             parse_device_spec("cuda").unwrap(),
-            ("onnxgraph".to_string(), "cuda".to_string())
+            ("onnx".to_string(), "cuda".to_string())
         );
         assert_eq!(
             parse_device_spec("onnx:cuda").unwrap(),
             ("onnx".to_string(), "cuda".to_string())
+        );
+        assert_eq!(
+            parse_device_spec("onnxgraph:cuda").unwrap(),
+            ("onnx".to_string(), "cuda".to_string())
+        );
+        assert_eq!(
+            parse_device_spec("onnxgraph").unwrap(),
+            ("onnx".to_string(), "cuda".to_string())
+        );
+    }
+
+    #[test]
+    fn provider_plan_prefers_dml_then_cuda_then_openvino_then_cpu() {
+        let all: Vec<String> = [
+            "CUDAExecutionProvider",
+            "OpenVINOExecutionProvider",
+            "DmlExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let (plan, is_auto) = plan_provider_choices("auto", &all).unwrap();
+        assert!(is_auto);
+        assert_eq!(
+            plan,
+            vec![
+                ("onnx".to_string(), "dml".to_string()),
+                ("onnx".to_string(), "cuda".to_string()),
+                ("onnx".to_string(), "openvino".to_string()),
+                ("onnx".to_string(), "cpu".to_string()),
+            ]
+        );
+
+        // CUDA-swapped runtime (no DirectML) falls through cleanly to cuda -> cpu.
+        let cuda_only: Vec<String> = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let (plan, is_auto) = plan_provider_choices("auto", &cuda_only).unwrap();
+        assert!(is_auto);
+        assert_eq!(
+            plan,
+            vec![
+                ("onnx".to_string(), "cuda".to_string()),
+                ("onnx".to_string(), "cpu".to_string()),
+            ]
+        );
+
+        // Explicit cuda and legacy onnxgraph map cleanly to ("onnx", "cuda").
+        for req in ["cuda", "onnx:cuda", "onnxgraph:cuda", "onnxgraph"] {
+            let (plan, is_auto) = plan_provider_choices(req, &all).unwrap();
+            assert!(!is_auto);
+            assert_eq!(plan, vec![("onnx".to_string(), "cuda".to_string())]);
+        }
+
+        // Empty available providers for auto returns Err.
+        assert!(plan_provider_choices("auto", &[]).is_err());
+    }
+
+    #[test]
+    fn strip_win_verbatim_prefix_preserves_unc_paths() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                strip_win_verbatim_prefix_str(r"\\?\UNC\fileserver\share\model.onnx"),
+                r"\\fileserver\share\model.onnx"
+            );
+            assert_eq!(
+                strip_win_verbatim_prefix_str(r"\\?\unc\fileserver\share\model.onnx"),
+                r"\\fileserver\share\model.onnx"
+            );
+            assert_eq!(
+                strip_win_verbatim_prefix_str(r"\\?\C:\models\face.onnx"),
+                r"C:\models\face.onnx"
+            );
+            assert_eq!(
+                strip_win_verbatim_prefix_str(r"\\fileserver\share\model.onnx"),
+                r"\\fileserver\share\model.onnx"
+            );
+        }
+        assert_eq!(
+            strip_win_verbatim_prefix_str("models/face.onnx"),
+            "models/face.onnx"
+        );
+    }
+
+    #[test]
+    fn lookup_output_returns_err_instead_of_panicking_on_missing_or_empty_name() {
+        let mut map = BTreeMap::new();
+        map.insert("other".to_string(), 42u32);
+        assert_eq!(*lookup_output(|k| map.get(k), "other").unwrap(), 42u32);
+
+        let missing_err = lookup_output(|k| map.get(k), "logits").unwrap_err();
+        assert!(
+            missing_err.contains("'logits' is missing"),
+            "unexpected error: {missing_err}"
+        );
+
+        let empty_err = lookup_output(|k| map.get(k), "").unwrap_err();
+        assert!(
+            empty_err.contains("cannot be empty"),
+            "unexpected error: {empty_err}"
         );
     }
 

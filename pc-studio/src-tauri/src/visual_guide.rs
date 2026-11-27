@@ -3,7 +3,7 @@
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -97,6 +97,19 @@ fn uuid5_url_hex(name: &str) -> String {
     hex
 }
 
+fn strip_verbatim_prefix(s: &str) -> String {
+    if let Some(rest) = s
+        .strip_prefix(r"\\?\UNC\")
+        .or_else(|| s.strip_prefix(r"\\?\unc\"))
+    {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        s.to_string()
+    }
+}
+
 /// Resolve `path` even if the leaf does not yet exist, stripping Windows verbatim prefix
 /// so the mutex name matches Python's `str(Path(path).resolve()).lower()`.
 fn canonical_mutex_key(path: &Path) -> String {
@@ -110,29 +123,45 @@ fn canonical_mutex_key(path: &Path) -> String {
     let resolved = if let Ok(c) = fs::canonicalize(&abs) {
         c
     } else {
+        let mut comps = abs.components();
         let mut tail = Vec::new();
-        let mut cur = abs.as_path();
         let base = loop {
-            if let Ok(c) = fs::canonicalize(cur) {
-                break c;
+            let candidate = comps.as_path();
+            if !candidate.as_os_str().is_empty() {
+                if let Ok(c) = fs::canonicalize(candidate) {
+                    break c;
+                }
             }
-            if let Some(name) = cur.file_name() {
-                tail.push(name.to_os_string());
-            }
-            match cur.parent() {
-                Some(p) if p != cur => cur = p,
-                _ => break PathBuf::new(),
+            match comps.clone().next_back() {
+                Some(Component::Normal(_) | Component::CurDir | Component::ParentDir) => {
+                    if let Some(comp) = comps.next_back() {
+                        tail.push(comp);
+                    }
+                }
+                Some(_) => break comps.as_path().to_path_buf(),
+                None => break PathBuf::new(),
             }
         };
         let mut rebuilt = base;
-        for part in tail.into_iter().rev() {
-            rebuilt.push(part);
+        for comp in tail.into_iter().rev() {
+            match comp {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    rebuilt.pop();
+                }
+                Component::Normal(part) if part == "." => {}
+                Component::Normal(part) if part == ".." => {
+                    rebuilt.pop();
+                }
+                Component::Normal(part) => {
+                    rebuilt.push(part);
+                }
+                _ => {}
+            }
         }
         rebuilt
     };
-    let s = resolved.to_string_lossy();
-    let stripped = s.strip_prefix(r"\\?\").unwrap_or(&s);
-    stripped.to_lowercase()
+    strip_verbatim_prefix(&resolved.to_string_lossy()).to_lowercase()
 }
 
 pub fn mutex_name_for_path(path: &Path) -> String {
@@ -906,5 +935,73 @@ mod tests {
         let hex = uuid5_url_hex("https://example.com");
         assert_eq!(hex.len(), 32);
         assert_eq!(hex, "4fd35a7171ef5a55a9d9aa75c889a6d0");
+    }
+
+    #[test]
+    fn canonical_mutex_key_strips_unc_verbatim_prefix_and_normalizes_tails() {
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\UNC\Server\Share\Dir\state.json"),
+            r"\\Server\Share\Dir\state.json"
+        );
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\unc\Server\Share\Dir\state.json"),
+            r"\\Server\Share\Dir\state.json"
+        );
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\C:\Dir\state.json"),
+            r"C:\Dir\state.json"
+        );
+        assert_eq!(
+            strip_verbatim_prefix(r"\\Server\Share\Dir\state.json"),
+            r"\\Server\Share\Dir\state.json"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let existing_sub = dir.path().join("existing_sub");
+        fs::create_dir_all(&existing_sub).unwrap();
+
+        let direct = dir.path().join("state.json");
+        let with_parent = dir.path().join("missing_a").join("..").join("state.json");
+        let with_cur_and_nested = dir
+            .path()
+            .join("missing_a")
+            .join(".")
+            .join("missing_b")
+            .join("..")
+            .join("..")
+            .join("state.json");
+        let crossing_existing = existing_sub
+            .join("missing_a")
+            .join("..")
+            .join("..")
+            .join("state.json");
+
+        let expected_key = canonical_mutex_key(&direct);
+        let expected_mutex = mutex_name_for_path(&direct);
+        assert!(!expected_key.contains("missing_a"));
+        assert_eq!(canonical_mutex_key(&with_parent), expected_key);
+        assert_eq!(canonical_mutex_key(&with_cur_and_nested), expected_key);
+        assert_eq!(canonical_mutex_key(&crossing_existing), expected_key);
+        assert_eq!(mutex_name_for_path(&with_parent), expected_mutex);
+        assert_eq!(mutex_name_for_path(&with_cur_and_nested), expected_mutex);
+        assert_eq!(mutex_name_for_path(&crossing_existing), expected_mutex);
+
+        #[cfg(windows)]
+        {
+            let unc_verbatim = Path::new(r"\\?\UNC\NoSuchServer\NoSuchShare\Sub\.\Nested\..\..\State.json");
+            let unc_plain = Path::new(r"\\NoSuchServer\NoSuchShare\State.json");
+            assert_eq!(
+                canonical_mutex_key(unc_verbatim),
+                r"\\nosuchserver\nosuchshare\state.json"
+            );
+            assert_eq!(
+                canonical_mutex_key(unc_verbatim),
+                canonical_mutex_key(unc_plain)
+            );
+            assert_eq!(
+                mutex_name_for_path(unc_verbatim),
+                mutex_name_for_path(unc_plain)
+            );
+        }
     }
 }

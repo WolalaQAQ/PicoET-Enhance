@@ -227,15 +227,39 @@ def _interfaces():
     return found or ['']
 
 
+def _is_valid_port(port):
+    return isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535
+
+
+def _parse_u64_field(raw, field):
+    if isinstance(raw, bool):
+        raise ValueError(f'Invalid {field}')
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.isdigit():
+            return int(text)
+    raise ValueError(f'Invalid {field}')
+
+
 def _catalog(data):
     value = json.loads(data)
-    if value['service'] != 'pico-camera' or value['version'] != 1:
+    if not isinstance(value, dict):
+        raise ValueError('Invalid camera catalog')
+    version = value.get('version')
+    if value.get('service') != 'pico-camera' or isinstance(version, bool) or version != 1:
         raise ValueError('Unknown camera service')
-    CaptureContext(int(value['session_id']), int(value['service_generation'])).pack()
-    streams = value['streams']
-    if [s['id'] for s in streams] != ['mouth', 'eye_left', 'eye_right']:
+    CaptureContext(
+        _parse_u64_field(value['session_id'], 'session_id'),
+        _parse_u64_field(value['service_generation'], 'service_generation'),
+    ).pack()
+    streams = value.get('streams')
+    if not isinstance(streams, list) or any(not isinstance(s, dict) for s in streams):
         raise ValueError('Unknown camera streams')
-    if any(not 0 < s['port'] < 65536 or s['path'] != '/stream.mjpg' for s in streams):
+    if [s.get('id') for s in streams] != ['mouth', 'eye_left', 'eye_right']:
+        raise ValueError('Unknown camera streams')
+    if any(not _is_valid_port(s.get('port')) or s.get('path') != '/stream.mjpg' for s in streams):
         raise ValueError('Invalid camera endpoint')
     return value
 
@@ -246,9 +270,10 @@ def discover_sources(timeout=1.2, targets=None):
         interfaces = _interfaces()
         if '' not in interfaces:
             interfaces = [*interfaces, '']
+        targets = [('255.255.255.255', PORT), (MULTICAST, PORT)]
     else:
         interfaces = ['']
-    targets = targets if targets is not None else [('255.255.255.255', PORT), (MULTICAST, PORT)]
+        targets = [(host, port) for host, port in targets if host and _is_valid_port(port)]
     candidates = {}
     catalogs = {}
     with ExitStack() as stack:
@@ -304,11 +329,15 @@ def discover_sources(timeout=1.2, targets=None):
         try:
             connection.request('GET', '/cameras')
             response = connection.getresponse()
-            if response.status != 200 or _catalog(response.read(8192)) != advertised:
+            body = response.read(8193)
+            if response.status != 200 or len(body) > 8192 or _catalog(body) != advertised:
                 continue
             mouth_port = advertised['streams'][0]['port']
             key = (host, mouth_port)
-            candidates[key] = CaptureContext(int(advertised['session_id']), int(advertised['service_generation']))
+            candidates[key] = CaptureContext(
+                _parse_u64_field(advertised['session_id'], 'session_id'),
+                _parse_u64_field(advertised['service_generation'], 'service_generation'),
+            )
             verified_catalogs[key] = advertised
         except (OSError, ValueError, KeyError, TypeError, struct.error, http.client.HTTPException):
             continue

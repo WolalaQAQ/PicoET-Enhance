@@ -72,7 +72,7 @@ python -B -X utf8 pc-studio/package_release.py
 # Skip bundling ORT: --no-ort
 ```
 
-When inference device is set to `auto`, the runtime probes **CUDA Graph → CUDA → OpenVINO GPU → DirectML → CPU** with a first-run check. Choosing a specific device disables automatic fallback. Check **Diagnostics → Connection diagnostics** to see the active provider or any initialization error.
+When inference device is set to `auto`, the runtime probes **DirectML → CUDA → OpenVINO GPU → CPU** with a first-run check (CUDA uses the standard ONNX Runtime CUDA EP). Choosing a specific device disables automatic fallback. Check **Diagnostics → Connection diagnostics** to see the active provider or any initialization error.
 
 ---
 
@@ -252,7 +252,7 @@ Run the PC Studio Rust backend tests and bilingual UI regression suite (requires
 python -B -X utf8 pc-studio/check.py
 ```
 
-Build and smoke-package the release binary locally (omit `--skip-installer` if Inno Setup 6 is installed; add `--ort-dir <dir>` or `--ort-dll <path>` to bundle `onnxruntime.dll`):
+Build and smoke-package the release binary locally (omit `--skip-installer` if Inno Setup 6 is installed; official DirectML ORT 1.24.4 is bundled by default—pass `--ort-dir <dir>` / `--ort-dll <path>` to override or `--no-ort` to skip):
 
 ```powershell
 cargo test --locked --manifest-path pc-studio/src-tauri/Cargo.toml

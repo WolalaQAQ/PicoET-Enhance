@@ -50,11 +50,26 @@ pub struct StudioLaunchOptions {
     pub config: Option<PathBuf>,
     pub model: Option<String>,
     pub device: String,
+    pub device_explicit: bool,
     pub runs: Option<PathBuf>,
     pub record_input: bool,
     pub continue_recording: Option<String>,
     pub sealed_c: Option<PathBuf>,
     pub sealed_c_profile: Option<String>,
+}
+
+impl StudioLaunchOptions {
+    pub fn has_explicit_overrides(&self) -> bool {
+        self.sealed_c.is_some()
+            || self.sealed_c_profile.is_some()
+            || self.config.is_some()
+            || self.model.is_some()
+            || self.device_explicit
+            || (!self.device.is_empty() && !self.device.eq_ignore_ascii_case("auto"))
+            || self.runs.is_some()
+            || self.record_input
+            || self.continue_recording.is_some()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,7 +105,10 @@ pub fn parse_cli_args(args: &[String]) -> Result<CliAction, String> {
         match arg {
             "--config" => opts.config = Some(PathBuf::from(next_val(&mut i, "--config")?)),
             "--model" => opts.model = Some(next_val(&mut i, "--model")?),
-            "--device" => opts.device = next_val(&mut i, "--device")?,
+            "--device" => {
+                opts.device = next_val(&mut i, "--device")?;
+                opts.device_explicit = true;
+            }
             "--runs" => opts.runs = Some(PathBuf::from(next_val(&mut i, "--runs")?)),
             "--record-input" => opts.record_input = true,
             "--continue-recording" => {
@@ -213,6 +231,7 @@ pub struct AppState {
     exiting: AtomicBool,
     allow_exit: AtomicBool,
     relay_stopping: AtomicBool,
+    model_dialog_open: AtomicBool,
     #[cfg(not(test))]
     tray_items: Mutex<Option<TrayMenuItems>>,
     _sync_handles: Mutex<Option<SyncHandles>>,
@@ -283,6 +302,7 @@ impl AppState {
             exiting: AtomicBool::new(false),
             allow_exit: AtomicBool::new(false),
             relay_stopping: AtomicBool::new(false),
+            model_dialog_open: AtomicBool::new(false),
             #[cfg(not(test))]
             tray_items: Mutex::new(None),
             _sync_handles: Mutex::new(None),
@@ -606,7 +626,7 @@ impl AppState {
     }
 
     fn shutdown_all(&self) {
-        let _ = self.runtime.train("cancel", None, None);
+        let _ = self.runtime.cancel_training();
         self.capture.close();
         self.relay.close();
         let _guard = self.runtime_control.lock();
@@ -646,6 +666,10 @@ pub fn validate_selected_model_path(selected: Option<PathBuf>) -> Result<Value, 
 fn strip_win_verbatim_prefix(path: &Path) -> String {
     let s = path.to_string_lossy();
     #[cfg(windows)]
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    #[cfg(windows)]
     if let Some(stripped) = s.strip_prefix(r"\\?\") {
         return stripped.to_string();
     }
@@ -661,17 +685,20 @@ fn to_wide_null(text: &str) -> Vec<u16> {
         .collect()
 }
 
-/// Attach to parent console when invoked with `--version` from an interactive terminal
-/// while preserving redirected stdout pipes (e.g., `subprocess.run(..., capture_output=True)`).
+/// Attach to parent console when invoked from an interactive terminal
+/// while preserving redirected stdout/stderr pipes (e.g., `subprocess.run(..., capture_output=True)`).
 #[cfg(windows)]
 pub fn attach_parent_console_if_needed() {
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Console::{
-        AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE,
+        AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
     };
     unsafe {
         let stdout = GetStdHandle(STD_OUTPUT_HANDLE);
-        if stdout.is_null() || stdout == INVALID_HANDLE_VALUE {
+        let stderr = GetStdHandle(STD_ERROR_HANDLE);
+        let stdout_missing = stdout.is_null() || stdout == INVALID_HANDLE_VALUE;
+        let stderr_missing = stderr.is_null() || stderr == INVALID_HANDLE_VALUE;
+        if stdout_missing && stderr_missing {
             let _ = AttachConsole(ATTACH_PARENT_PROCESS);
         }
     }
@@ -679,6 +706,52 @@ pub fn attach_parent_console_if_needed() {
 
 #[cfg(not(windows))]
 pub fn attach_parent_console_if_needed() {}
+
+#[cfg(windows)]
+fn is_named_instance_running(mutex_name: &str, event_name: &str) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0};
+    use windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE;
+    use windows_sys::Win32::System::Threading::{
+        OpenEventW, OpenMutexW, ReleaseMutex, WaitForSingleObject, EVENT_MODIFY_STATE,
+        MUTEX_MODIFY_STATE,
+    };
+
+    let mutex_w = to_wide_null(mutex_name);
+    unsafe {
+        let mutex = OpenMutexW(SYNCHRONIZE | MUTEX_MODIFY_STATE, 0, mutex_w.as_ptr());
+        if !mutex.is_null() {
+            let rc = WaitForSingleObject(mutex, 0);
+            let running = match rc {
+                WAIT_OBJECT_0 | WAIT_ABANDONED => {
+                    let _ = ReleaseMutex(mutex);
+                    false
+                }
+                _ => true,
+            };
+            let _ = CloseHandle(mutex);
+            if running {
+                return true;
+            }
+        }
+        let event_w = to_wide_null(event_name);
+        let event = OpenEventW(EVENT_MODIFY_STATE, 0, event_w.as_ptr());
+        if !event.is_null() {
+            let _ = CloseHandle(event);
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+fn is_instance_running() -> bool {
+    is_named_instance_running(INSTANCE_MUTEX_NAME, STOP_EVENT_NAME)
+}
+
+#[cfg(not(windows))]
+fn is_instance_running() -> bool {
+    false
+}
 
 #[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1079,8 +1152,11 @@ fn get_config(state: State<'_, Arc<AppState>>) -> RuntimeConfig {
 }
 
 #[tauri::command]
-fn get_presets(state: State<'_, Arc<AppState>>) -> Result<Value, String> {
-    state.capture.presets()
+async fn get_presets(state: State<'_, Arc<AppState>>) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.capture.presets())
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1124,46 +1200,73 @@ fn get_review_samples(
 }
 
 #[tauri::command]
-fn get_review_image(
+async fn get_review_image(
     session: String,
     sample: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<tauri::ipc::Response, String> {
-    let bytes = state.handle_get_review_image(&session, &sample)?;
+    let state = state.inner().clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        state.handle_get_review_image(&session, &sample)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+fn resolve_initial_dialog_dir(initial_str: &str) -> Option<PathBuf> {
+    let trimmed = initial_str.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let p = Path::new(trimmed);
+    if p.is_dir() {
+        return Some(p.to_path_buf());
+    }
+    p.parent()
+        .filter(|parent| parent.is_dir())
+        .map(Path::to_path_buf)
+}
+
 #[cfg(not(test))]
-fn pick_model_file_dialog(initial_str: &str) -> Option<PathBuf> {
+fn pick_model_file_dialog(initial_str: &str, window: &tauri::WebviewWindow) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new()
         .set_title("Choose the whole-mouth model (.onnx)")
-        .add_filter("ONNX model (*.onnx)", &["onnx"]);
-    let trimmed = initial_str.trim();
-    if !trimmed.is_empty() {
-        let p = Path::new(trimmed);
-        if let Some(parent) = p.parent() {
-            if parent.is_dir() {
-                dialog = dialog.set_directory(parent);
-            }
-        }
+        .add_filter("ONNX model (*.onnx)", &["onnx"])
+        .set_parent(window);
+    if let Some(dir) = resolve_initial_dialog_dir(initial_str) {
+        dialog = dialog.set_directory(dir);
     }
     dialog.pick_file()
 }
 
 #[cfg(test)]
-fn pick_model_file_dialog(_initial_str: &str) -> Option<PathBuf> {
+fn pick_model_file_dialog(_initial_str: &str, _window: &tauri::WebviewWindow) -> Option<PathBuf> {
     // Avoid pulling rfd's ComCtl32 v6 TaskDialogIndirect import into unmanifested cargo test harnesses.
     None
+}
+
+struct ModelDialogGuard(Arc<AppState>);
+
+impl Drop for ModelDialogGuard {
+    fn drop(&mut self) {
+        self.0.model_dialog_open.store(false, Ordering::SeqCst);
+    }
 }
 
 #[tauri::command]
 async fn select_model(
     initial: Option<String>,
+    window: tauri::WebviewWindow,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Value, String> {
     state.check_not_exiting()?;
     state.check_not_sealed_c("This workbench is only for sealed C capture")?;
     state.check_capture_not_active()?;
+    if state.model_dialog_open.swap(true, Ordering::SeqCst) {
+        return Ok(json!({ "cancelled": true }));
+    }
+    let dialog_guard = ModelDialogGuard(state.inner().clone());
     let initial_str = initial.unwrap_or_default();
     // Run rfd::FileDialog on a fresh dedicated OS thread so Windows COM STA initialization
     // cannot collide with MTA threads in Tokio's spawn_blocking pool (e.g. ORT/DirectML).
@@ -1171,7 +1274,8 @@ async fn select_model(
     std::thread::Builder::new()
         .name("select-model-dialog".to_string())
         .spawn(move || {
-            let picked = pick_model_file_dialog(&initial_str);
+            let _guard = dialog_guard;
+            let picked = pick_model_file_dialog(&initial_str, &window);
             let _ = tx.send(validate_selected_model_path(picked));
         })
         .map_err(|e| format!("Failed to launch file picker thread: {e}"))?;
@@ -1394,11 +1498,19 @@ pub fn run() {
 }
 
 pub fn run_with_options(opts: StudioLaunchOptions) {
+    if opts.has_explicit_overrides() && is_instance_running() {
+        attach_parent_console_if_needed();
+        eprintln!(
+            "Error: PicoET PC Studio is already running; CLI options cannot be applied to an existing instance. Pass --stop or close the running PicoET PC Studio instance first."
+        );
+        std::process::exit(1);
+    }
+
     let nav_guard = tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
         .on_navigation(|_webview, url| is_allowed_webview_url(url))
         .build();
 
-    let app = tauri::Builder::default()
+    let app = match tauri::Builder::default()
         .plugin(nav_guard)
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main_window(app);
@@ -1451,7 +1563,14 @@ pub fn run_with_options(opts: StudioLaunchOptions) {
             quit_app,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building PicoET PC Studio");
+    {
+        Ok(app) => app,
+        Err(err) => {
+            attach_parent_console_if_needed();
+            eprintln!("Error: failed to start PicoET PC Studio: {err}");
+            std::process::exit(2);
+        }
+    };
 
     app.run(|app_handle, event| match event {
         tauri::RunEvent::ExitRequested { api, code, .. } => {
@@ -1870,5 +1989,112 @@ mod tests {
             let err = resolve_discover_targets(Some("127.0.0.1".into()), Some(bad)).unwrap_err();
             assert_eq!(err, "headset_port must be an integer in 1..65535");
         }
+    }
+
+    #[test]
+    fn cli_explicit_overrides_detection_matches_action_flags() {
+        let plain = match parse_cli_args(&[]).unwrap() {
+            CliAction::Run(o) => o,
+            _ => panic!("expected Run"),
+        };
+        assert!(!plain.has_explicit_overrides());
+
+        let cases: &[&[&str]] = &[
+            &["--sealed-c", "C:/tmp/sealed"],
+            &["--config", "C:/tmp/cfg.json"],
+            &["--model", "C:/tmp/m.onnx"],
+            &["--device", "auto"],
+            &["--device", "cuda"],
+            &["--runs", "C:/tmp/runs"],
+            &["--record-input"],
+            &["--continue-recording", "sess-1"],
+        ];
+        for argv in cases {
+            let owned: Vec<String> = argv.iter().map(|s| (*s).to_string()).collect();
+            let opts = match parse_cli_args(&owned).unwrap() {
+                CliAction::Run(o) => o,
+                _ => panic!("expected Run for {argv:?}"),
+            };
+            assert!(
+                opts.has_explicit_overrides(),
+                "expected has_explicit_overrides() == true for {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_initial_dialog_dir_handles_directory_and_file_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("models");
+        fs::create_dir(&subdir).unwrap();
+        let file = subdir.join("face50.onnx");
+        fs::write(&file, b"onnx").unwrap();
+
+        assert_eq!(resolve_initial_dialog_dir(""), None);
+        assert_eq!(resolve_initial_dialog_dir("   "), None);
+        assert_eq!(
+            resolve_initial_dialog_dir(&subdir.to_string_lossy()),
+            Some(subdir.clone())
+        );
+        assert_eq!(
+            resolve_initial_dialog_dir(&file.to_string_lossy()),
+            Some(subdir.clone())
+        );
+        assert_eq!(
+            resolve_initial_dialog_dir(&subdir.join("missing.onnx").to_string_lossy()),
+            Some(subdir)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn is_named_instance_running_detects_active_mutex_and_event() {
+        use std::sync::mpsc;
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{CreateEventW, CreateMutexW, ReleaseMutex};
+
+        let pid = std::process::id();
+        let mutex_name = format!("Local\\PicoET-PC-Studio-Running-Test-Lock-{pid}");
+        let event_name = format!("Local\\PicoET-PC-Studio-Running-Test-Event-{pid}");
+        assert!(!is_named_instance_running(&mutex_name, &event_name));
+
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let m = mutex_name.clone();
+        let e = event_name.clone();
+        let holder = std::thread::spawn(move || {
+            let mw = to_wide_null(&m);
+            let ew = to_wide_null(&e);
+            let mutex = unsafe { CreateMutexW(std::ptr::null(), 1, mw.as_ptr()) };
+            let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, ew.as_ptr()) };
+            assert!(!mutex.is_null());
+            assert!(!event.is_null());
+            ready_tx.send(()).unwrap();
+            let _ = done_rx.recv();
+            unsafe {
+                let _ = ReleaseMutex(mutex);
+                let _ = CloseHandle(mutex);
+                let _ = CloseHandle(event);
+            }
+        });
+
+        ready_rx.recv().unwrap();
+        assert!(is_named_instance_running(&mutex_name, &event_name));
+        done_tx.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(!is_named_instance_running(&mutex_name, &event_name));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_win_verbatim_prefix_preserves_unc_paths() {
+        assert_eq!(
+            strip_win_verbatim_prefix(Path::new(r"\\?\C:\Models\face50.onnx")),
+            r"C:\Models\face50.onnx"
+        );
+        assert_eq!(
+            strip_win_verbatim_prefix(Path::new(r"\\?\UNC\fileserver\share\face50.onnx")),
+            r"\\fileserver\share\face50.onnx"
+        );
     }
 }

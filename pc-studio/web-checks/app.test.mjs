@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {createApp, createTauriFetcher, captureProgress, deriveView, channelValue, requestJson, PRIMARY_CHANNELS, ROUTABLE_CHANNELS, MOUTH_PRESETS, PAGES, routePage, EXPRESSION_POLL_MS} from "../app.mjs";
-import {DIAGNOSTIC_GROUPS, messages, preferredLanguage, initialLanguage, errorMessage, LANGUAGE_KEY, PINNED_CHANNELS_KEY} from "../i18n.mjs";
+import {createApp, createTauriFetcher, captureProgress, deriveView, channelValue, requestJson, PRIMARY_CHANNELS, ROUTABLE_CHANNELS, MOUTH_PRESETS, PAGES, routePage, EXPRESSION_POLL_MS} from "../web/app.mjs";
+import {DIAGNOSTIC_GROUPS, messages, preferredLanguage, initialLanguage, errorMessage, LANGUAGE_KEY, PINNED_CHANNELS_KEY} from "../web/i18n.mjs";
 
-const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+const html = readFileSync(new URL("../web/index.html", import.meta.url), "utf8");
 const channels = [...new Set([...PRIMARY_CHANNELS, "TongueLeft", "TongueUp", "TongueRoll", ...Array.from({length: 40}, (_, i) => `fixture${i}`)])];
 class Element {
   value = ""; textContent = ""; hidden = false; disabled = false; attributes = {}; listeners = {}; children = [];
@@ -649,7 +649,7 @@ test("record consent never auto-starts an input connection", async t => {
   assert.equal(el("record-start").disabled, true); assert.ok(server.calls.every(c => c.method === "GET"));
 });
 test("review loads local thumbnails, separates proposals from labels and supports explicit batch approval", async t => {
-  const {app, server, el} = setup(t); server.status.recording = {state: "stopped", path: "D:/local", session_id: "local"}; await app.init();
+  const {app, server, el} = setup(t); server.status.recording = {state: "stopped", path: "D:/local", session_id: "local"}; await app.init(); app.navigate("recording");
   el("review-targets").value = "{}"; el("reviewer").value = "local-user"; el("observation").value = "visible";
   await app.loadReviews(); assert.equal(el("review-grid").children.length, 2);
   const first = el("review-grid").children[0]; assert.match(first.children[1].src, /^\/api\/recording\/image\?session=local&sample=f/);
@@ -661,7 +661,7 @@ test("review loads local thumbnails, separates proposals from labels and support
   assert.deepEqual(body.sample_ids, ["f000000000", "f000000001"]); assert.deepEqual(body.targets, {TongueOut: .5}); assert.equal(body.confirmed, true); assert.equal(el("review-confirmed").checked, false);
 });
 test("changing recording session clears review thumbnails and old selections", async t => {
-  const {app, server, el} = setup(t); server.status.recording = {state: "stopped", path: "D:/local", session_id: "local"}; await app.init(); await app.loadReviews();
+  const {app, server, el} = setup(t); server.status.recording = {state: "stopped", path: "D:/local", session_id: "local"}; await app.init(); app.navigate("recording"); await app.loadReviews();
   el("review-select-page").emit("click"); server.status.recording.session_id = "new-session"; await app.pollStatus();
   assert.equal(app.state.reviewSelected.size, 0); assert.equal(el("review-grid").children.length, 0); assert.equal(el("review-image").hidden, true);
 });
@@ -2063,6 +2063,75 @@ test("Tauri review focus stays hidden on 404/error and navigating away during in
   await focusPromise;
   assert.equal(f.el("review-image").hidden, true);
   assert.deepEqual(new Set(f.urls.revoked), new Set(f.urls.created));
+});
+
+test("navigating away during in-flight loadReviews() sample fetch bails out without leaking thumbnail blobs or mutating DOM", async t => {
+  const pendingSampleResolvers = [];
+  let imageFetches = 0;
+  const tauriCore = {
+    async invoke(command, args) {
+      switch (command) {
+        case "get_status": return {
+          running: false, version: "2.6.2",
+          config: {headset_host: "", headset_port: 45681, model_path: "", device: "auto", stale_ms: 350, preview_fps: 10, output_port: 45682, replay_path: ""},
+          contract: {channels: PRIMARY_CHANNELS}, model: {trained_channels: []},
+          prediction: {fresh: false, state: "stopped", valid_mask: 0, channels: {}},
+          metrics: {}, recording: {state: "stopped", path: "D:/local", session_id: "local-inflight"},
+          training: {state: "idle", running: false, operations: {}},
+        };
+        case "get_presets": return {presets: [], default: ""};
+        case "discover_sources": return {devices: []};
+        case "check_updates": return {update_available: false, current_version: "2.6.2", latest_version: "2.6.2"};
+        case "get_review_samples":
+          return new Promise(resolve => {
+            pendingSampleResolvers.push(() => resolve({
+              session_id: "local-inflight", offset: args.offset, total: 2,
+              samples: [
+                {sample_id: "f000000000", prompt_candidate: {labels: {TongueOut: 0.5}}},
+                {sample_id: "f000000001", prompt_candidate: {labels: {JawOpen: 0.4}}},
+              ],
+            }));
+          });
+        case "get_review_image":
+          imageFetches++;
+          return new Uint8Array([0xff, 0xd8, 0x01, 0xff, 0xd9]).buffer;
+        case "set_tray_language": return undefined;
+        default: throw new Error(`unexpected ${command}`);
+      }
+    },
+  };
+  const f = setup(t, {
+    fetch: createTauriFetcher(tauriCore, async () => Response.json({error: "not found"}, {status: 404})),
+    tauriCore,
+  });
+  await f.app.init();
+  f.app.navigate("recording");
+
+  // Case 1: Navigate away while get_review_samples is in flight.
+  const load1 = f.app.loadReviews();
+  while (pendingSampleResolvers.length < 1) await Promise.resolve();
+  f.app.navigate("tracking");
+  pendingSampleResolvers.shift()();
+  await load1;
+  assert.equal(f.app.state.reviews, null);
+  assert.equal(f.el("review-grid").children.length, 0);
+  assert.equal(imageFetches, 0);
+  assert.equal(f.urls.created.length, 0);
+  assert.equal(f.app.state.reviewThumbUrls.size, 0);
+
+  // Case 2: Navigate away and back to recording while get_review_samples is still in flight (startGen mismatch).
+  f.app.navigate("recording");
+  const load2 = f.app.loadReviews();
+  while (pendingSampleResolvers.length < 1) await Promise.resolve();
+  f.app.navigate("tracking");
+  f.app.navigate("recording");
+  pendingSampleResolvers.shift()();
+  await load2;
+  assert.equal(f.app.state.reviews, null);
+  assert.equal(f.el("review-grid").children.length, 0);
+  assert.equal(imageFetches, 0);
+  assert.equal(f.urls.created.length, 0);
+  assert.equal(f.app.state.reviewThumbUrls.size, 0);
 });
 
 test("missing ONNX Runtime dynamic library maps to clear bilingual guidance", () => {

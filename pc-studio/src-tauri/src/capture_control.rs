@@ -140,9 +140,16 @@ impl CaptureControlInner {
                 }
             }
 
+            if stop_flag.load(Ordering::Acquire) {
+                return Ok(());
+            }
             self.runtime.recording("begin", options)?;
             {
-                self.state.lock().unwrap().state = "recording".to_string();
+                let mut st = self.state.lock().unwrap();
+                if stop_flag.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                st.state = "recording".to_string();
             }
 
             while !self.wait_stop(&stop_flag, Duration::from_millis(100)) {
@@ -484,6 +491,15 @@ impl CaptureControl {
             let stop_flag = Arc::new(AtomicBool::new(false));
             {
                 let mut st = self.inner.state.lock().unwrap();
+                if self.inner.sealed_preset.is_some() && st.state != "idle" {
+                    return Err(
+                        "This sealed C attempt has already started; it cannot be restarted or continued"
+                            .to_string(),
+                    );
+                }
+                if st.worker_alive {
+                    return Err("A capture session is already active".to_string());
+                }
                 st.stop_flag = Arc::clone(&stop_flag);
                 st.cancelled = false;
                 st.error.clear();
@@ -830,6 +846,111 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("already started"));
+        cc.close();
+    }
+
+    #[test]
+    fn stop_during_startup_with_reuse_input_skips_recording_and_avoids_state_regression() {
+        let srv = MiniCameraServer::start();
+        let dir = tempfile::tempdir().unwrap();
+        let rt = Arc::new(Runtime::new(dir.path().join("config.json")));
+        rt.configure(json!({
+            "headset_host": "127.0.0.1",
+            "headset_port": srv.port,
+            "model_kind": "face50",
+        }))
+        .unwrap();
+        rt.start_with_mode("capture", None, false).unwrap();
+        wait_for(|| rt.is_connected(), Duration::from_secs(5));
+
+        let src = Arc::new(FakeSource {
+            endpoint: CameraEndpoint {
+                host: "127.0.0.1".to_string(),
+                port: srv.port,
+            },
+            starts: Arc::new(Mutex::new(0)),
+            stops: Arc::new(Mutex::new(0)),
+        });
+        let cc = CaptureControl::new(Arc::clone(&rt), src, None, None, None);
+
+        let stop_flag = Arc::new(AtomicBool::new(true));
+        {
+            let mut st = cc.inner.state.lock().unwrap();
+            st.stop_flag = Arc::clone(&stop_flag);
+            st.cancelled = true;
+            st.state = "stopping".to_string();
+            st.worker_alive = true;
+        }
+
+        let opts = RecordingActionOptions {
+            person_id: "p01".to_string(),
+            confirmed: true,
+            guide: false,
+            receive_results: false,
+            ..Default::default()
+        };
+        Arc::clone(&cc.inner).run_worker(opts, true, stop_flag);
+
+        assert_eq!(cc.state(), "cancelled");
+        assert!(!cc.inner.state.lock().unwrap().worker_alive);
+        assert_eq!(rt.record_status()["state"], "idle");
+        let rec_root = dir.path().join("recordings");
+        assert!(
+            !rec_root.exists()
+                || fs::read_dir(&rec_root)
+                    .map(|mut it| it.next().is_none())
+                    .unwrap_or(true),
+            "stop during startup must not create a recording directory on disk"
+        );
+        cc.close();
+    }
+
+    #[test]
+    fn concurrent_recording_begin_allows_only_one_worker() {
+        use std::sync::Barrier;
+
+        let srv = MiniCameraServer::start();
+        let dir = tempfile::tempdir().unwrap();
+        let rt = Arc::new(Runtime::new(dir.path().join("config.json")));
+        let src = Arc::new(FakeSource {
+            endpoint: CameraEndpoint {
+                host: "127.0.0.1".to_string(),
+                port: srv.port,
+            },
+            starts: Arc::new(Mutex::new(0)),
+            stops: Arc::new(Mutex::new(0)),
+        });
+        let cc = Arc::new(CaptureControl::new(
+            Arc::clone(&rt),
+            src,
+            None,
+            None,
+            Some(SEALED_PRESET.to_string()),
+        ));
+
+        let barrier = Arc::new(Barrier::new(2));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let cc_ref = Arc::clone(&cc);
+            let b = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                b.wait();
+                cc_ref.recording(
+                    "begin",
+                    RecordingActionOptions {
+                        person_id: "p01".to_string(),
+                        confirmed: true,
+                        ..Default::default()
+                    },
+                )
+            }));
+        }
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let ok_count = results.iter().filter(|r| r.is_ok()).count();
+        let err_count = results.iter().filter(|r| r.is_err()).count();
+        assert_eq!(ok_count, 1, "exactly one concurrent begin must succeed: {results:?}");
+        assert_eq!(err_count, 1, "second concurrent begin must fail: {results:?}");
+
         cc.close();
     }
 }

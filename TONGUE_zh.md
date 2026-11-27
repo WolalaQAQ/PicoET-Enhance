@@ -72,7 +72,7 @@ python -B -X utf8 pc-studio/package_release.py
 # 跳过 ORT 打包：--no-ort
 ```
 
-推理设备设为 `auto` 时，按 **CUDA Graph → CUDA → OpenVINO GPU → DirectML → CPU** 的顺序探测并做首次推理校验；手动指定具体设备时不会回退到其他后端。实际生效的执行提供器与报错信息可在 **诊断 → 连接诊断** 查看。
+推理设备设为 `auto` 时，按 **DirectML → CUDA → OpenVINO GPU → CPU** 的顺序探测并做首次推理校验（CUDA 使用标准 ONNX Runtime CUDA EP）；手动指定具体设备时不会回退到其他后端。实际生效的执行提供器与报错信息可在 **诊断 → 连接诊断** 查看。
 
 ---
 
@@ -252,7 +252,7 @@ pc-studio/.venv/Scripts/python.exe pc-studio/mouth50_trainer/pipeline.py --help
 python -B -X utf8 pc-studio/check.py
 ```
 
-本地执行 Rust 测试与打包验证（若已安装 Inno Setup 6 可省略 `--skip-installer`；如需附带 `onnxruntime.dll` 可加 `--ort-dir <目录>` 或 `--ort-dll <路径>`）：
+本地执行 Rust 测试与打包验证（若已安装 Inno Setup 6 可省略 `--skip-installer`；默认会自动打包官方 DirectML ORT 1.24.4，可用 `--ort-dir <目录>` / `--ort-dll <路径>` 覆盖或加 `--no-ort` 跳过）：
 
 ```powershell
 cargo test --locked --manifest-path pc-studio/src-tauri/Cargo.toml

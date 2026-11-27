@@ -397,7 +397,9 @@ struct RuntimeState {
     last_preview_ns: i64,
     replay: ReplayState,
     lifecycle: u64,
+    psl_gen: u64,
     stop_flag: Arc<AtomicBool>,
+    udp_target: Option<SocketAddr>,
     output_session_id: u64,
     model_version: u64,
     model_reset_pending: bool,
@@ -419,7 +421,13 @@ struct RuntimeState {
 
 struct PslWorkerState {
     stop_flag: Arc<AtomicBool>,
+    finished: Arc<AtomicBool>,
     thread: Option<wire::BoundedThread>,
+}
+
+struct UdpSockets {
+    v4: Option<UdpSocket>,
+    v6: Option<UdpSocket>,
 }
 
 struct RuntimeInner {
@@ -438,7 +446,7 @@ struct RuntimeInner {
     clock_state: Mutex<bool>,
     clock_cond: Condvar,
     threads: Mutex<Vec<wire::BoundedThread>>,
-    udp: Mutex<Option<UdpSocket>>,
+    udp: Mutex<UdpSockets>,
     personal: Personalization,
     recorder: Mutex<Option<Arc<WholeMouthRecording>>>,
     record_control: Mutex<()>,
@@ -471,8 +479,8 @@ fn round2(val: f64) -> f64 {
 }
 
 fn default_script_root() -> PathBuf {
-    // Prefer pc-studio source dir during development when face_train.py lives next to src-tauri,
-    // otherwise fall back to executable directory.
+    // Prefer executable directory when face_train.py lives next to the binary;
+    // in debug builds, also allow resolving the pc-studio source checkout next to src-tauri.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             if dir.join("face_train.py").is_file() {
@@ -480,12 +488,15 @@ fn default_script_root() -> PathBuf {
             }
         }
     }
-    let manifest_parent = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(Path::to_path_buf);
-    if let Some(parent) = manifest_parent {
-        if parent.join("face_train.py").is_file() {
-            return parent;
+    #[cfg(debug_assertions)]
+    {
+        let manifest_parent = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(Path::to_path_buf);
+        if let Some(parent) = manifest_parent {
+            if parent.join("face_train.py").is_file() {
+                return parent;
+            }
         }
     }
     std::env::current_exe()
@@ -1364,13 +1375,21 @@ impl RuntimeInner {
     }
 }
 
-enum UdpTarget {
-    Addr(SocketAddr),
-    HostPort(String, u16),
+fn resolve_udp_target(host: &str, port: u16) -> Option<SocketAddr> {
+    let trimmed = host.trim();
+    if trimmed.is_empty() || port == 0 {
+        return None;
+    }
+    let addrs = wire::resolve_host_cancellable(trimmed, port, Duration::from_secs(2), None).ok()?;
+    addrs
+        .iter()
+        .find(|a| a.is_ipv4())
+        .copied()
+        .or_else(|| addrs.into_iter().next())
 }
 
 struct PendingUdpPacket {
-    target: UdpTarget,
+    target: SocketAddr,
     bytes: Vec<u8>,
 }
 
@@ -1384,12 +1403,17 @@ impl RuntimeInner {
         if !state.config.output_enabled {
             return None;
         }
-        let host = state.config.output_host.trim();
-        let port = state.config.output_port;
-        let target = match host.parse::<IpAddr>() {
-            Ok(ip) => UdpTarget::Addr(SocketAddr::new(ip, port)),
-            Err(_) => UdpTarget::HostPort(host.to_string(), port),
-        };
+        let target = state.udp_target.or_else(|| {
+            let trimmed = state.config.output_host.trim();
+            let literal = trimmed
+                .strip_prefix('[')
+                .and_then(|s| s.strip_suffix(']'))
+                .unwrap_or(trimmed);
+            literal
+                .parse::<IpAddr>()
+                .ok()
+                .map(|ip| SocketAddr::new(ip, state.config.output_port))
+        })?;
         let age_f32 = if age.is_finite() {
             age.max(0.0) as f32
         } else {
@@ -1468,18 +1492,19 @@ impl RuntimeInner {
             return;
         };
         let mut udp_guard = self.udp.lock().unwrap();
-        if udp_guard.is_none() {
-            *udp_guard = UdpSocket::bind("0.0.0.0:0").ok();
-        }
-        if let Some(ref sock) = *udp_guard {
-            match pkt.target {
-                UdpTarget::Addr(addr) => {
-                    let _ = sock.send_to(&pkt.bytes, addr);
-                }
-                UdpTarget::HostPort(ref host, port) => {
-                    let _ = sock.send_to(&pkt.bytes, (host.as_str(), port));
-                }
+        let sock_opt = if pkt.target.is_ipv4() {
+            if udp_guard.v4.is_none() {
+                udp_guard.v4 = UdpSocket::bind("0.0.0.0:0").ok();
             }
+            udp_guard.v4.as_ref()
+        } else {
+            if udp_guard.v6.is_none() {
+                udp_guard.v6 = UdpSocket::bind("[::]:0").ok();
+            }
+            udp_guard.v6.as_ref()
+        };
+        if let Some(sock) = sock_opt {
+            let _ = sock.send_to(&pkt.bytes, pkt.target);
         }
     }
 
@@ -1591,6 +1616,7 @@ impl RuntimeInner {
         psl.stop_flag.store(true, Ordering::SeqCst);
         let sock = {
             let mut state = self.state.lock().unwrap();
+            state.psl_gen = state.psl_gen.wrapping_add(1);
             state.stock_socket.take()
         };
         if let Some(s) = sock {
@@ -1606,17 +1632,35 @@ impl RuntimeInner {
 
     fn sync_psl_worker(self: &Arc<Self>) {
         let mut psl = self.psl_lock.lock().unwrap();
+        if psl.thread.is_some() && psl.finished.load(Ordering::Acquire) {
+            if let Some(prev) = psl.thread.take() {
+                wire::join_all_bounded(vec![prev], Duration::from_secs(5));
+            }
+        }
         if self.wants_psl() {
             if psl.thread.is_none() || psl.stop_flag.load(Ordering::Acquire) {
                 if let Some(prev) = psl.thread.take() {
                     wire::join_all_bounded(vec![prev], Duration::from_secs(5));
                 }
                 let stock_stop = Arc::new(AtomicBool::new(false));
+                let finished = Arc::new(AtomicBool::new(false));
                 psl.stop_flag = Arc::clone(&stock_stop);
+                psl.finished = Arc::clone(&finished);
+                let (session_stop, psl_gen) = {
+                    let mut state = self.state.lock().unwrap();
+                    state.psl_gen = state.psl_gen.wrapping_add(1);
+                    (Arc::clone(&state.stop_flag), state.psl_gen)
+                };
                 let inner_clone = Arc::clone(self);
-                let session_stop = Arc::clone(&self.state.lock().unwrap().stop_flag);
                 if let Ok(worker) = wire::spawn_bounded("mouth-stock", move || {
-                    inner_clone.psl_worker_loop(stock_stop, session_stop);
+                    struct PslFinishGuard(Arc<AtomicBool>);
+                    impl Drop for PslFinishGuard {
+                        fn drop(&mut self) {
+                            self.0.store(true, Ordering::Release);
+                        }
+                    }
+                    let _finish_guard = PslFinishGuard(finished);
+                    inner_clone.psl_worker_loop(psl_gen, stock_stop, session_stop);
                 }) {
                     psl.thread = Some(worker);
                 }
@@ -1628,6 +1672,7 @@ impl RuntimeInner {
 
     fn psl_worker_loop(
         self: Arc<Self>,
+        psl_gen: u64,
         stock_stop: Arc<AtomicBool>,
         session_stop: Arc<AtomicBool>,
     ) {
@@ -1636,13 +1681,32 @@ impl RuntimeInner {
             && !session_stop.load(Ordering::Acquire)
             && self.wants_psl()
         {
-            if !self.state.lock().unwrap().connected {
+            let (gen_ok, connected, before_records) = {
+                let state = self.state.lock().unwrap();
+                (
+                    state.psl_gen == psl_gen,
+                    state.connected,
+                    state.stock_status.records,
+                )
+            };
+            if !gen_ok {
+                break;
+            }
+            if !connected {
                 thread::sleep(Duration::from_millis(20));
                 continue;
             }
-            let before_records = self.state.lock().unwrap().stock_status.records;
-            self.stock_receive(&stock_stop, &session_stop);
-            let received_any = self.state.lock().unwrap().stock_status.records > before_records;
+            self.stock_receive(psl_gen, &stock_stop, &session_stop);
+            let (gen_still_ok, received_any) = {
+                let state = self.state.lock().unwrap();
+                (
+                    state.psl_gen == psl_gen,
+                    state.stock_status.records > before_records,
+                )
+            };
+            if !gen_still_ok {
+                break;
+            }
             if received_any {
                 backoff = Duration::from_millis(500);
             }
@@ -1665,9 +1729,12 @@ impl RuntimeInner {
         }
     }
 
-    fn stock_receive(&self, stock_stop: &AtomicBool, session_stop: &AtomicBool) {
+    fn stock_receive(&self, psl_gen: u64, stock_stop: &AtomicBool, session_stop: &AtomicBool) {
         let (host, port) = {
             let state = self.state.lock().unwrap();
+            if state.psl_gen != psl_gen {
+                return;
+            }
             (state.config.headset_host.trim().to_string(), state.config.headset_port)
         };
         if host.is_empty() {
@@ -1685,7 +1752,10 @@ impl RuntimeInner {
             Err(WireError::Cancelled) => return,
             Err(err) => {
                 if !combined_stop() {
-                    self.state.lock().unwrap().stock_status.error = Some(err.to_string());
+                    let mut state = self.state.lock().unwrap();
+                    if state.psl_gen == psl_gen {
+                        state.stock_status.error = Some(err.to_string());
+                    }
                 }
                 return;
             }
@@ -1697,7 +1767,7 @@ impl RuntimeInner {
 
         {
             let mut state = self.state.lock().unwrap();
-            if combined_stop() {
+            if combined_stop() || state.psl_gen != psl_gen {
                 return;
             }
             state.stock_socket = sock.try_clone().ok();
@@ -1713,18 +1783,25 @@ impl RuntimeInner {
                     Ok(record) => {
                         last_record = Instant::now();
                         let received_ns = wire::monotonic_ns();
-                        let wants_record = {
+                        let (keep_going, wants_record) = {
                             let mut state = self.state.lock().unwrap();
-                            state.latest_stock = Some((record.clone(), received_ns));
-                            state.stock_status.records += 1;
-                            if record.association_valid {
-                                state.stock_status.associated += 1;
+                            if combined_stop() || state.psl_gen != psl_gen {
+                                (false, false)
                             } else {
-                                state.stock_status.unassociated += 1;
+                                state.latest_stock = Some((record.clone(), received_ns));
+                                state.stock_status.records += 1;
+                                if record.association_valid {
+                                    state.stock_status.associated += 1;
+                                } else {
+                                    state.stock_status.unassociated += 1;
+                                }
+                                state.stock_status.error = None;
+                                (true, state.record_wants_stock)
                             }
-                            state.stock_status.error = None;
-                            state.record_wants_stock
                         };
+                        if !keep_going {
+                            break;
+                        }
                         if wants_record {
                             self.record_enqueue(RecordItem::Stock(record));
                         }
@@ -1734,8 +1811,13 @@ impl RuntimeInner {
                             break;
                         }
                         if last_record.elapsed() >= Duration::from_secs(3) {
-                            self.state.lock().unwrap().stock_status.error =
-                                Some("Timed out waiting for headset mouth results (PSL1)".to_string());
+                            let mut state = self.state.lock().unwrap();
+                            if state.psl_gen == psl_gen {
+                                state.stock_status.error = Some(
+                                    "Timed out waiting for headset mouth results (PSL1)"
+                                        .to_string(),
+                                );
+                            }
                         }
                     }
                     Err(WireError::Cancelled) => break,
@@ -1747,14 +1829,19 @@ impl RuntimeInner {
 
         if let Err(err) = res {
             if !combined_stop() {
-                self.state.lock().unwrap().stock_status.error = Some(err);
+                let mut state = self.state.lock().unwrap();
+                if state.psl_gen == psl_gen {
+                    state.stock_status.error = Some(err);
+                }
             }
         }
 
         let mut state = self.state.lock().unwrap();
-        state.stock_status.active = false;
-        state.latest_stock = None;
-        state.stock_socket = None;
+        if state.psl_gen == psl_gen {
+            state.stock_status.active = false;
+            state.latest_stock = None;
+            state.stock_socket = None;
+        }
     }
 
     fn record_enqueue(&self, item: RecordItem) {
@@ -1892,7 +1979,8 @@ impl RuntimeInner {
         capture_session_id: u64,
         service_generation: Value,
         evidence: Value,
-    ) -> Result<(), String> {
+        session_guard: Option<(u64, &AtomicBool)>,
+    ) -> Result<bool, String> {
         if service_generation.is_null() || evidence.is_null() {
             return Err("Capture binding requires explicit trusted transport metadata".to_string());
         }
@@ -1902,6 +1990,11 @@ impl RuntimeInner {
         };
         {
             let mut state = self.state.lock().unwrap();
+            if let Some((lifecycle, stop_flag)) = session_guard {
+                if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
+                    return Ok(false);
+                }
+            }
             if let Some(prev) = state.transport_bindings.get(&capture_session_id) {
                 if *prev != binding {
                     return Err("Capture session cannot change service generation".to_string());
@@ -1912,10 +2005,16 @@ impl RuntimeInner {
         let worker_active = self.record_queue.lock().unwrap().worker_active;
         if worker_active {
             if let Some(rec) = self.recorder.lock().unwrap().clone() {
+                if let Some((lifecycle, stop_flag)) = session_guard {
+                    let state = self.state.lock().unwrap();
+                    if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
+                        return Ok(false);
+                    }
+                }
                 rec.bind_capture(capture_session_id, service_generation, evidence)?;
             }
         }
-        Ok(())
+        Ok(true)
     }
 
     fn receive_loop(self: Arc<Self>, lifecycle: u64, stop_flag: Arc<AtomicBool>) {
@@ -2015,11 +2114,15 @@ impl RuntimeInner {
             }
             let evidence = ctx.evidence();
             let evidence_val = serde_json::to_value(&evidence).unwrap_or(Value::Null);
-            self.bind_capture_inner(
+            let bound = self.bind_capture_inner(
                 ctx.capture_session_id,
                 json!(ctx.service_generation),
                 evidence_val,
+                Some((lifecycle, stop_flag)),
             )?;
+            if !bound {
+                return Ok(());
+            }
             {
                 let mut state = self.state.lock().unwrap();
                 if state.lifecycle != lifecycle || stop_flag.load(Ordering::Acquire) {
@@ -2294,10 +2397,17 @@ impl RuntimeInner {
         }
     }
 
-    fn activate_personal_profile(&self, stop_flag: &AtomicBool) -> Result<(), String> {
+    fn activate_personal_profile(
+        &self,
+        lifecycle: u64,
+        stop_flag: &AtomicBool,
+    ) -> Result<(), String> {
         let request = self.personal.pending();
         let (profile, version, mut config) = {
             let state = self.state.lock().unwrap();
+            if stop_flag.load(Ordering::Acquire) || state.lifecycle != lifecycle {
+                return Ok(());
+            }
             if request.is_none() && !state.profile_reload {
                 return Ok(());
             }
@@ -2341,14 +2451,18 @@ impl RuntimeInner {
         }
         let standard_ckpt = {
             let state = self.state.lock().unwrap();
-            if state.model_version != version {
+            if state.lifecycle != lifecycle || state.model_version != version {
                 return Ok(());
             }
             state.config.model_path.clone()
         };
+        let mut expected_version = version;
         if let Some(ref req) = request {
             match self.personal.commit_pending(req) {
-                Ok(true) => {}
+                Ok(true) => {
+                    // commit_pending invokes on_changed(true), incrementing model_version by 1.
+                    expected_version = version.wrapping_add(1);
+                }
                 Ok(false) => return Ok(()),
                 Err(err) => {
                     self.personal.fail_pending(req, &err);
@@ -2356,15 +2470,21 @@ impl RuntimeInner {
                 }
             }
         }
-        {
-            let mut model_guard = self.model.lock().unwrap();
-            *model_guard = Some(model);
-        }
         if let Some(obj) = desc.as_object_mut() {
             obj.insert("standard_checkpoint".to_string(), json!(standard_ckpt));
             obj.insert("personal_head".to_string(), json!(profile.head.is_some()));
         }
         let mut state = self.state.lock().unwrap();
+        if stop_flag.load(Ordering::Acquire)
+            || state.lifecycle != lifecycle
+            || state.model_version != expected_version
+        {
+            return Ok(());
+        }
+        {
+            let mut model_guard = self.model.lock().unwrap();
+            *model_guard = Some(model);
+        }
         state.model_key = Some((config.model_path, config.device, config.model_kind));
         state.description = desc;
         state.profile_reload = false;
@@ -2421,7 +2541,7 @@ impl RuntimeInner {
             while !stop_flag.load(Ordering::Acquire) {
                 let is_seg = self.state.lock().unwrap().config.model_kind == "segmentation";
                 if is_seg {
-                    self.activate_personal_profile(&stop_flag)?;
+                    self.activate_personal_profile(lifecycle, &stop_flag)?;
                 }
 
                 let (expired_pkt, pending_item) = {
@@ -2438,10 +2558,9 @@ impl RuntimeInner {
                         break;
                     }
                     let expired_pkt = self.expire_locked(&mut guard);
-                    if guard.pending.is_none()
-                        || guard.profile_reload
-                        || self.personal.pending().is_some()
-                    {
+                    let seg_profile_pending = guard.config.model_kind == "segmentation"
+                        && (guard.profile_reload || self.personal.pending().is_some());
+                    if guard.pending.is_none() || seg_profile_pending {
                         (expired_pkt, None)
                     } else {
                         let pending = guard.pending.take().unwrap();
@@ -3163,7 +3282,9 @@ impl Runtime {
                 let udp_pkt = {
                     let mut state = inner.state.lock().unwrap();
                     state.model_version += 1;
-                    state.profile_reload = state.profile_reload || head_changed;
+                    if state.config.model_kind == "segmentation" {
+                        state.profile_reload = state.profile_reload || head_changed;
+                    }
                     let inv = serde_json::to_value(TongueState::invalid("profile_changed"))
                         .unwrap_or_else(|_| json!({}));
                     let udp_pkt = state.last_header.as_ref().and_then(|last_hdr| {
@@ -3186,6 +3307,11 @@ impl Runtime {
             None,
         );
         personal.set_checkpoint(&config.model_path);
+        let init_udp_target = if config.output_enabled {
+            resolve_udp_target(&config.output_host, config.output_port)
+        } else {
+            None
+        };
 
         let state = RuntimeState {
             config,
@@ -3217,7 +3343,9 @@ impl Runtime {
             last_preview_ns: 0,
             replay: ReplayState::default(),
             lifecycle: 0,
+            psl_gen: 0,
             stop_flag: Arc::new(AtomicBool::new(true)),
+            udp_target: init_udp_target,
             output_session_id: unix_time_ns(),
             model_version: 0,
             model_reset_pending: false,
@@ -3253,7 +3381,10 @@ impl Runtime {
             clock_state: Mutex::new(false),
             clock_cond: Condvar::new(),
             threads: Mutex::new(Vec::new()),
-            udp: Mutex::new(UdpSocket::bind("0.0.0.0:0").ok()),
+            udp: Mutex::new(UdpSockets {
+                v4: UdpSocket::bind("0.0.0.0:0").ok(),
+                v6: None,
+            }),
             personal,
             recorder: Mutex::new(None),
             record_control: Mutex::new(()),
@@ -3262,6 +3393,7 @@ impl Runtime {
             record_thread: Mutex::new(None),
             psl_lock: Mutex::new(PslWorkerState {
                 stop_flag: Arc::new(AtomicBool::new(true)),
+                finished: Arc::new(AtomicBool::new(true)),
                 thread: None,
             }),
             training: TrainingRunner::new(),
@@ -3326,8 +3458,8 @@ impl Runtime {
             self.stop(false)?;
         }
 
-        let (result_cfg, saved_map, sync_psl, new_model_path) = {
-            let mut state = self.inner.state.lock().unwrap();
+        let (updated_cfg, saved_map) = {
+            let state = self.inner.state.lock().unwrap();
             let mut updated = build_updated_config(&state.config, map)?;
             if needs_stop {
                 updated.enabled = false;
@@ -3345,17 +3477,35 @@ impl Runtime {
             if let Some(ref legacy) = state.legacy_configuration {
                 saved_map.insert("legacy_configuration".to_string(), legacy.clone());
             }
-            let sync_psl = updated.enabled && state.running;
-            let mp = updated.model_path.clone();
-            state.config = updated.clone();
-            (updated, saved_map, sync_psl, mp)
+            (updated, saved_map)
         };
-
-        self.inner.personal.set_checkpoint(&new_model_path);
 
         let serialized =
             serde_json::to_string_pretty(&Value::Object(saved_map)).map_err(|e| e.to_string())?;
         write_text_atomic(&self.inner.config_path, &serialized).map_err(|e| e.to_string())?;
+
+        let resolved_udp_target = if updated_cfg.output_enabled {
+            resolve_udp_target(&updated_cfg.output_host, updated_cfg.output_port)
+        } else {
+            None
+        };
+
+        let (result_cfg, sync_psl, new_model_path) = {
+            let mut state = self.inner.state.lock().unwrap();
+            let mut committed = updated_cfg;
+            if needs_stop {
+                committed.enabled = false;
+            } else {
+                committed.enabled = committed.enabled && state.running;
+            }
+            let sync_psl = committed.enabled && state.running;
+            let mp = committed.model_path.clone();
+            state.config = committed.clone();
+            state.udp_target = resolved_udp_target;
+            (committed, sync_psl, mp)
+        };
+
+        self.inner.personal.set_checkpoint(&new_model_path);
 
         if sync_psl {
             self.inner.sync_psl_worker();
@@ -3463,6 +3613,12 @@ impl Runtime {
             }
             "cancel" => self.inner.personal.cancel(),
             "restore" => {
+                if model_kind != "segmentation" {
+                    return Err(
+                        "MouthLink models use the MouthLink recording and training tools"
+                            .to_string(),
+                    );
+                }
                 self.inner.personal.restore()?;
             }
             _ => return Err("Unknown personalization action".to_string()),
@@ -3559,6 +3715,22 @@ impl Runtime {
             None
         };
 
+        let resolved_udp_target = {
+            let (enabled, host, port) = {
+                let state = self.inner.state.lock().unwrap();
+                (
+                    state.config.output_enabled,
+                    state.config.output_host.clone(),
+                    state.config.output_port,
+                )
+            };
+            if enabled {
+                resolve_udp_target(&host, port)
+            } else {
+                None
+            }
+        };
+
         {
             let mut threads = self.inner.threads.lock().unwrap();
             {
@@ -3576,6 +3748,8 @@ impl Runtime {
                     return Err("Runtime is already running".to_string());
                 }
                 state.lifecycle += 1;
+                state.psl_gen = state.psl_gen.wrapping_add(1);
+                state.udp_target = resolved_udp_target;
                 let session_lifecycle = state.lifecycle;
                 let session_stop = Arc::new(AtomicBool::new(false));
                 state.stop_flag = Arc::clone(&session_stop);
@@ -3701,8 +3875,10 @@ impl Runtime {
         service_generation: Value,
         evidence: Value,
     ) -> Result<(), String> {
-        self.inner
-            .bind_capture_inner(capture_session_id, service_generation, evidence)
+        let _ = self
+            .inner
+            .bind_capture_inner(capture_session_id, service_generation, evidence, None)?;
+        Ok(())
     }
 
     pub fn recording(
@@ -3887,6 +4063,10 @@ impl Runtime {
         Ok(res)
     }
 
+    pub fn cancel_training(&self) -> Result<Value, String> {
+        self.inner.training.cancel()
+    }
+
     pub fn train(
         &self,
         action: &str,
@@ -3908,8 +4088,15 @@ impl Runtime {
                 let args_ref = args.unwrap_or(&default_args);
                 // Validate before stopping runtime so bad requests never disrupt live tracking.
                 let _ = training::validate_operation_args(op, args_ref)?;
-                self.stop(false)?;
                 let script_root = self.inner.script_root.lock().unwrap().clone();
+                let script_path = script_root.join("face_train.py");
+                if !script_path.is_file() {
+                    return Err(
+                        "Local training script face_train.py was not found; local training is only available in a source checkout"
+                            .to_string(),
+                    );
+                }
+                self.stop(false)?;
                 self.inner.training.begin(op, args_ref, &script_root)
             }
             _ => Err("Unknown local training action".to_string()),
@@ -4768,5 +4955,214 @@ mod tests {
             )
             .unwrap();
         assert_eq!(rev["samples"], 1);
+    }
+
+    #[test]
+    fn localhost_udp_output_delivers_mfr1_packet_on_loopback() {
+        let server = FakeHeadsetServer::start(7001, 11, None);
+        let udp_rx = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let udp_port = udp_rx.local_addr().unwrap().port();
+        udp_rx
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+
+        let jaw_i = channel_index("JawOpen").unwrap();
+        let mut model_vals = [0.0f32; 50];
+        model_vals[jaw_i] = 0.62;
+        let mask = 1u64 << jaw_i;
+        let factory: ModelFactory =
+            Arc::new(move |_| Ok(Box::new(FakeFaceModel::new(model_vals, mask))));
+
+        let dir = tempfile::tempdir().unwrap();
+        let rt = Runtime::with_options(
+            dir.path().join("config.json"),
+            Some(factory),
+            Some(dir.path().join("runs")),
+            false,
+        );
+        rt.configure(json!({
+            "headset_host": "127.0.0.1",
+            "headset_port": server.port,
+            "model_path": "fake.onnx",
+            "mouth_mode": "model_only",
+            "filter_enabled": false,
+            "output_enabled": true,
+            "output_host": "localhost",
+            "output_port": udp_port,
+        }))
+        .unwrap();
+
+        rt.start(StartRequest {
+            mode: Some("live".into()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let mut buf = [0u8; FACE_RESULT_BYTES];
+        let mut received_valid = false;
+        for _ in 0..30 {
+            if let Ok((n, _)) = udp_rx.recv_from(&mut buf) {
+                if n == FACE_RESULT_BYTES {
+                    let pkt = unpack_face_result_packet(&buf).unwrap();
+                    if pkt.state == 0 && (pkt.values[jaw_i] - 0.62).abs() < 0.01 {
+                        received_valid = true;
+                        break;
+                    }
+                }
+            }
+        }
+        rt.stop(false).unwrap();
+        assert!(
+            received_valid,
+            "Expected MFR1 UDP packet on IPv4 loopback when output_host is \"localhost\""
+        );
+    }
+
+    #[test]
+    fn sync_psl_worker_reaps_naturally_exited_thread_and_respawns() {
+        let mut stock_final = [0.0f32; 33];
+        let jaw_i = channel_index("JawOpen").unwrap();
+        stock_final[jaw_i] = 0.81;
+        let server = FakeHeadsetServer::start(7002, 12, Some(stock_final));
+
+        let mut model_vals = [0.0f32; 50];
+        model_vals[jaw_i] = 0.19;
+        let mask = 1u64 << jaw_i;
+        let factory: ModelFactory =
+            Arc::new(move |_| Ok(Box::new(FakeFaceModel::new(model_vals, mask))));
+
+        let dir = tempfile::tempdir().unwrap();
+        let rt = Runtime::with_options(
+            dir.path().join("config.json"),
+            Some(factory),
+            Some(dir.path().join("runs")),
+            false,
+        );
+        rt.configure(json!({
+            "headset_host": "127.0.0.1",
+            "headset_port": server.port,
+            "model_path": "fake.onnx",
+            "mouth_mode": "curated",
+            "filter_enabled": false,
+        }))
+        .unwrap();
+        rt.start(StartRequest {
+            mode: Some("live".into()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        wait_for(
+            || rt.expression_snapshot()["live_stock"]["fresh"] == true,
+            Duration::from_secs(5),
+        );
+
+        // Simulate wants_psl() transiently flipping false so psl_worker_loop exits on its own
+        // without stop_psl_worker_locked() setting stop_flag or taking psl.thread.
+        {
+            let mut state = rt.inner.state.lock().unwrap();
+            state.config.mouth_mode = "model_only".to_string();
+            if let Some(sock) = state.stock_socket.take() {
+                let _ = sock.shutdown(Shutdown::Both);
+            }
+        }
+        wait_for(
+            || {
+                let psl = rt.inner.psl_lock.lock().unwrap();
+                psl.thread.is_some()
+                    && !psl.stop_flag.load(Ordering::Acquire)
+                    && psl.finished.load(Ordering::Acquire)
+            },
+            Duration::from_secs(5),
+        );
+
+        // Flip wants_psl() back to true and call sync_psl_worker(); it must reap the dead thread
+        // and spawn a live PSL1 worker that delivers fresh stock again.
+        {
+            let mut state = rt.inner.state.lock().unwrap();
+            state.config.mouth_mode = "curated".to_string();
+            state.latest_stock = None;
+            state.stock_status.records = 0;
+        }
+        rt.inner.sync_psl_worker();
+
+        wait_for(
+            || {
+                let s = rt.status();
+                s["live_stock"]["fresh"] == true && s["stock"]["records"].as_u64().unwrap_or(0) >= 1
+            },
+            Duration::from_secs(5),
+        );
+        rt.stop(false).unwrap();
+    }
+
+    #[test]
+    fn train_begin_checks_face_train_script_before_stopping_live_tracking() {
+        let server = FakeHeadsetServer::start(7003, 13, None);
+        let dir = tempfile::tempdir().unwrap();
+        let empty_scripts = dir.path().join("no-scripts");
+        fs::create_dir(&empty_scripts).unwrap();
+
+        let rt = Runtime::new(dir.path().join("config.json"));
+        rt.set_script_root(empty_scripts);
+        rt.configure(json!({
+            "headset_host": "127.0.0.1",
+            "headset_port": server.port,
+        }))
+        .unwrap();
+        rt.start(StartRequest {
+            mode: Some("capture".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        wait_for(|| rt.is_connected(), Duration::from_secs(4));
+
+        let err = rt
+            .train(
+                "begin",
+                Some("split"),
+                Some(&json!({"dataset": "d", "split": "s.json"})),
+            )
+            .unwrap_err();
+        assert!(err.contains("face_train.py"), "unexpected error: {err}");
+        assert!(
+            rt.is_running() && rt.is_connected(),
+            "missing face_train.py must fail before stopping live tracking"
+        );
+        rt.stop(false).unwrap();
+    }
+
+    #[test]
+    fn configure_disk_write_failure_preserves_in_memory_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked_cfg_path = dir.path().join("config_is_a_dir");
+        fs::create_dir(&blocked_cfg_path).unwrap();
+
+        let rt = Runtime::new(blocked_cfg_path);
+        let before = rt.config();
+        let res = rt.configure(json!({
+            "preview_fps": 25,
+            "mouth_mode": "model_only",
+        }));
+        assert!(res.is_err(), "writing config.json onto a directory must fail");
+        assert_eq!(
+            rt.config(),
+            before,
+            "in-memory config must remain unchanged when disk write fails"
+        );
+    }
+
+    #[test]
+    fn personalize_restore_rejected_for_non_segmentation_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = Runtime::new(dir.path().join("config.json"));
+
+        // Default face50 rejects restore
+        assert!(rt.personalize("restore", false).is_err());
+
+        // MouthLink must also reject restore so profile_reload cannot busy-spin
+        rt.configure(json!({"model_kind": "mouthlink"})).unwrap();
+        let err = rt.personalize("restore", false).unwrap_err();
+        assert!(err.contains("MouthLink"), "unexpected error: {err}");
     }
 }
